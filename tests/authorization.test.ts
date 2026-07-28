@@ -23,10 +23,18 @@ test('an empty decision is never approved', () => {
 });
 
 test('estimate status reflects how much of the estimate the customer accepted', () => {
-  assert.equal(deriveEstimateStatus(3, 0, 3), 'approved');
-  assert.equal(deriveEstimateStatus(2, 1, 3), 'partially_approved');
-  assert.equal(deriveEstimateStatus(1, 0, 3), 'partially_approved');
-  assert.equal(deriveEstimateStatus(0, 3, 3), 'declined');
+  // Third argument is how many lines remain UNDECIDED after this decision.
+  assert.equal(deriveEstimateStatus(3, 0, 0), 'approved', 'all lines approved, none left');
+  assert.equal(deriveEstimateStatus(2, 1, 0), 'partially_approved', 'some declined');
+  assert.equal(deriveEstimateStatus(0, 3, 0), 'declined', 'all declined');
+});
+
+test('an estimate with lines still undecided is never marked approved', () => {
+  // The regression this guards: deriving from a whole-repair-order count let an
+  // estimate read "approved" while lines it covers were still awaiting a decision.
+  assert.equal(deriveEstimateStatus(1, 0, 2), 'partially_approved');
+  assert.equal(deriveEstimateStatus(3, 0, 1), 'partially_approved');
+  assert.equal(deriveEstimateStatus(0, 1, 2), 'partially_approved', 'declines alone do not close it');
 });
 
 test('authorization methods are a closed set', () => {

@@ -22,7 +22,13 @@ interface StepUpPayload extends StepUpBinding {
   jti: string;
 }
 
-const DEFAULT_TTL_SECONDS = 300;
+/**
+ * Kept short because a token is valid for repeat use until it expires — there is no
+ * consumption store, so the window is the only bound on replay. Replay is limited to
+ * the same user repeating the same action on the same resource; a single-use `jti`
+ * ledger is outstanding work (see docs/REMEDIATION.md).
+ */
+const DEFAULT_TTL_SECONDS = 120;
 
 function secret(): string {
   const value = process.env.STEP_UP_SECRET;

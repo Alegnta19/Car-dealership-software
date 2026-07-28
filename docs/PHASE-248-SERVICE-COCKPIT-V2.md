@@ -65,7 +65,7 @@ src/
     routes/index.ts                  36 endpoints, role-gated
     services/service-cockpit-service.ts   business logic, SQL, metrics
 scripts/migrate.ts                   ordered transactional migration runner
-tests/                               35 unit tests (no database required)
+tests/                               39 unit tests (no database required)
 ```
 
 Layering is strict: **routes → service → database**. Routes contain no SQL; the service contains no
@@ -337,11 +337,11 @@ Success responses are `{ success: true, data }`; mutations return the full row. 
 | 5 | `POST /appointments/:appointmentId/confirm` | W | `confirmAppointment` | — (source must be `requested`/`scheduled`) | 200 |
 | 6 | `POST /appointments/:appointmentId/check-in` | W | `checkIn` | `odometer?` | 200 (creates RO + queue item; idempotent) |
 | 7 | `POST /intake/quick-start` | W | `quickStartIntake` | `location_id`, `scan_vin?` | 200 (preview only, `persisted: false`) |
-| 8 | `POST /ros` | W | `createRO` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id` | 201 |
+| 8 | `POST /ros` | W | `createRO` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`; an `appointment_id` may convert only once | 201 / 409 `appointment_already_converted` |
 | 9 | `GET /ros/:roId` | R | `getRO` | — | 200 (full aggregate: lines, events, estimates, auths, parts, sublets, tickets) |
 | 10 | `POST /ros/:roId/transition` | W | `transitionRO` | `to_status`; `step_up_token` for `authorized`/`canceled` | 200 / 403 `step_up_required` / 404 `ro_not_found` / 409 `concurrent_modification` / 422 `invalid_transition`·`authorization_required` |
-| 11 | `POST /ros/:roId/line-items` | W | `addLineItem` | `line_type`, `description` | 201 |
-| 12 | `PATCH /ros/:roId/line-items/:lineItemId` | F | `updateLineItem` | any of: `status`, `assigned_tech_user_id`, `sold_hours`, `price_ref` (**authorization fields refused**) | 200 |
+| 11 | `POST /ros/:roId/line-items` | W | `addLineItem` | `line_type`, `description` (**authorization fields refused**) | 201 |
+| 12 | `PATCH /ros/:roId/line-items/:lineItemId` | F | `updateLineItem` | any of: `status`, `assigned_tech_user_id`, `sold_hours`, `price_ref` (**authorization fields refused; a declined line cannot be reopened**) | 200 |
 | 13 | `GET /mpi/templates` | R | `listMPITemplates` | `location_id?` (query) | 200 |
 | 14 | `POST /ros/:roId/mpi/start` | F | `startMPISession` | `template_id`, `tech_user_id` | 201 |
 | 15 | `POST /mpi/:mpiSessionId/results` | F | `recordMPIResult` | `item_key`, `status` | 201 |
@@ -350,7 +350,7 @@ Success responses are `{ success: true, data }`; mutations return the full row. 
 | 18 | `POST /ros/:roId/estimates/generate` | W | `generateEstimate` | — (RO must have active line items) | 201 |
 | 19 | `POST /ros/:roId/estimates/:estimateId/send` | W | `sendEstimate` | — (estimate must belong to the RO and be `draft`) | 200 |
 | 20 | `GET /ros/:roId/authorizations` | R | `listAuthorizations` | — | 200 |
-| 21 | `POST /ros/:roId/authorizations/record` | W | `recordAuthorization` | `estimate_id`, `method`, `approved_items` and/or `declined_items`; `step_up_token` for `staff_attestation` | 201 |
+| 21 | `POST /ros/:roId/authorizations/record` | W | `recordAuthorization` | `estimate_id`, `method`, `approved_items` and/or `declined_items`; `evidence_refs` for artifact-backed methods, `step_up_token` for `staff_attestation` | 201 |
 | 22 | `POST /ros/:roId/parts/request` | P | `requestPart` | `line_item_id`, `part_number`, `description` | 201 |
 | 23 | `PATCH /parts/:partLineId` | P | `updatePartLine` | any of: `status`, `eta`, `supplier_ref` | 200 |
 | 24 | `POST /ros/:roId/sublet/create` | P | `createSubletJob` | `line_item_id`, `vendor_ref` | 201 |
@@ -362,7 +362,7 @@ Success responses are `{ success: true, data }`; mutations return the full row. 
 | 30 | `POST /comebacks` | W | `createComebackCase` | `original_ro_id` (must be `closed`), `new_ro_id`, `root_cause_category` | 201 |
 | 31 | `PATCH /comebacks/:comebackId` | W | `updateComebackCase` | `status` | 200 |
 | 32 | `GET /queues` | R | `listServiceQueueItems` | `location_id?`, `queue_type?`, `status?` (query) | 200 |
-| 33 | `POST /queues/:queueItemId/assign` | F | `assignServiceQueueItem` | — (assignee = caller) | 200 |
+| 33 | `POST /queues/:queueItemId/assign` | F | `assignServiceQueueItem` | — (assignee = caller; must be open and unclaimed) | 200 / 409 `queue_item_taken`·`queue_item_closed` |
 | 34 | `POST /queues/:queueItemId/update-status` | F | `updateServiceQueueItemStatus` | `status` | 200 |
 | 35 | `POST /queues/:queueItemId/escalate` | M | `escalateServiceQueueItem` | `reason` (`create_runbook: true` rejected) | 200 (priority → p0) |
 | 36 | `POST /retention/first-service` | W | `createFirstServiceOffer` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`, `deal_id` | 201 (default window: now + 90 days) |
@@ -414,7 +414,7 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 | `generateEstimate(ctx, roId, params)` **[tx]** | Locks the RO (serializing version assignment), snapshots non-canceled/declined lines, inserts version `MAX+1`, moves those lines to `pending` and the RO to `estimate_pending`, writes `estimate_generated`. Refuses an RO with no active lines. Totals cover line count and estimated hours; no money. |
 | `sendEstimate(ctx, roId, estimateId, params)` **[tx]** | Requires the estimate to belong to this RO and be `draft`; marks it `sent`, moves the RO to `awaiting_authorization`, writes `estimate_sent`, and enqueues `waiting_authorization` at the RO's real location. |
 | `listAuthorizations(ctx, roId)` | Authorization rows for the caller's RO, newest first. |
-| `recordAuthorization(ctx, roId, params)` **[tx]** | The evidence path — validates the estimate belongs to this RO and is `sent`, verifies every line id is on this RO, derives the record status from the decision, scopes the line-item updates by RO and tenant, updates the estimate to `approved`/`partially_approved`/`declined`, and requires step-up for `staff_attestation`. Approval-time histogram and audit after commit. |
+| `recordAuthorization(ctx, roId, params)` **[tx]** | The evidence path — validates the estimate belongs to this RO and is `sent`, verifies every line id is on this RO and still awaiting a decision, derives the record status from the decision, scopes the line-item updates by RO and tenant, then derives the estimate's status from what remains undecided *after* the update. Artifact-backed methods must carry `evidence_refs`; `staff_attestation` requires step-up instead. Approval-time histogram and audit after commit. |
 
 ### POS2 / SOS2 — Parts & sublet
 `requestPart` **[tx]** and `createSubletJob` **[tx]** prove both RO and line-item ownership before inserting at `requested`. `updatePartLine` and `updateSubletJob` are tenant-scoped whitelisted updates with enum validation.
@@ -426,7 +426,7 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 `createWarrantyClaim` **[tx]** proves RO ownership and inserts a claim at `draft`. `createComebackCase` **[tx]** proves both repair orders are the caller's, requires the original to be `closed`, rejects a self-referencing case, flips the original to `comeback`, and writes an event on both ROs; audit after commit. `updateComebackCase` sets status only.
 
 ### SSR2 — Queues & SLA
-`createServiceQueueItem(ex, ctx, params)` is internal and takes an executor so it joins the caller's transaction; it is not exposed over HTTP. `listServiceQueueItems` returns a tenant-scoped page (limit 200) and, when filtered by queue type, sets the depth gauge from a separate `COUNT` rather than the capped page length. `assignServiceQueueItem`, `updateServiceQueueItemStatus` (block reasons survive unrelated status changes) and `escalateServiceQueueItem` (priority → `p0`, audit, rejects `create_runbook`) are all tenant-scoped.
+`createServiceQueueItem(ex, ctx, params)` is internal and takes an executor so it joins the caller's transaction; it is not exposed over HTTP. `listServiceQueueItems` returns a tenant-scoped page (limit 200) with `queue_type` validated against the closed set. `assignServiceQueueItem` **[tx]** locks the row and claims it only if it is open and unclaimed. `updateServiceQueueItemStatus` (block reasons survive unrelated status changes) and `escalateServiceQueueItem` (priority → `p0`, audit, rejects `create_runbook`) are tenant-scoped.
 
 ### PSFSRB2 — Retention bridge
 `createFirstServiceOffer` composes `createAppointment` with `source='sales_handoff'` and a `first_service` concern carrying the `deal_id`, so a converted appointment can be attributed back to the deal. Returns `{ appointment_id, deal_id, status: 'offer_created' }`.
@@ -437,7 +437,9 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 
 ## 9. Observability — 15 Prometheus Metrics
 
-Declared on the default `prom-client` registry and exposed at `GET /metrics`. **Five are wired to real events; ten have no source of truth yet** and are exported as `unwiredMetrics` for the aggregation job that will populate them. Nothing publishes a placeholder value — a wrong metric misleads an operator more than a missing one.
+Declared on the default `prom-client` registry and exposed at `GET /metrics`. **Four are wired to real events; eleven have no source of truth yet** and are exported as `unwiredMetrics` for the aggregation job that will populate them. Nothing publishes a placeholder value — a wrong metric misleads an operator more than a missing one.
+
+No metric carries a tenant label, and none is driven from a per-request read. `/metrics` is a shared, unauthenticated surface: a gauge fed by request traffic would be last-writer-wins across tenants, and a tenant label would publish a tenant roster to any scraper. Tenant-aware aggregates belong in the aggregation job.
 
 | Metric | Type | Labels | Wired? | Updated where |
 |---|---|---|---|---|
@@ -445,7 +447,7 @@ Declared on the default `prom-client` registry and exposed at `GET /metrics`. **
 | `service_ro_total` | Counter | status, location | yes | `createRO`, `checkIn` |
 | `service_ro_cycle_time_minutes_p95` | Histogram | location | yes | `transitionRO` on close (post-commit) |
 | `service_approval_time_minutes_p95` | Histogram | location | yes | `recordAuthorization`, measured from the estimate's `sent_at` |
-| `service_queue_depth` | Gauge | queue_type, location | yes | `listServiceQueueItems` — from a dedicated `COUNT`, not the capped page |
+| `service_queue_depth` | Gauge | queue_type, location | no | cannot be driven from per-request reads (see above) |
 | `service_comeback_rate` | Gauge | location, category | no | needs an aggregation job |
 | `service_retention_first_service_capture_rate` | Gauge | location | no | needs an aggregation job |
 | `service_parts_backorder_rate` | Gauge | location | no | needs an aggregation job |
@@ -465,7 +467,7 @@ Naming note: the `_p95` suffix is kept as specified, but it is misleading — hi
 
 **Multi-tenancy.** Every table carries `tenant_id` and every statement filters on it. Identity is taken from the token's `tid` claim only; `rejectTenantOverride` turns a disagreeing body or query `tenant_id` into a 403. Operations addressed by a child id additionally prove parent ownership through `assertRO` / `assertLineItem` / `assertLineItemsOnRO`, inside the same transaction as the write. Cross-tenant misses return 404 rather than 403, so the API never confirms another tenant's rows exist. There is no row-level security — isolation is enforced in the query layer, which means **every new query must carry `tenant_id`**.
 
-**Authentication & authorization.** `authenticate` verifies an HS256 bearer token (rejecting any other `alg`, comparing signatures in constant time, honouring `exp`/`nbf`) and requires UUID `sub` and `tid` claims. `authorize(...roles)` gates every route; `platform_admin` passes everything and a roleless principal passes nothing. Privileged actions additionally require a step-up token bound to tenant, user, action and resource.
+**Authentication & authorization.** `authenticate` verifies an HS256 bearer token — rejecting any other `alg`, comparing signatures in constant time, requiring a numeric `exp` (an optional expiry would make a token a permanent credential), and requiring UUID `sub` and `tid` claims. `authorize(...roles)` gates every route; `platform_admin` passes everything and a roleless principal passes nothing. Privileged actions additionally require a step-up token bound to tenant, user, action and resource, valid for two minutes.
 
 **Auditability.** Three layers with deliberately different guarantees: (1) domain events (`ro_events`, `service_appointment_events`) are written **inside** the business transaction and are not error-swallowed — an RO cannot move without its event; (2) platform audit rows (`audit_events`) are written **after** the commit, best-effort, because a swallowed error inside an open Postgres transaction would poison the commit; (3) mutations return the full row.
 
@@ -528,12 +530,21 @@ The six High-severity defects found in the original bundle are closed; each is d
 in [REMEDIATION.md](REMEDIATION.md). What follows is everything still outstanding. None of it is High
 severity, and nothing has been silently dropped.
 
-**Integration tests.** The 35 unit tests cover pure domain logic and middleware. Transaction rollback,
+**Integration tests.** The 39 unit tests cover pure domain logic and middleware. Transaction rollback,
 check-in idempotency under concurrency, and tenant scoping are verified by review and reasoning only —
 they need tests against a real PostgreSQL instance.
 
-**Metric wiring.** Ten of the fifteen metrics have no source of truth yet (see [§9](#9-observability--15-prometheus-metrics)). They need a periodic aggregation job; all ten are
-exported as `unwiredMetrics` so that job has one import site.
+**Metric wiring.** Eleven of the fifteen metrics have no source of truth yet (see [§9](#9-observability--15-prometheus-metrics)). They need a periodic aggregation job; all eleven
+are exported as `unwiredMetrics` so that job has one import site.
+
+**Single-use step-up tokens.** Tokens carry a `jti` that nothing consumes, so one is replayable
+within its two-minute lifetime — by the same user, for the same action, on the same resource. A
+consumption ledger would close the window entirely.
+
+**Migration 049 differs from the source bundle's copy** (renamed index, unique constraints, the
+portal-tasks table, added FKs and CHECKs). The migration runner keys on filename, so an environment
+that already applied the bundle's 049 would not receive any of it; that environment needs a separate
+forward migration rather than a re-run. This repository's copy has never been applied anywhere.
 
 **Queue-item lifecycle.** Items are created by `checkIn` and `sendEstimate`, but no flow closes them —
 `transitionRO` should mark the related items `done`. Until then the cockpit accumulates stale entries
@@ -638,4 +649,6 @@ Three invariants a new endpoint must preserve:
 
 **Authorization methods:** `portal`, `signature`, `staff_attestation`, `recorded_call_ref` · **Priorities:** `p0` (safety) > `p1` (maintenance) > `p2` · **Comeback severities:** `sev0`–`sev3`
 
-**Error codes:** `validation_error`, `unauthorized`, `forbidden`, `tenant_mismatch`, `step_up_required`, `not_found`, `ro_not_found`, `line_item_not_found`, `estimate_not_found`, `unknown_line_items`, `contradictory_decision`, `invalid_appointment_status`, `invalid_session_status`, `estimate_not_draft`, `estimate_not_sent`, `original_ro_not_closed`, `no_line_items`, `concurrent_modification`, `invalid_transition`, `authorization_required`, `status_not_directly_updatable`, `authorization_fields_readonly`, `unknown_view`, `overrides_unsupported`, `runbook_unsupported`, `not_ticket_assignee`, `route_not_found`, `internal_error`
+**Error codes:** `validation_error`, `evidence_required`, `unauthorized`, `forbidden`, `tenant_mismatch`, `step_up_required`, `not_found`, `ro_not_found`, `line_item_not_found`, `estimate_not_found`, `unknown_line_items`, `contradictory_decision`, `line_items_not_pending`, `line_item_declined`, `invalid_appointment_status`, `appointment_already_converted`, `invalid_session_status`, `ro_not_inspectable`, `ro_not_estimable`, `ro_not_estimate_pending`, `estimate_not_draft`, `estimate_not_sent`, `original_ro_not_closed`, `no_line_items`, `queue_item_taken`, `queue_item_closed`, `concurrent_modification`, `invalid_transition`, `authorization_required`, `status_not_directly_updatable`, `authorization_fields_readonly`, `unknown_view`, `overrides_unsupported`, `runbook_unsupported`, `not_ticket_assignee`, `route_not_found`, `internal_error`
+
+**Queue types (closed set):** `appointments_today`, `waiting_checkin`, `waiting_authorization`, `waiting_parts`, `in_repair`, `qc`, `ready_pickup`, `comeback_review`, `no_show_followup`

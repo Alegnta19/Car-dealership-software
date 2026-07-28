@@ -41,15 +41,19 @@ export function deriveAuthorizationStatus(approvedItems: string[], declinedItems
 }
 
 /**
- * Estimate outcome, given how many of its pending lines the customer accepted.
- * `pendingCount` is the number of lines the estimate put in front of the customer.
+ * Estimate outcome after a decision has been applied.
+ *
+ * `remainingUndecidedCount` is how many of the estimate's lines are STILL awaiting a
+ * customer decision once this one is recorded. An estimate is only `approved` when the
+ * customer took every line and declined none; anything partial — some declined, or some
+ * still undecided — is `partially_approved`, so a later decision can still complete it.
  */
 export function deriveEstimateStatus(
   approvedCount: number,
   declinedCount: number,
-  pendingCount: number,
+  remainingUndecidedCount: number,
 ): EstimateStatus {
-  if (approvedCount === 0) return 'declined';
-  if (approvedCount >= pendingCount && declinedCount === 0) return 'approved';
+  if (approvedCount === 0) return remainingUndecidedCount > 0 ? 'partially_approved' : 'declined';
+  if (declinedCount === 0 && remainingUndecidedCount === 0) return 'approved';
   return 'partially_approved';
 }

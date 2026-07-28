@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate, authorize, rejectTenantOverride, requireContext, ROLES, READ_ROLES } from '../../../shared/middleware/auth';
-import { ValidationError } from '../../../shared/middleware/error-handler';
+import { ForbiddenError, ValidationError } from '../../../shared/middleware/error-handler';
 import * as svc from '../services/service-cockpit-service';
 
 // ============================================================
@@ -29,6 +29,20 @@ function handler(fn: (req: Request, res: Response) => Promise<void>) {
 function requireFields(body: Record<string, unknown>, fields: string[]): void {
   const missing = fields.filter((f) => body?.[f] === undefined || body[f] === null || body[f] === '');
   if (missing.length > 0) throw new ValidationError(`${missing.join(', ')} required`, { details: { missing } });
+}
+
+/**
+ * Rejects fields the caller must not set, rather than dropping them silently — a
+ * client that believes it set `authorization_status` should be told it did not.
+ */
+function refuseFields(body: Record<string, unknown>, fields: string[]): void {
+  const present = fields.filter((f) => body && f in body);
+  if (present.length > 0) {
+    throw new ForbiddenError(`${present.join(', ')} cannot be set directly`, {
+      code: 'authorization_fields_readonly',
+      details: { refused: present },
+    });
+  }
 }
 
 const WRITE_SERVICE = [ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER];
@@ -118,9 +132,10 @@ router.post('/ros/:roId/transition', authenticate, authorize(...WRITE_SERVICE), 
 
 router.post('/ros/:roId/line-items', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
   requireFields(req.body, ['line_type', 'description']);
-  const { line_type, category, description, labor_op_code, estimated_hours, authorization_status } = req.body;
+  refuseFields(req.body, ['authorization_status', 'authorization_ref']);
+  const { line_type, category, description, labor_op_code, estimated_hours } = req.body;
   const data = await svc.addLineItem(requireContext(req), req.params.roId, {
-    line_type, category, description, labor_op_code, estimated_hours, authorization_status,
+    line_type, category, description, labor_op_code, estimated_hours,
   });
   res.status(201).json({ success: true, data });
 }));

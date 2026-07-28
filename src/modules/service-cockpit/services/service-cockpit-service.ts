@@ -60,10 +60,16 @@ const svcMPIConversionRate = new promClient.Gauge({ name: 'service_mpi_conversio
 const svcFirstServiceCaptureRate = new promClient.Gauge({ name: 'service_retention_first_service_capture_rate', help: 'First service capture rate', labelNames: ['location'] });
 
 /**
- * Declared-but-unwired gauges. They are part of the Phase-248 metric contract and are
- * exported so the aggregation job that will populate them (outstanding work, see
- * docs/REMEDIATION.md) has a single import site. Publishing a placeholder constant
- * would be worse than publishing nothing, so nothing sets them here.
+ * Declared-but-unwired metrics: 11 of the 15. They are part of the Phase-248 metric
+ * contract and are exported so the aggregation job that will populate them (outstanding
+ * work, see docs/REMEDIATION.md) has a single import site. Publishing a placeholder
+ * constant would be worse than publishing nothing, so nothing sets them here.
+ *
+ * `svcQueueDepth` belongs here rather than being driven from `listServiceQueueItems`:
+ * a gauge fed by per-request reads is last-writer-wins, and its label set carries no
+ * tenant, so one tenant's count would overwrite another's on a metrics endpoint that is
+ * scraped without a credential. Adding a tenant label would publish a tenant roster
+ * instead, which is worse — the depth belongs in the aggregation job.
  */
 export const unwiredMetrics = {
   svcPartsBackorderRate,
@@ -76,6 +82,7 @@ export const unwiredMetrics = {
   svcMPIConversionRate,
   svcComebackRate,
   svcFirstServiceCaptureRate,
+  svcQueueDepth,
 };
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -303,7 +310,9 @@ const VIEW_QUEUE_MAP: Record<string, string[]> = {
 };
 
 export async function queryServiceCockpitView(ctx: AuthContext, viewId: string, overrides?: unknown): Promise<any> {
-  const queueTypes = VIEW_QUEUE_MAP[viewId];
+  // `Object.hasOwn`, not a truthiness check: inherited keys like `constructor` or
+  // `toString` would otherwise pass the guard and reach the query as a function.
+  const queueTypes = typeof viewId === 'string' && Object.hasOwn(VIEW_QUEUE_MAP, viewId) ? VIEW_QUEUE_MAP[viewId] : undefined;
   if (!queueTypes) {
     throw new ValidationError('Unknown view_id', {
       code: 'unknown_view',
@@ -337,6 +346,7 @@ export async function queryServiceCockpitView(ctx: AuthContext, viewId: string, 
 
 const APPOINTMENT_SOURCES = ['walk_in', 'phone', 'web', 'sales_handoff'] as const;
 const LANGUAGE_PREFERENCES = ['en', 'es', 'auto'] as const;
+const CONTACT_CHANNELS = ['sms', 'email', 'phone', 'portal'] as const;
 
 export async function createAppointment(
   ctx: AuthContext,
@@ -371,7 +381,10 @@ export async function createAppointment(
       [
         id, ctx.tenantId, params.location_id, params.mdm_customer_id, params.mdm_vehicle_id,
         params.scheduled_start, params.scheduled_end ?? null, JSON.stringify(params.concerns ?? []),
-        params.preferred_contact_channel ?? 'sms', language, source, ctx.userId,
+        params.preferred_contact_channel
+          ? requireOneOf(params.preferred_contact_channel, CONTACT_CHANNELS, 'preferred_contact_channel')
+          : 'sms',
+        language, source, ctx.userId,
       ],
     )
   ).rows[0];
@@ -398,6 +411,24 @@ export async function updateAppointment(ctx: AuthContext, appointmentId: string,
     throw new ValidationError('status cannot be set directly; use the confirm or check-in endpoints', {
       code: 'status_not_directly_updatable',
     });
+  }
+
+  // Validated to the same standard as the create path — otherwise a bad value reaches
+  // a CHECK constraint or a timestamp column and comes back as an opaque 500.
+  for (const field of ['scheduled_start', 'scheduled_end'] as const) {
+    const value = updates[field];
+    if (value !== undefined && value !== null && (typeof value !== 'string' || Number.isNaN(Date.parse(value)))) {
+      throw new ValidationError(`${field} must be a timestamp`);
+    }
+  }
+  if (updates.language_preference !== undefined) {
+    requireOneOf(updates.language_preference, LANGUAGE_PREFERENCES, 'language_preference');
+  }
+  if (updates.preferred_contact_channel !== undefined) {
+    requireOneOf(updates.preferred_contact_channel, CONTACT_CHANNELS, 'preferred_contact_channel');
+  }
+  if (updates.concerns !== undefined && !Array.isArray(updates.concerns)) {
+    throw new ValidationError('concerns must be an array');
   }
 
   const sets: string[] = [];
@@ -574,15 +605,30 @@ export async function createRO(
 
   const roId = generateId();
   const ro = await withTransaction(async (tx) => {
-    // An appointment may only be attached if it is ours.
+    // An appointment may only be attached if it is ours, and only once — a second
+    // repair order for the same appointment would hit the unique index and surface as
+    // an opaque 500 instead of a domain conflict.
     if (params.appointment_id) {
       const appt = (
-        await tx.query(`SELECT appointment_id FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2`, [
+        await tx.query(
+          `SELECT appointment_id FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`,
+          [params.appointment_id, ctx.tenantId],
+        )
+      ).rows[0];
+      if (!appt) throw new NotFoundError('Appointment not found');
+
+      const existing = (
+        await tx.query(`SELECT ro_id FROM repair_orders WHERE appointment_id=$1 AND tenant_id=$2`, [
           params.appointment_id,
           ctx.tenantId,
         ])
       ).rows[0];
-      if (!appt) throw new NotFoundError('Appointment not found');
+      if (existing) {
+        throw new ConflictError('This appointment already has a repair order', {
+          code: 'appointment_already_converted',
+          details: { ro_id: existing.ro_id },
+        });
+      }
     }
 
     const row = (
@@ -730,9 +776,17 @@ export async function transitionRO(
 }
 
 const LINE_TYPES = ['labor', 'parts', 'sublet', 'fee'] as const;
-const LINE_AUTHORIZATION_STATUSES = ['not_required', 'pending', 'approved', 'declined'] as const;
 const LINE_STATUSES = ['proposed', 'approved', 'declined', 'in_progress', 'completed', 'canceled'] as const;
 
+/**
+ * Adds a line to a repair order.
+ *
+ * A new line always starts at `not_required`. The caller cannot choose its
+ * `authorization_status` — accepting one here would reintroduce, on the create path,
+ * exactly what `updateLineItem` refuses: a line marked `approved` with no customer
+ * decision behind it. Authorization status is written only by `recordAuthorization`
+ * (moving it to `approved`/`declined`) and `generateEstimate` (moving it to `pending`).
+ */
 export async function addLineItem(
   ctx: AuthContext,
   roId: string,
@@ -742,9 +796,13 @@ export async function addLineItem(
     description: string;
     labor_op_code?: string;
     estimated_hours?: number;
-    authorization_status?: string;
   },
 ): Promise<any> {
+  if ('authorization_status' in params || 'authorization_ref' in params) {
+    throw new ForbiddenError('authorization_status is set from a recorded customer authorization, not directly', {
+      code: 'authorization_fields_readonly',
+    });
+  }
   const lineType = requireOneOf(params.line_type, LINE_TYPES, 'line_type');
   if (typeof params.description !== 'string' || params.description.trim() === '') {
     throw new ValidationError('description is required');
@@ -752,19 +810,16 @@ export async function addLineItem(
   if (params.estimated_hours !== undefined && (typeof params.estimated_hours !== 'number' || params.estimated_hours < 0)) {
     throw new ValidationError('estimated_hours must be a non-negative number');
   }
-  const authStatus = params.authorization_status
-    ? requireOneOf(params.authorization_status, LINE_AUTHORIZATION_STATUSES, 'authorization_status')
-    : 'not_required';
 
   return withTransaction(async (tx) => {
     await assertRO(tx, ctx, roId);
     return (
       await tx.query(
         `INSERT INTO ro_line_items (line_item_id,tenant_id,ro_id,line_type,category,description,labor_op_code,estimated_hours,authorization_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'not_required') RETURNING *`,
         [
           generateId(), ctx.tenantId, roId, lineType, params.category ?? null, params.description,
-          params.labor_op_code ?? null, params.estimated_hours ?? null, authStatus,
+          params.labor_op_code ?? null, params.estimated_hours ?? null,
         ],
       )
     ).rows[0];
@@ -798,10 +853,22 @@ export async function updateLineItem(
   if (updates.assigned_tech_user_id !== undefined && updates.assigned_tech_user_id !== null) {
     requireUuid(updates.assigned_tech_user_id, 'assigned_tech_user_id');
   }
+  if (updates.sold_hours !== undefined && updates.sold_hours !== null
+      && (typeof updates.sold_hours !== 'number' || updates.sold_hours < 0)) {
+    throw new ValidationError('sold_hours must be a non-negative number');
+  }
 
   return withTransaction(async (tx) => {
     await assertRO(tx, ctx, roId);
-    await assertLineItem(tx, ctx, roId, lineItemId);
+    const line = await assertLineItem(tx, ctx, roId, lineItemId);
+
+    // `status` on a declined line is the record that the customer said no. Letting it
+    // be rewritten would quietly return declined work to the shop floor.
+    if (line.authorization_status === 'declined' && updates.status !== undefined && updates.status !== 'declined') {
+      throw new ConflictError('This line was declined by the customer and cannot be reopened', {
+        code: 'line_item_declined',
+      });
+    }
 
     const sets: string[] = [];
     const vals: unknown[] = [lineItemId, roId, ctx.tenantId];
@@ -850,7 +917,16 @@ export async function startMPISession(
   requireUuid(params.tech_user_id, 'tech_user_id');
 
   return withTransaction(async (tx) => {
-    await assertRO(tx, ctx, roId, { lock: true });
+    const ro = await assertRO(tx, ctx, roId, { lock: true });
+    // An inspection only makes sense before the estimate is priced. Checking here means
+    // the conditional status write below is a no-op only when the RO is already being
+    // inspected, never because the caller was silently ignored.
+    if (!['checked_in', 'inspection_in_progress'].includes(ro.status)) {
+      throw new ConflictError(`An inspection cannot be started on a '${ro.status}' repair order`, {
+        code: 'ro_not_inspectable',
+        details: { status: ro.status },
+      });
+    }
 
     const template = (
       await tx.query(`SELECT template_id FROM mpi_templates WHERE template_id=$1 AND tenant_id=$2 AND status='active'`, [
@@ -1005,6 +1081,27 @@ export async function sendRecommendationsToCustomer(
       )
     ).rows;
 
+    // Reuse an open task rather than stacking a new one on the customer's portal
+    // every time an advisor re-sends.
+    const openTask = (
+      await tx.query(
+        `SELECT portal_task_id FROM service_portal_tasks
+          WHERE ro_id=$1 AND tenant_id=$2 AND task_type='review_recommendations'
+            AND status IN ('created','viewed')
+          ORDER BY created_at DESC LIMIT 1`,
+        [roId, ctx.tenantId],
+      )
+    ).rows[0];
+
+    if (openTask) {
+      await recordROEvent(tx, ctx, roId, 'recommendations_sent', { user_id: ctx.userId }, {
+        portal_task_id: openTask.portal_task_id,
+        sent_count: recs.length,
+        channel: params.channel ?? null,
+      });
+      return { sent_count: recs.length, portal_task_id: openTask.portal_task_id, reused_existing_task: true };
+    }
+
     const taskId = generateId();
     await tx.query(
       `INSERT INTO service_portal_tasks (portal_task_id,tenant_id,ro_id,task_type,title_i18n,description_i18n,status)
@@ -1049,7 +1146,13 @@ export async function generateEstimate(
   return withTransaction(async (tx) => {
     // Locking the RO serialises version assignment for this repair order; the unique
     // index on (ro_id, version) is the backstop.
-    await assertRO(tx, ctx, roId, { lock: true });
+    const ro = await assertRO(tx, ctx, roId, { lock: true });
+    if (!['checked_in', 'inspection_in_progress', 'estimate_pending', 'awaiting_authorization'].includes(ro.status)) {
+      throw new ConflictError(`An estimate cannot be generated for a '${ro.status}' repair order`, {
+        code: 'ro_not_estimable',
+        details: { status: ro.status },
+      });
+    }
 
     const lineItems = (
       await tx.query(
@@ -1111,6 +1214,12 @@ export async function sendEstimate(
 
   return withTransaction(async (tx) => {
     const ro = await assertRO(tx, ctx, roId, { lock: true });
+    if (ro.status !== 'estimate_pending') {
+      throw new ConflictError(`An estimate cannot be sent from a '${ro.status}' repair order`, {
+        code: 'ro_not_estimate_pending',
+        details: { status: ro.status },
+      });
+    }
 
     // The estimate must belong to THIS repair order; matching on estimate_id alone let
     // a mismatched pair advance an unrelated RO.
@@ -1213,11 +1322,22 @@ export async function recordAuthorization(
   }
 
   if (methodRequiresStepUp(params.method)) {
+    // Staff asserting the decision on the customer's behalf: no customer-produced
+    // artifact exists, so the actor must re-authenticate.
     verifyStepUpToken(params.step_up_token, {
       tenantId: ctx.tenantId,
       userId: ctx.userId,
       action: `authorization.record:${params.method}`,
       resourceId: roId,
+    });
+  } else if (!params.evidence_refs || Object.keys(params.evidence_refs).length === 0) {
+    // Every other method claims a customer-produced artifact — a portal submission, a
+    // signature, a call recording. The record must carry a pointer to it, otherwise
+    // "the customer approved via the portal" is an unfalsifiable assertion and the
+    // step-up requirement is avoidable just by naming a different method.
+    throw new ValidationError(`evidence_refs is required for method '${params.method}'`, {
+      code: 'evidence_required',
+      details: { method: params.method },
     });
   }
 
@@ -1242,17 +1362,14 @@ export async function recordAuthorization(
       });
     }
 
-    await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined]);
-
-    const pendingCount = Number(
-      (
-        await tx.query(
-          `SELECT COUNT(*)::int AS cnt FROM ro_line_items
-            WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status='pending'`,
-          [roId, ctx.tenantId],
-        )
-      ).rows[0].cnt,
-    );
+    const decidedLines = await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined]);
+    const notPending = decidedLines.filter((l: any) => l.authorization_status !== 'pending');
+    if (notPending.length > 0) {
+      throw new ConflictError('One or more line items are not awaiting a customer decision', {
+        code: 'line_items_not_pending',
+        details: { line_item_ids: notPending.map((l: any) => l.line_item_id) },
+      });
+    }
 
     const authStatus = deriveAuthorizationStatus(approved, declined);
     const authId = generateId();
@@ -1283,9 +1400,21 @@ export async function recordAuthorization(
       );
     }
 
+    // Counted AFTER the updates above: whatever is still `pending` on this repair
+    // order is a line of this estimate the customer has not decided yet.
+    const remainingUndecided = Number(
+      (
+        await tx.query(
+          `SELECT COUNT(*)::int AS cnt FROM ro_line_items
+            WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status='pending'`,
+          [roId, ctx.tenantId],
+        )
+      ).rows[0].cnt,
+    );
+
     await tx.query(
       `UPDATE ro_estimates SET status=$3, updated_at=NOW() WHERE estimate_id=$1 AND tenant_id=$2`,
-      [params.estimate_id, ctx.tenantId, deriveEstimateStatus(approved.length, declined.length, pendingCount)],
+      [params.estimate_id, ctx.tenantId, deriveEstimateStatus(approved.length, declined.length, remainingUndecided)],
     );
 
     await recordROEvent(tx, ctx, roId, 'authorization_received', { user_id: ctx.userId }, {
@@ -1598,8 +1727,14 @@ export async function createComebackCase(
   const severity = params.severity ? requireOneOf(params.severity, COMEBACK_SEVERITIES, 'severity') : 'sev2';
 
   const comeback = await withTransaction(async (tx) => {
-    const original = await assertRO(tx, ctx, params.original_ro_id, { lock: true });
-    await assertRO(tx, ctx, params.new_ro_id);
+    // Both repair orders are locked, in a deterministic order. Locking only one leaves
+    // a crossed pair (A→B and B→A opened concurrently) able to deadlock; sorting the
+    // ids gives every caller the same acquisition order.
+    const [firstId, secondId] = [params.original_ro_id, params.new_ro_id].sort();
+    await assertRO(tx, ctx, firstId, { lock: true });
+    await assertRO(tx, ctx, secondId, { lock: true });
+
+    const original = await assertRO(tx, ctx, params.original_ro_id);
 
     if (original.status !== 'closed') {
       throw new ConflictError(`The original repair order is '${original.status}'; only a closed RO can come back`, {
@@ -1664,6 +1799,19 @@ export async function updateComebackCase(ctx: AuthContext, comebackId: string, u
 const QUEUE_PRIORITIES = ['p0', 'p1', 'p2'] as const;
 const QUEUE_STATUSES = ['queued', 'in_progress', 'blocked', 'done', 'canceled'] as const;
 
+/** Closed set of work queues the cockpit understands. */
+const QUEUE_TYPES = [
+  'appointments_today',
+  'waiting_checkin',
+  'waiting_authorization',
+  'waiting_parts',
+  'in_repair',
+  'qc',
+  'ready_pickup',
+  'comeback_review',
+  'no_show_followup',
+] as const;
+
 /**
  * Internal: creates a queue item on the caller's executor so it joins the surrounding
  * transaction. Not exposed as an endpoint — queue items are produced by the lifecycle
@@ -1708,7 +1856,9 @@ export async function listServiceQueueItems(
     conds.push(`qi.location_id=$${vals.length}`);
   }
   if (filters.queue_type) {
-    vals.push(filters.queue_type);
+    // Validated against a closed set: this value used to reach a Prometheus label,
+    // where an arbitrary string is unbounded cardinality.
+    vals.push(requireOneOf(filters.queue_type, QUEUE_TYPES, 'queue_type'));
     conds.push(`qi.queue_type=$${vals.length}`);
   }
   if (filters.status) {
@@ -1729,34 +1879,46 @@ export async function listServiceQueueItems(
     )
   ).rows;
 
-  if (filters.queue_type) {
-    // Counted separately: the page above is capped at 200, so its length is not the
-    // queue depth.
-    const depth = (
-      await query(
-        `SELECT COUNT(*)::int AS cnt FROM service_queue_items
-          WHERE tenant_id=$1 AND queue_type=$2 AND status NOT IN ('done','canceled')
-            ${filters.location_id ? 'AND location_id=$3' : ''}`,
-        filters.location_id ? [ctx.tenantId, filters.queue_type, filters.location_id] : [ctx.tenantId, filters.queue_type],
-      )
-    ).rows[0];
-    svcQueueDepth.set({ queue_type: filters.queue_type, location: filters.location_id ?? 'all' }, Number(depth.cnt));
-  }
-
   return rows;
 }
 
+/**
+ * Claims a queue item for the caller.
+ *
+ * Guarded so it is a claim rather than a blind overwrite: a finished item cannot be
+ * resurrected, and an item already being worked by someone else is a conflict rather
+ * than a silent reassignment that leaves two people believing they own it.
+ */
 export async function assignServiceQueueItem(ctx: AuthContext, queueItemId: string): Promise<any> {
   requireUuid(queueItemId, 'queue_item_id');
-  const row = (
-    await query(
-      `UPDATE service_queue_items SET assigned_to_user_id=$3, status='in_progress', updated_at=NOW()
-        WHERE queue_item_id=$1 AND tenant_id=$2 RETURNING *`,
-      [queueItemId, ctx.tenantId, ctx.userId],
-    )
-  ).rows[0];
-  if (!row) throw new NotFoundError('Queue item not found');
-  return row;
+
+  return withTransaction(async (tx) => {
+    const item = (
+      await tx.query(`SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`, [
+        queueItemId,
+        ctx.tenantId,
+      ])
+    ).rows[0];
+    if (!item) throw new NotFoundError('Queue item not found');
+
+    if (['done', 'canceled'].includes(item.status)) {
+      throw new ConflictError(`Queue item is already '${item.status}'`, { code: 'queue_item_closed' });
+    }
+    if (item.assigned_to_user_id && item.assigned_to_user_id !== ctx.userId) {
+      throw new ConflictError('Queue item is already assigned to another user', {
+        code: 'queue_item_taken',
+        details: { assigned_to_user_id: item.assigned_to_user_id },
+      });
+    }
+
+    return (
+      await tx.query(
+        `UPDATE service_queue_items SET assigned_to_user_id=$3, status='in_progress', updated_at=NOW()
+          WHERE queue_item_id=$1 AND tenant_id=$2 RETURNING *`,
+        [queueItemId, ctx.tenantId, ctx.userId],
+      )
+    ).rows[0];
+  });
 }
 
 export async function updateServiceQueueItemStatus(

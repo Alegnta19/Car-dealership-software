@@ -39,6 +39,10 @@ function b64urlJson(segment: string): any {
   return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
 }
 
+function isObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function jwtSecret(): string {
   const value = process.env.JWT_SECRET;
   if (!value || value.length < 32) {
@@ -66,6 +70,10 @@ function verifyJwtHs256(token: string): Record<string, any> {
     throw new UnauthorizedError('Malformed bearer token');
   }
 
+  // `JSON.parse` happily returns null or a scalar for well-formed input like "null"
+  // or "1", which would then throw a TypeError on property access and surface as a
+  // 500 to an unauthenticated caller.
+  if (!isObject(header) || !isObject(payload)) throw new UnauthorizedError('Malformed bearer token');
   if (header.alg !== 'HS256') throw new UnauthorizedError('Unsupported token algorithm');
 
   const expected = createHmac('sha256', jwtSecret())
@@ -77,9 +85,16 @@ function verifyJwtHs256(token: string): Record<string, any> {
     throw new UnauthorizedError('Invalid token signature');
   }
 
+  // `exp` is mandatory: treating it as optional would make a token without one a
+  // permanent credential that no rotation or revocation window can reach.
   const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp === 'number' && payload.exp <= now) throw new UnauthorizedError('Token expired');
-  if (typeof payload.nbf === 'number' && payload.nbf > now) throw new UnauthorizedError('Token not yet valid');
+  if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
+    throw new UnauthorizedError('Token is missing an expiry');
+  }
+  if (payload.exp <= now) throw new UnauthorizedError('Token expired');
+  if (payload.nbf !== undefined && (typeof payload.nbf !== 'number' || payload.nbf > now)) {
+    throw new UnauthorizedError('Token not yet valid');
+  }
 
   return payload;
 }

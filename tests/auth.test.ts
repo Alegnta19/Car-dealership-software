@@ -16,10 +16,19 @@ function b64(value: object): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 
-function mintToken(payload: object, opts: { alg?: string; secret?: string } = {}): string {
+/** Mints a token that is valid by default; pass `exp` explicitly to override. */
+function mintToken(payload: Record<string, unknown>, opts: { alg?: string; secret?: string } = {}): string {
   const header = b64({ alg: opts.alg ?? 'HS256', typ: 'JWT' });
-  const body = b64(payload);
+  const body = b64({ exp: Math.floor(Date.now() / 1000) + 3600, ...payload });
   const signature = createHmac('sha256', opts.secret ?? SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+/** Mints a token from exactly the given claims, with no defaults added. */
+function mintRawToken(payload: unknown): string {
+  const header = b64({ alg: 'HS256', typ: 'JWT' });
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', SECRET).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${signature}`;
 }
 
@@ -64,6 +73,24 @@ test('an expired token is rejected', () => {
 test('a token without a usable tenant claim is rejected', () => {
   const token = mintToken({ sub: USER, tid: 'acme-motors', roles: [] });
   assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
+});
+
+test('a token with no expiry is rejected rather than treated as valid forever', () => {
+  // An optional exp would make such a token a permanent credential.
+  const token = mintRawToken({ sub: USER, tid: TENANT, roles: [] });
+  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
+});
+
+test('a non-numeric expiry is rejected', () => {
+  const token = mintRawToken({ sub: USER, tid: TENANT, roles: [], exp: '9999999999' });
+  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
+});
+
+test('a scalar or null token payload is rejected, not crashed on', () => {
+  for (const payload of [null, 1, 'string', []]) {
+    const err = runMiddleware(authenticate, requestWith(mintRawToken(payload)));
+    assert.equal(err?.statusCode, 401, `payload ${JSON.stringify(payload)} should be a 401`);
+  }
 });
 
 test('the tenant always comes from the token, never from the request body', () => {

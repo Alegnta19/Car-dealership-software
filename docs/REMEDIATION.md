@@ -184,20 +184,106 @@ Changes the six fixes could not be made without, or that were one line inside co
 
 ---
 
+## Post-review corrections
+
+The remediation above was then put through a 48-agent adversarial review (four lenses — tenancy,
+authorization, atomicity, regressions — each finding independently confirmed or refuted by two
+further agents). Twenty-one findings survived. The substantive ones are fixed here; each is listed
+because a fix that introduces its own holes is not a fix.
+
+**Two of the findings were holes in the H6 fix itself:**
+
+- **`addLineItem` accepted a caller-supplied `authorization_status`.** `updateLineItem` was hardened
+  to refuse that field, but the create path still wrote it verbatim — so a caller could simply
+  create a line already stamped `approved`. Both paths now refuse `authorization_status` and
+  `authorization_ref` with 403; a new line always starts `not_required`.
+- **A technician could reopen a declined line.** `status` remained freely writable on the shop-floor
+  PATCH, so work the customer declined could be set back to `proposed` and swept into the next
+  estimate. A line whose `authorization_status` is `declined` now rejects any status change.
+
+**Authorization and identity:**
+
+- **`exp` is now mandatory on bearer tokens.** It was honoured only when present and numeric, so a
+  token minted without one was a permanent credential.
+- **Malformed token payloads no longer reach property access.** `JSON.parse("null")` returns `null`
+  without throwing, and the `alg` check sat outside the parse guard — an unauthenticated caller
+  could force a 500. Header and payload must now both be objects.
+- **Step-up is no longer avoidable by naming a different method.** Step-up applied only to
+  `staff_attestation`, so sending `method: 'portal'` skipped it and nothing required proof the
+  portal was involved. Methods that claim a customer-produced artifact must now carry non-empty
+  `evidence_refs`; `staff_attestation` still requires step-up. Verifying the artifact itself is out
+  of scope for this service.
+- **Step-up token lifetime cut to two minutes.** There is no consumption ledger, so a token stays
+  valid for repeat use until it expires. The binding limits that to the same user repeating the same
+  action on the same resource; a single-use `jti` ledger remains outstanding work.
+
+**Correctness:**
+
+- **Estimate status was derived from the wrong denominator.** It used a whole-repair-order pending
+  count, so an estimate could be stored `approved` while lines it covered were still undecided. The
+  count is now taken *after* the decision is applied, and `deriveEstimateStatus` takes
+  "lines still undecided" explicitly. Decided lines must also be `pending` when the decision arrives.
+- **Three conditional status writes could silently no-op.** `generateEstimate`, `sendEstimate` and
+  `startMPISession` guarded their `UPDATE` with a source-status predicate but never checked whether
+  it matched, returning success either way. Each now asserts the repair order's state up front and
+  fails with a 409.
+- **`createRO` on an already-converted appointment returned 500.** The new unique index raised a raw
+  `23505`. It is now a 409 `appointment_already_converted` naming the existing repair order.
+- **`assignServiceQueueItem` was a blind overwrite.** It could resurrect a `done` item and silently
+  take one already assigned to someone else. It now locks the row, refuses closed items, and reports
+  409 `queue_item_taken` rather than leaving two people believing they own the work.
+- **`createComebackCase` locked only one of the two repair orders**, so a crossed pair opened
+  concurrently could deadlock. Both are locked, in sorted id order.
+- **`sendRecommendationsToCustomer` stacked a new portal task on every send.** It now reuses an open
+  one.
+- **PATCH paths skipped the validation their POST counterparts performed**, turning bad input into
+  500s from CHECK constraints. Appointment timestamps, language, contact channel and concerns, and
+  line-item `sold_hours`, are validated on update too.
+- **An unknown `view_id` could bypass the guard** via inherited keys such as `constructor`. The
+  lookup uses `Object.hasOwn`.
+- **`queue_type` was unvalidated and reached a Prometheus label**, giving unbounded cardinality. It
+  is validated against a closed set.
+- **Queue depth is no longer published from request traffic.** The gauge carries no tenant label, so
+  one tenant's count overwrote another's on an endpoint scraped without a credential — and adding a
+  tenant label would publish a tenant roster instead. It moved to `unwiredMetrics`, leaving four
+  wired metrics rather than five.
+
+**Documentation:** the README claimed seven wired metrics; the code wired five, and now four.
+
+Findings that were *not* acted on: the review flagged that migration 049 differs from the version in
+the source bundle, which would matter to an environment that had already applied the bundle's copy.
+This repository's 049 has a single revision and has never been applied anywhere, so it stands as the
+authoritative schema for a fresh install — but see the note under Outstanding work.
+
+---
+
 ## Outstanding work
 
 Known and deliberately not addressed here. None of it is High severity.
 
-**Integration tests.** The 35 unit tests cover pure logic and middleware. Transaction rollback,
+**Integration tests.** The 39 unit tests cover pure logic and middleware. Transaction rollback,
 check-in idempotency under concurrency, and tenant scoping are verified by review only — they need
 tests against a real PostgreSQL instance.
 
-**Metric wiring.** Eight of the fifteen metrics have no source of truth yet: parts backorder rate and
-wait time, QC fail rate, technician utilization / efficiency / proficiency, SLA breach rate, MPI
-conversion rate — plus comeback rate and first-service capture rate, whose false constants were
-removed. They need a periodic aggregation job. All ten are exported as `unwiredMetrics` so that job
-has a single import site. The `_p95` suffix on the histogram names is kept as specified, though
-histograms yield quantiles at query time and the suffix is misleading.
+**Metric wiring.** Eleven of the fifteen metrics have no source of truth yet: parts backorder rate
+and wait time, QC fail rate, technician utilization / efficiency / proficiency, SLA breach rate, MPI
+conversion rate, comeback rate and first-service capture rate (whose false constants were removed),
+and queue depth (which cannot be driven from per-request reads on a tenant-agnostic gauge). They need
+a periodic aggregation job; all eleven are exported as `unwiredMetrics` so that job has a single
+import site. The `_p95` suffix on the histogram names is kept as specified, though histograms yield
+quantiles at query time and the suffix is misleading.
+
+**Single-use step-up tokens.** Tokens carry a `jti` that nothing consumes, so one is replayable
+within its two-minute lifetime by the same user for the same action on the same resource. A
+consumption ledger would close the window entirely.
+
+**Migration 049 differs from the source bundle's copy.** It gains the renamed `idx_roest_ro` index,
+the unique indexes on `repair_orders(appointment_id)` and `ro_estimates(ro_id, version)`, the
+`service_portal_tasks` table, an FK on `service_recommendations.ro_id`, six FK indexes, and several
+CHECK constraints. Because the migration runner keys on filename alone, an environment that already
+applied the bundle's 049 will not receive any of it. This repository's 049 has never been applied
+anywhere, so it stands as the authoritative schema for a fresh install; if the bundle's version is
+live somewhere, that environment needs a separate forward migration rather than a re-run.
 
 **Queue-item lifecycle.** Queue items are created by `checkIn` and `sendEstimate` but no flow closes
 them; `transitionRO` should mark the related items `done`. Until then the cockpit accumulates stale
@@ -236,11 +322,18 @@ duplicates it and produces a duplicate customer recommendation on submit.
    intake sessions and retention offers. The original code substituted `''`, which a `UUID NOT NULL`
    column rejects at runtime.
 4. **`PATCH /appointments/:id` no longer accepts `status`.** Use the confirm and check-in endpoints.
-5. **`PATCH /ros/:roId/line-items/:id` no longer accepts `authorization_status` or
-   `authorization_ref`.** They are written only from a recorded customer authorization.
+5. **Neither creating nor updating a line item accepts `authorization_status` or
+   `authorization_ref`.** They are written only by `generateEstimate` and `recordAuthorization`. A
+   line the customer declined also refuses further status changes.
+5a. **`recordAuthorization` requires `evidence_refs`** for `portal`, `signature` and
+   `recorded_call_ref`, and every decided line must currently be awaiting a decision.
+5b. **Bearer tokens must carry `exp`.** A token without one is now rejected.
 6. **`POST /ros/:roId/transition` to `authorized` or `canceled` requires `step_up_token`**, as does
    recording a `staff_attestation` authorization.
 7. **Check-in is idempotent.** A repeat call returns the existing repair order with
    `idempotent_replay: true` instead of creating a second one.
-8. **Unsupported inputs are rejected**: `overrides` on the view query, and `create_runbook: true` on
-   queue escalation.
+8. **Unsupported inputs are rejected**: `overrides` on the view query, `create_runbook: true` on
+   queue escalation, and a `queue_type` outside the known set.
+9. **New 409 conflicts** where the operation previously succeeded silently or failed as a 500:
+   `appointment_already_converted`, `queue_item_taken`, `queue_item_closed`, `ro_not_inspectable`,
+   `ro_not_estimable`, `ro_not_estimate_pending`, `line_items_not_pending`, `line_item_declined`.

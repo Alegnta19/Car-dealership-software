@@ -54,7 +54,7 @@ src/
     routes/index.ts                  36 endpoints
     services/service-cockpit-service.ts   business logic and SQL
 scripts/migrate.ts                   ordered, transactional migration runner
-tests/                               35 unit tests
+tests/                               39 unit tests
 docs/
   PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
   REMEDIATION.md                     what was fixed, why, and what remains
@@ -102,10 +102,17 @@ than silently ignored.
 action and resource. See `src/shared/security/step-up.ts`.
 
 **Customer authorizations are derived, not asserted.** `recordAuthorization` validates that the
-estimate belongs to the RO and was actually sent, rejects any line-item id that is not on that RO,
-and derives the record's status from the decision — an all-declined outcome is stored as `declined`
-and does not satisfy the state machine's authorization gate, which additionally requires the approval
-to reference the *current* estimate version.
+estimate belongs to the RO and was actually sent, rejects any line-item id that is not on that RO or
+is not awaiting a decision, and derives the record's status from the decision — an all-declined
+outcome is stored as `declined` and does not satisfy the state machine's authorization gate, which
+additionally requires the approval to reference the *current* estimate version. Methods that claim a
+customer-produced artifact must carry `evidence_refs`; the one that does not (`staff_attestation`)
+requires step-up instead, so neither path is a way around the other.
+
+**Authorization status is never caller-supplied.** Neither creating nor updating a line item accepts
+`authorization_status` or `authorization_ref` — both are refused with 403. They are written only by
+`generateEstimate` (to `pending`) and `recordAuthorization` (to `approved`/`declined`), and a line
+the customer declined cannot be reopened through the work-progress endpoint.
 
 **Multi-write operations are atomic.** Everything that writes more than one row runs inside
 `withTransaction`. Domain events (`ro_events`, `service_appointment_events`) commit with the change
@@ -129,8 +136,8 @@ Success responses are `{ "success": true, "data": ... }`. Errors are:
 `ro_not_found` / `estimate_not_found` (404), `conflict` / `concurrent_modification` (409),
 `invalid_transition` / `authorization_required` (422).
 
-The token must carry `sub` (user UUID), `tid` (tenant UUID) and `roles` (array), signed HS256 with
-`JWT_SECRET`.
+The token must carry `sub` (user UUID), `tid` (tenant UUID), `roles` (array) and `exp`, signed HS256
+with `JWT_SECRET`. `exp` is mandatory — a token without one would be a permanent credential.
 
 Endpoint catalog: [docs/PHASE-248-SERVICE-COCKPIT-V2.md](docs/PHASE-248-SERVICE-COCKPIT-V2.md#7-api-surface--36-endpoints).
 
@@ -141,10 +148,14 @@ Endpoint catalog: [docs/PHASE-248-SERVICE-COCKPIT-V2.md](docs/PHASE-248-SERVICE-
 `GET /metrics` exposes the Prometheus registry; `GET /healthz` is a liveness probe. Neither is
 authenticated — bind them to an internal interface or gate them at the ingress.
 
-Seven of the fifteen Phase-248 metrics are wired to real events. The remaining eight need an
+Four of the fifteen Phase-248 metrics are wired to real events. The remaining eleven need an
 aggregation job that does not exist yet; they are exported from
 `services/service-cockpit-service.ts` as `unwiredMetrics` so that job has one import site. Nothing
 publishes a placeholder value — see [docs/REMEDIATION.md](docs/REMEDIATION.md#outstanding-work).
+
+Note that `/metrics` is a shared, unauthenticated surface, so no metric carries a tenant label and
+none is driven from a per-request read. Queue depth in particular belongs in the aggregation job:
+a gauge fed by request traffic is last-writer-wins across tenants.
 
 ---
 
@@ -154,9 +165,10 @@ publishes a placeholder value — see [docs/REMEDIATION.md](docs/REMEDIATION.md#
 npm test
 ```
 
-35 unit tests covering the repair-order state machine, authorization derivation, step-up token
-binding and expiry, JWT verification (including algorithm-confusion rejection), tenant-override
-rejection, and role enforcement. They run without a database.
+39 unit tests covering the repair-order state machine, authorization and estimate-status derivation,
+step-up token binding and expiry, JWT verification (algorithm confusion, missing or non-numeric
+expiry, non-object payloads), tenant-override rejection, and role enforcement. They run without a
+database.
 
 Integration tests against a real PostgreSQL instance are outstanding work; the transaction,
 idempotency and tenant-scoping behaviour is currently verified by review and unit tests only.
