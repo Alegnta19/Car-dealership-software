@@ -1,4 +1,5 @@
 import { createApp } from './app';
+import { startMetricsAggregation } from './modules/service-cockpit/services/metrics-aggregator';
 import { closePool } from './shared/database/pool';
 import { logger } from './shared/utils/logger';
 
@@ -20,8 +21,12 @@ function main(): void {
   const port = Number(process.env.PORT ?? 3000);
   const server = createApp().listen(port, () => logger.info({ port }, 'Service cockpit API listening'));
 
+  // Rates and ratios are computed on a schedule rather than from request traffic.
+  const stopMetrics = startMetricsAggregation();
+
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'Shutting down');
+    stopMetrics();
     server.close(() => {
       closePool()
         .catch((err) => logger.error({ err }, 'Failed to close the database pool'))

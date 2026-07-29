@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
+import { Executor } from '../database/pool';
 import { ForbiddenError } from '../middleware/error-handler';
 
 /**
@@ -23,10 +24,8 @@ interface StepUpPayload extends StepUpBinding {
 }
 
 /**
- * Kept short because a token is valid for repeat use until it expires — there is no
- * consumption store, so the window is the only bound on replay. Replay is limited to
- * the same user repeating the same action on the same resource; a single-use `jti`
- * ledger is outstanding work (see docs/REMEDIATION.md).
+ * Short-lived by design. `consumeStepUpToken` additionally makes a token single-use,
+ * so this bounds how long an unused token stays mintable-and-valid.
  */
 const DEFAULT_TTL_SECONDS = 120;
 
@@ -61,11 +60,14 @@ export function signStepUpToken(binding: StepUpBinding, ttlSeconds: number = DEF
 }
 
 /**
- * Verifies a token against the action being attempted. Throws `ForbiddenError` unless
- * the signature is valid, the token has not expired, and every binding field matches.
- * Callers must treat any throw as a hard refusal — there is no partial success.
+ * Verifies a token against the action being attempted and returns its payload. Throws
+ * `ForbiddenError` unless the signature is valid, the token has not expired, and every
+ * binding field matches. Callers must treat any throw as a hard refusal — there is no
+ * partial success.
+ *
+ * Verification alone does not prevent reuse; call `consumeStepUpToken` for that.
  */
-export function verifyStepUpToken(token: unknown, expected: StepUpBinding): void {
+export function verifyStepUpToken(token: unknown, expected: StepUpBinding): StepUpPayload {
   const reject = (reason: string): never => {
     throw new ForbiddenError('Step-up verification is required for this action', {
       code: 'step_up_required',
@@ -91,8 +93,51 @@ export function verifyStepUpToken(token: unknown, expected: StepUpBinding): void
   }
 
   if (typeof payload.exp !== 'number' || payload.exp * 1000 <= Date.now()) reject('expired');
+  if (typeof payload.jti !== 'string' || payload.jti === '') reject('missing_jti');
   if (payload.tenantId !== expected.tenantId) reject('tenant_mismatch');
   if (payload.userId !== expected.userId) reject('user_mismatch');
   if (payload.action !== expected.action) reject('action_mismatch');
   if (payload.resourceId !== expected.resourceId) reject('resource_mismatch');
+
+  return payload;
+}
+
+/**
+ * Verifies a token and burns it, making step-up genuinely single-use.
+ *
+ * Must be called on the executor of the transaction performing the privileged write:
+ * the token is spent exactly when the operation commits, and a rolled-back operation
+ * releases it again. The primary key on `step_up_token_uses.jti` is what rejects the
+ * second attempt, so two concurrent replays cannot both win.
+ */
+export async function consumeStepUpToken(
+  ex: Executor,
+  token: unknown,
+  expected: StepUpBinding,
+): Promise<void> {
+  const payload = verifyStepUpToken(token, expected);
+
+  const inserted = await ex.query(
+    `INSERT INTO step_up_token_uses (jti,tenant_id,user_id,action,resource_id,expires_at)
+     VALUES ($1,$2,$3,$4,$5,to_timestamp($6))
+     ON CONFLICT (jti) DO NOTHING
+     RETURNING jti`,
+    [payload.jti, payload.tenantId, payload.userId, payload.action, payload.resourceId, payload.exp],
+  );
+
+  if (inserted.rowCount === 0) {
+    throw new ForbiddenError('This step-up token has already been used', {
+      code: 'step_up_required',
+      details: { reason: 'token_already_used', action: expected.action },
+    });
+  }
+}
+
+/**
+ * Drops ledger rows for tokens that can no longer be replayed. Safe to call on any
+ * schedule; nothing depends on the history.
+ */
+export async function pruneConsumedStepUpTokens(ex: Executor): Promise<number> {
+  const result = await ex.query(`DELETE FROM step_up_token_uses WHERE expires_at < NOW()`);
+  return result.rowCount ?? 0;
 }

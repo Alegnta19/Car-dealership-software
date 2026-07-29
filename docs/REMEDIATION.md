@@ -46,7 +46,7 @@ High-severity defects. This document records what each one was, how it is closed
 
 ## H2 — No authorization layer
 
-**Was.** `authorize` was imported and applied to zero of the 36 routes. Any authenticated principal —
+**Was.** `authorize` was imported and applied to zero of the routes. Any authenticated principal —
 technician, viewer, anyone — could record customer authorizations, transition repair orders, escalate
 queues, or file warranty claims.
 
@@ -77,14 +77,15 @@ signature declared it — and whose body never referenced it. Sensitive transiti
 practice.
 
 **Now.** `src/shared/security/step-up.ts` mints and verifies HMAC-SHA256 tokens bound to **tenant,
-user, action and resource**, with an expiry (default 5 minutes) and constant-time signature
+user, action and resource**, with a short expiry (default two minutes) and constant-time signature
 comparison. A token minted for one repair order cannot be replayed against another, and one minted
-for one user cannot be used by another. Verification failure is a hard 403 `step_up_required`.
+for one user cannot be used by another. Verification failure is a hard 403 `step_up_required`. The
+medium/low round additionally made tokens single-use via a consumption ledger.
 
 Required for: `ro.transition:authorized`, `ro.transition:canceled`, and
 `authorization.record:staff_attestation`.
 
-**Covered by tests:** `tests/step-up.test.ts` — nine cases covering each binding field, expiry,
+**Covered by tests:** `tests/step-up.test.ts` — eight cases covering each binding field, expiry,
 payload tampering, and malformed input.
 
 ---
@@ -213,9 +214,8 @@ because a fix that introduces its own holes is not a fix.
   portal was involved. Methods that claim a customer-produced artifact must now carry non-empty
   `evidence_refs`; `staff_attestation` still requires step-up. Verifying the artifact itself is out
   of scope for this service.
-- **Step-up token lifetime cut to two minutes.** There is no consumption ledger, so a token stays
-  valid for repeat use until it expires. The binding limits that to the same user repeating the same
-  action on the same resource; a single-use `jti` ledger remains outstanding work.
+- **Step-up token lifetime cut to two minutes**, and (in the medium/low round) made single-use: see
+  the fourth-round note below.
 
 **Correctness:**
 
@@ -245,10 +245,10 @@ because a fix that introduces its own holes is not a fix.
   is validated against a closed set.
 - **Queue depth is no longer published from request traffic.** The gauge carries no tenant label, so
   one tenant's count overwrote another's on an endpoint scraped without a credential — and adding a
-  tenant label would publish a tenant roster instead. It moved to `unwiredMetrics`, leaving four
-  wired metrics rather than five.
+  tenant label would publish a tenant roster instead. It moved to the scheduled aggregation
+  described below.
 
-**Documentation:** the README claimed seven wired metrics; the code wired five, and now four.
+**Documentation:** the README claimed seven wired metrics; the code wired five.
 
 Findings that were *not* acted on: the review flagged that migration 049 differs from the version in
 the source bundle, which would matter to an environment that had already applied the bundle's copy.
@@ -257,56 +257,160 @@ authoritative schema for a fresh install — but see the note under Outstanding 
 
 ---
 
+## Medium and low findings
+
+A third pass closed everything that had been carried as known-outstanding. Schema support
+lives in `050_phase248_hardening.sql`, kept separate from 049 because that file is published and
+may already have been applied somewhere.
+
+**Queue items now follow the repair order.** They were created by check-in and estimate-send and
+never closed by anything, so every cockpit count drifted upward forever. `syncQueueForRO` closes
+items for work the RO has moved past and opens one for where it now sits; a terminal RO leaves no
+open queue work. It runs inside the transaction that changed the status, and every status-changing
+path calls it — so re-sending an estimate no longer stacks a second `waiting_authorization` item.
+
+**Duplicate inspection results are gone.** `UNIQUE (mpi_session_id, item_key)` plus an upsert, so a
+technician correcting a reading replaces it instead of adding a row that becomes a duplicate
+customer recommendation on submit.
+
+**Inspection severity must be stated for a finding.** It defaulted to `info`, which quietly turned a
+failed safety item into a `p2` suggestion — the priority mapping and the intake path disagreed about
+the taxonomy. `pass` may omit it; `attention` and `fail` may not.
+
+**`updated_at` is maintained by the database.** A trigger on all 18 mutable tables, rather than
+application discipline that any forgotten statement silently broke.
+
+**Step-up tokens are single-use.** `consumeStepUpToken` records the `jti` in `step_up_token_uses`
+inside the same transaction as the privileged write, so the token is spent exactly when the
+operation commits and a rolled-back operation releases it. The primary key rejects concurrent
+replays.
+
+**Technician time is a coherent sequence.** Clock events are validated against the previous entry —
+the first must be a `start`, a `stop` cannot follow a `stop`. Hours computed from the log are now
+meaningful, which is what makes the technician metrics possible.
+
+**`tech_profiles` is in use.** Work can only be dispatched to a technician with an active profile at
+the repair order's location, and `scheduled_hours_per_week` gives utilization its denominator.
+
+**All fifteen metrics are populated.** `services/metrics-aggregator.ts` computes the eleven rates,
+ratios and depths on an interval over a rolling window: parts backorder rate and wait time, QC
+failure rate (derived from `qc → in_repair` transitions in the event log), technician
+utilization / efficiency / proficiency, SLA breach rate, recommendation conversion, comeback rate,
+first-service capture, and queue depth. Series are labelled by `location_id`, never tenant, and a
+ratio with no denominator publishes nothing rather than a misleading zero.
+
+**Retention is measurable.** `first_service_offers` records the deal → appointment link that
+previously lived only in a JSON blob; `checkIn` marks it converted, giving capture rate both a
+numerator and a denominator.
+
+**A quality gate exists.** `qc → ready_for_pickup` now requires every line item to be completed,
+declined or canceled, so a vehicle with open work cannot be handed back.
+
+**Declined work stays declined.** A line the customer declined refuses further status changes.
+
+**Pagination.** `limit`/`offset` on the queue list and view query, `event_limit` on the repair-order
+read, each validated and capped. The previous fixed limits made anything past the first page
+unreachable.
+
+**Estimates carry money when the lines do.** `totals_ref` sums `price_ref.amount_cents` where
+present and reports `priced_line_count` / `unpriced_line_count` so a caller can always tell whether
+a total is complete. Mixed currencies are rejected rather than added together. This is a reporting
+convention, not a pricing engine — rates, tax and markup remain out of scope.
+
+**Closed vocabularies.** `queue_type` and `comeback_cases.root_cause_category` were free text while
+being used as grouping keys; both are now constrained in the database and validated in code.
+
+**Quick intake does something real.** Given an `mdm_vehicle_id` it returns the vehicle's service
+history from this tenant — recent repair orders, any open one, and previously declined
+recommendations. It still persists nothing, and says so. VIN resolution stays with MDM.
+
+**CSPP2 has an API.** `GET /ros/:roId/portal-tasks` and `PATCH /portal-tasks/:id`.
+
+**Integration tests exist.** 28 tests against a real PostgreSQL instance covering what a mock cannot:
+cross-tenant reads and writes, check-in idempotency and its unique-index backstop, rollback leaving
+no partial state, the authorization gate against all-declined and superseded-estimate approvals,
+step-up single-use replay, queue lifecycle, inspection upsert, clock sequencing, the quality gate,
+the retention bridge and its rollback, the metrics aggregator's arithmetic, and trigger-maintained
+`updated_at`. They skip cleanly when no database is configured, so `npm test` still works without
+one.
+
+---
+
+## Post-review corrections, round two
+
+A second 48-agent review (three lenses: SQL/schema, behaviour, documentation) ran over the round
+above. The substantive findings are fixed here; the rest were documentation drift, corrected across
+this file, the README and the architecture reference. Schema support is in `051_phase248_metrics_support.sql`.
+
+**Two were real metric bugs of my own making:**
+
+- **The comeback-rate denominator excluded its own numerator.** It counted repair orders *currently*
+  `closed`, but opening a comeback flips the original out of `closed` — so the denominator dropped
+  exactly the orders the numerator counted, reporting `k/(N−k)` and vanishing entirely when every
+  closed order came back. It now counts orders that *closed in the window* from the event log, which
+  a later status change cannot alter.
+- **Parts wait time re-measured the same part on every status change.** It measured to `updated_at`,
+  which the new trigger bumps on each progression from received to picked to installed. A dedicated
+  `received_at` (set once, on first receipt) is the fixed point now, and the high-water mark advances
+  to the largest `received_at` actually read rather than the wall clock, closing a skip window.
+
+**Other corrections:**
+
+- **Aggregated gauges are reset each pass.** A drained queue or a quiet location kept publishing its
+  last non-zero reading; gauges are level readings, so every one is cleared before recomputation.
+- **The technician join no longer fans out.** A technician with profiles at more than one location
+  had their hours counted once per profile; capacity is now summed separately and looked up by map.
+- **`createFirstServiceOffer` is atomic.** The appointment and the offer are inserted in one
+  transaction, so a rejected duplicate offer no longer strands an appointment.
+- **The SLA breach metric has a population.** `sla_due_at` was never written; queue items now take a
+  due time from the tenant's `service_sla_defaults` (migration 051), or an explicit value.
+- **`summariseMoney` is strict.** `amount_cents` of `null`, `true` or `[]` counted as a priced line
+  worth zero (`Number()` makes them finite); only a real `number` is now accepted.
+- **Time entries are serialised.** `recordTimeEntry` takes `FOR UPDATE` on the ticket, so two racing
+  entries cannot both read the same "last" event, and an entry cannot back-date before the previous
+  one.
+- **Migrations 050 and 051 are idempotent.** Two `CREATE TRIGGER`s lacked a `DROP` guard and failed
+  on re-run; the `mpi_results` de-dup now breaks `created_at` ties with `ctid`; and the two CHECK
+  constraints are added `NOT VALID` so they do not fail against pre-existing free-text data.
+- **`pruneConsumedStepUpTokens` is wired.** The step-up ledger is pruned each aggregation pass, so it
+  no longer grows without bound.
+- **`syncQueueForRO` covers `authorized` and `sublet_in_progress`.** Those non-terminal states had no
+  queue mapping, so a repair order briefly vanished from every cockpit view while sitting in them.
+
+---
+
 ## Outstanding work
 
-Known and deliberately not addressed here. None of it is High severity.
-
-**Integration tests.** The 39 unit tests cover pure logic and middleware. Transaction rollback,
-check-in idempotency under concurrency, and tenant scoping are verified by review only — they need
-tests against a real PostgreSQL instance.
-
-**Metric wiring.** Eleven of the fifteen metrics have no source of truth yet: parts backorder rate
-and wait time, QC fail rate, technician utilization / efficiency / proficiency, SLA breach rate, MPI
-conversion rate, comeback rate and first-service capture rate (whose false constants were removed),
-and queue depth (which cannot be driven from per-request reads on a tenant-agnostic gauge). They need
-a periodic aggregation job; all eleven are exported as `unwiredMetrics` so that job has a single
-import site. The `_p95` suffix on the histogram names is kept as specified, though histograms yield
-quantiles at query time and the suffix is misleading.
-
-**Single-use step-up tokens.** Tokens carry a `jti` that nothing consumes, so one is replayable
-within its two-minute lifetime by the same user for the same action on the same resource. A
-consumption ledger would close the window entirely.
+Known and deliberately not addressed. None of it is a defect in what ships.
 
 **Migration 049 differs from the source bundle's copy.** It gains the renamed `idx_roest_ro` index,
 the unique indexes on `repair_orders(appointment_id)` and `ro_estimates(ro_id, version)`, the
-`service_portal_tasks` table, an FK on `service_recommendations.ro_id`, six FK indexes, and several
-CHECK constraints. Because the migration runner keys on filename alone, an environment that already
-applied the bundle's 049 will not receive any of it. This repository's 049 has never been applied
-anywhere, so it stands as the authoritative schema for a fresh install; if the bundle's version is
-live somewhere, that environment needs a separate forward migration rather than a re-run.
+`service_portal_tasks` table, an FK on `service_recommendations.ro_id`, six FK indexes and several
+CHECK constraints. The migration runner keys on filename, so an environment that already applied the
+bundle's 049 will not receive any of it and needs a separate forward migration rather than a re-run.
+This repository's 049 has never been applied anywhere. Everything since is in 050 and 051, which are
+additive.
 
-**Queue-item lifecycle.** Queue items are created by `checkIn` and `sendEstimate` but no flow closes
-them; `transitionRO` should mark the related items `done`. Until then the cockpit accumulates stale
-entries unless clients close items explicitly.
+**No QC checklist.** `qc -> ready_for_pickup` now requires all work to be closed out, but there is no
+item-by-item quality checklist and no record of who signed off. The QC failure metric infers failures
+from `qc -> in_repair` transitions rather than from recorded defects.
 
-**`tech_profiles` is unused.** The table and its indexes exist; no code reads or writes it. It is the
-missing input for the three technician metrics.
+**Estimates are not priced.** Totals sum `price_ref.amount_cents` where a caller has supplied it.
+There is no labour rate table, no parts markup, no tax and no discounting, so an estimate total is
+only as complete as what the caller wrote onto each line.
 
-**CSPP2 has no API of its own.** Portal tasks are created as a side effect of sending
-recommendations. A packager endpoint is not implemented.
+**Concurrency is verified by construction, not by test.** The integration suite exercises rollback,
+idempotent replay and the unique-index backstops, but not genuinely simultaneous writers. The row
+locks and guarded updates are reviewed, not load-tested.
 
-**Retention attribution is partial.** `createFirstServiceOffer` now persists `deal_id` inside the
-appointment's `concerns` payload, which is queryable but not a first-class bridge table.
+**`_p95` metric names.** Kept as the Phase-248 spec wrote them, though a histogram yields quantiles
+at query time and the suffix is misleading.
 
-**`quickStartIntake` persists nothing.** It returns a scratch-pad preview; the response now says so
-explicitly (`persisted: false`).
+**No `ON DELETE` behaviour.** All foreign keys remain `NO ACTION`, so deleting a parent with children
+errors. This suits the append-only posture but is undocumented in the schema itself.
 
-**Duplicate MPI results.** No uniqueness on `(mpi_session_id, item_key)`, so re-recording an item
-duplicates it and produces a duplicate customer recommendation on submit.
-
-**No pagination.** List endpoints use fixed limits (20 / 30 / 100 / 200) with no cursor or offset.
-
-**No `updated_at` trigger.** Maintained by application code, as in the original schema.
+**No cursor pagination.** `limit`/`offset` is enough for the cockpit's page sizes but will drift on
+a busy queue; a keyset cursor would be stable.
 
 ---
 
@@ -336,4 +440,22 @@ duplicates it and produces a duplicate customer recommendation on submit.
    queue escalation, and a `queue_type` outside the known set.
 9. **New 409 conflicts** where the operation previously succeeded silently or failed as a 500:
    `appointment_already_converted`, `queue_item_taken`, `queue_item_closed`, `ro_not_inspectable`,
-   `ro_not_estimable`, `ro_not_estimate_pending`, `line_items_not_pending`, `line_item_declined`.
+   `ro_not_estimable`, `ro_not_estimate_pending`, `line_items_not_pending`, `line_item_declined`,
+   `invalid_time_sequence`, `offer_already_exists`.
+10. **A step-up token works once.** A replay is refused even inside its lifetime.
+11. **`severity` is required** on an inspection result whose status is `attention` or `fail`.
+12. **`root_cause_category` and `queue_type` are closed sets**; arbitrary strings are rejected.
+13. **Dispatch requires an active technician profile** at the repair order's location
+    (`tech_not_available`), so `tech_profiles` must be populated before work can be assigned.
+14. **`qc → ready_for_pickup` requires all work closed out** (`work_incomplete`), and a
+    customer-declined line refuses further status changes.
+15. **Clock events must form a sequence** — the first entry on a ticket is a `start`, and a `stop`
+    cannot follow a `stop`.
+16. **List endpoints accept `limit`/`offset`** (`event_limit` on the repair-order read), validated
+    and capped; `POST /query/view` returns `count`, `limit` and `offset` alongside `items`.
+17. **Two new endpoints**: `GET /ros/:roId/portal-tasks` and `PATCH /portal-tasks/:portalTaskId`.
+18. **`POST /intake/quick-start` accepts `mdm_vehicle_id`** and returns real service history for it.
+19. **`POST /retention/first-service` returns an `offer_id`** and refuses a second offer for the same
+    deal.
+20. **`POST /ros/:roId/estimates/:estimateId/send` no longer returns `queue_item_id`** — queue
+    membership is now derived from the repair order's status.

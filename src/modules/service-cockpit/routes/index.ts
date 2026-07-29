@@ -60,7 +60,8 @@ router.get('/home', authenticate, authorize(...READ_ROLES), handler(async (req, 
 
 router.post('/query/view', authenticate, authorize(...READ_ROLES), handler(async (req, res) => {
   requireFields(req.body, ['view_id']);
-  const data = await svc.queryServiceCockpitView(requireContext(req), req.body.view_id, req.body.overrides);
+  const { view_id, overrides, limit, offset } = req.body;
+  const data = await svc.queryServiceCockpitView(requireContext(req), view_id, overrides, { limit, offset });
   res.json({ success: true, data });
 }));
 
@@ -96,8 +97,10 @@ router.post('/appointments/:appointmentId/check-in', authenticate, authorize(...
 
 router.post('/intake/quick-start', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
   requireFields(req.body, ['location_id']);
-  const { location_id, scan_vin, language_preference } = req.body;
-  const data = await svc.quickStartIntake(requireContext(req), { location_id, scan_vin, language_preference });
+  const { location_id, scan_vin, mdm_vehicle_id, language_preference } = req.body;
+  const data = await svc.quickStartIntake(requireContext(req), {
+    location_id, scan_vin, mdm_vehicle_id, language_preference,
+  });
   res.json({ success: true, data });
 }));
 
@@ -115,7 +118,7 @@ router.post('/ros', authenticate, authorize(...WRITE_SERVICE), handler(async (re
 }));
 
 router.get('/ros/:roId', authenticate, authorize(...READ_ROLES), handler(async (req, res) => {
-  const data = await svc.getRO(requireContext(req), req.params.roId);
+  const data = await svc.getRO(requireContext(req), req.params.roId, { event_limit: req.query.event_limit });
   res.json({ success: true, data });
 }));
 
@@ -306,6 +309,8 @@ router.get('/queues', authenticate, authorize(...READ_ROLES), handler(async (req
     location_id: req.query.location_id as string | undefined,
     queue_type: req.query.queue_type as string | undefined,
     status: req.query.status as string | undefined,
+    limit: req.query.limit,
+    offset: req.query.offset,
   });
   res.json({ success: true, data });
 }));
@@ -326,6 +331,21 @@ router.post('/queues/:queueItemId/escalate', authenticate, authorize(ROLES.SERVI
   requireFields(req.body, ['reason']);
   const { reason, create_runbook } = req.body;
   const data = await svc.escalateServiceQueueItem(requireContext(req), req.params.queueItemId, { reason, create_runbook });
+  res.json({ success: true, data });
+}));
+
+// ────────────────────────────────────────────────────────────
+// 11) Customer Portal Tasks (CSPP2)
+// ────────────────────────────────────────────────────────────
+
+router.get('/ros/:roId/portal-tasks', authenticate, authorize(...READ_ROLES), handler(async (req, res) => {
+  const data = await svc.listPortalTasks(requireContext(req), req.params.roId);
+  res.json({ success: true, data });
+}));
+
+router.patch('/portal-tasks/:portalTaskId', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  requireFields(req.body, ['status']);
+  const data = await svc.updatePortalTaskStatus(requireContext(req), req.params.portalTaskId, { status: req.body.status });
   res.json({ success: true, data });
 }));
 
