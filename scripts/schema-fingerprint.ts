@@ -70,7 +70,9 @@ async function main(): Promise<void> {
   const outIdx = process.argv.indexOf('--out');
   const outPath = outIdx >= 0 ? process.argv[outIdx + 1] : undefined;
   const { sha256, schema } = await fingerprint();
-  const tableCount = new Set((schema.columns as Array<{ table_name: string }>).map((c) => c.table_name)).size;
+  const tableCount = new Set(
+    (schema.columns as Array<{ table_name: string }>).map((c) => c.table_name),
+  ).size;
   console.log(`schema_fingerprint_sha256=${sha256}`);
   console.log(`tables=${tableCount}`);
   if (outPath !== undefined) {

@@ -27,7 +27,8 @@ export async function seedStandardMPITemplate(
   locationId?: string,
 ): Promise<{ template_id: string; created: boolean }> {
   if (!UUID_RE.test(tenantId)) throw new Error('--tenant must be a UUID');
-  if (locationId !== undefined && !UUID_RE.test(locationId)) throw new Error('--location must be a UUID');
+  if (locationId !== undefined && !UUID_RE.test(locationId))
+    throw new Error('--location must be a UUID');
 
   // Location scoping follows listMPITemplates: a NULL location_id template is
   // tenant-wide; a located template belongs to that location. The idempotency check
@@ -45,7 +46,12 @@ export async function seedStandardMPITemplate(
     await query(
       `INSERT INTO mpi_templates (tenant_id, location_id, name, version, items, status)
        VALUES ($1, $2, $3, 1, $4, 'active') RETURNING template_id`,
-      [tenantId, locationId ?? null, STANDARD_MPI_TEMPLATE_NAME, JSON.stringify(STANDARD_MPI_ITEMS)],
+      [
+        tenantId,
+        locationId ?? null,
+        STANDARD_MPI_TEMPLATE_NAME,
+        JSON.stringify(STANDARD_MPI_ITEMS),
+      ],
     )
   ).rows[0];
   return { template_id: row.template_id, created: true };
@@ -54,7 +60,9 @@ export async function seedStandardMPITemplate(
 async function main(): Promise<void> {
   const tenant = arg('tenant');
   if (!tenant) {
-    console.error('Usage: npx tsx scripts/seed-mpi-template.ts --tenant <uuid> [--location <uuid>]');
+    console.error(
+      'Usage: npx tsx scripts/seed-mpi-template.ts --tenant <uuid> [--location <uuid>]',
+    );
     process.exit(2);
   }
   const result = await seedStandardMPITemplate(tenant, arg('location'));

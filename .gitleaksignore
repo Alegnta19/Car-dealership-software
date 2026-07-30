@@ -1,0 +1,11 @@
+# FBL-000-R1 (correction B): exact-fingerprint suppressions ONLY.
+#
+# Commit de0f47f committed three synthetic, test-only JWT-secret literals inside the CI
+# workflow file. They were never real credentials (they signed nothing outside ephemeral
+# CI processes), the workflow no longer contains any secret literal (values are generated
+# at runtime and masked), and history is immutable by order ("do not rewrite or
+# force-push repository history"). Each suppression below is one exact gitleaks finding
+# fingerprint (commit:file:rule:line) — no path, rule, entropy, or pattern exemptions.
+de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:18
+de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:42
+de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:172

@@ -29,5 +29,41 @@
       "tests/routes.test.ts": 6,
       "tests/step-up.test.ts": 1
     }
+  },
+  "format": {
+    "total": 31,
+    "byFile": {
+      ".github/workflows/ci.yml": 1,
+      "docker-compose.yml": 1,
+      "docs/DEVELOPMENT.md": 1,
+      "docs/FBL-000-BASELINE-REPORT.md": 1,
+      "docs/PHASE-248-SERVICE-COCKPIT-V2.md": 1,
+      "docs/PLATFORM-CONTEXT.md": 1,
+      "docs/REMEDIATION.md": 1,
+      "package.json": 1,
+      "README.md": 1,
+      "scripts/migrate.ts": 1,
+      "scripts/parse-test-summary.ts": 1,
+      "src/app.ts": 1,
+      "src/modules/service-cockpit/domain/authorization.ts": 1,
+      "src/modules/service-cockpit/domain/standard-mpi-template.ts": 1,
+      "src/modules/service-cockpit/domain/state-machine.ts": 1,
+      "src/modules/service-cockpit/routes/index.ts": 1,
+      "src/modules/service-cockpit/services/metrics-aggregator.ts": 1,
+      "src/modules/service-cockpit/services/service-cockpit-service.ts": 1,
+      "src/server.ts": 1,
+      "src/shared/middleware/auth.ts": 1,
+      "src/shared/middleware/error-handler.ts": 1,
+      "src/shared/security/step-up.ts": 1,
+      "src/shared/utils/logger.ts": 1,
+      "tests/auth.test.ts": 1,
+      "tests/authorization.test.ts": 1,
+      "tests/docs.test.ts": 1,
+      "tests/helpers/db.ts": 1,
+      "tests/integration.test.ts": 1,
+      "tests/routes.test.ts": 1,
+      "tests/state-machine.test.ts": 1,
+      "tests/step-up.test.ts": 1
+    }
   }
 }

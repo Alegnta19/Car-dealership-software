@@ -1,9 +1,14 @@
-# FBL-000 — Reproducible Baseline.
+# FBL-000 — Reproducible Baseline (as corrected by FBL-000-R1).
 #
 # Every job runs from a clean clone with a locked install. The database-backed suites
 # are REQUIRED here: REQUIRE_DB_TESTS=1 turns the local "skip without a database"
-# behavior into a hard failure, so CI can never report green while silently skipping
-# them. Actions are pinned by commit SHA and container images by digest; Dependabot
+# behavior into a hard failure, and scripts/parse-test-summary.ts enforces a non-empty,
+# internally consistent summary with failed=0 and skipped=0 — it depends on no reporter
+# glyph, color, or locale (the original grep expected the spec reporter's "ℹ" while
+# Node 20 on a non-TTY emitted TAP's "#", which failed a fully passing run).
+#
+# No secret literals live in this file: test-only values are generated per run and
+# masked. Actions are pinned by commit SHA and container images by digest; Dependabot
 # (.github/dependabot.yml) is the approved mechanism that proposes updates to both.
 
 name: ci
@@ -12,11 +17,6 @@ on:
   push:
     branches: [main]
   pull_request:
-
-env:
-  # Test-only values; the length matters (the server asserts >= 32 chars), the secrecy does not.
-  JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
-  STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
 
 jobs:
   verify:
@@ -39,8 +39,6 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
       REQUIRE_DB_TESTS: "1"
-      JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
-      STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -49,22 +47,36 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Generate test-only secrets (runtime, masked — never tracked text)
+        run: |
+          JWT_SECRET="$(openssl rand -hex 32)"
+          STEP_UP_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$JWT_SECRET"
+          echo "::add-mask::$STEP_UP_SECRET"
+          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
+          echo "STEP_UP_SECRET=$STEP_UP_SECRET" >> "$GITHUB_ENV"
+
       - name: Locked install
         run: npm ci
 
       - name: Tool versions (artifact input)
         run: |
+          set -o pipefail
           mkdir -p artifacts
           { echo "node=$(node --version)"; echo "npm=$(npm --version)";
             echo "tsc=$(npx tsc --version)"; echo "eslint=$(npx eslint --version)";
+            echo "prettier=$(npx prettier --version)";
             echo "postgres_image=postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777";
           } | tee artifacts/tool-versions.txt
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Quality ratchet (strictness + lint, no new debt)
+      - name: Quality ratchet (strictness + lint + format, no new debt)
         run: npm run ratchet:check
+
+      - name: Format check (ratcheted formatting baseline)
+        run: npm run format:check
 
       - name: Build
         run: npm run build
@@ -74,8 +86,12 @@ jobs:
 
       - name: Migration idempotency (second run applies nothing)
         run: |
+          set -o pipefail
           npm run migrate 2>&1 | tee artifacts/migrate-second-run.log
           grep -q '"applied":0' artifacts/migrate-second-run.log
+
+      - name: Migration manifest (filenames + SHA-256)
+        run: npx tsx scripts/migration-manifest.ts migrations --out artifacts/migration-manifest.json
 
       - name: Application starts and readiness succeeds (compiled output)
         run: |
@@ -90,15 +106,17 @@ jobs:
 
       - name: All declared tests (zero skipped required suites)
         run: |
-          npx tsx --test --test-concurrency=1 \
+          set -o pipefail
+          npx tsx --test --test-concurrency=1 --test-reporter=tap --test-reporter-destination=stdout \
             tests/*.test.ts 2>&1 | tee artifacts/test-output.log
-          tail -n 20 artifacts/test-output.log | grep -E 'ℹ (tests|suites|pass|fail|skipped|duration_ms)' > artifacts/test-counts.txt
-          cat artifacts/test-counts.txt
-          grep -qE 'ℹ skipped 0' artifacts/test-counts.txt
-          grep -qE 'ℹ fail 0' artifacts/test-counts.txt
+
+      - name: Enforce test summary (non-empty; failed=0; skipped=0)
+        run: npx tsx scripts/parse-test-summary.ts artifacts/test-output.log artifacts/test-summary.json
 
       - name: Schema fingerprint (fresh chain)
-        run: npx tsx scripts/schema-fingerprint.ts --out artifacts/schema-fingerprint.json | tee artifacts/schema-fingerprint.txt
+        run: |
+          set -o pipefail
+          npx tsx scripts/schema-fingerprint.ts --out artifacts/schema-fingerprint.json | tee artifacts/schema-fingerprint.txt
 
       - name: Dependency audit (gate on high/critical)
         run: |
@@ -107,6 +125,15 @@ jobs:
 
       - name: SBOM (CycloneDX)
         run: npm sbom --sbom-format cyclonedx --omit dev > artifacts/sbom.cdx.json
+
+      - name: Evidence completeness (every required artifact exists and is non-empty)
+        run: |
+          for f in tool-versions.txt migrate-second-run.log migration-manifest.json healthz.json \
+                   test-output.log test-summary.json schema-fingerprint.json schema-fingerprint.txt \
+                   npm-audit.json sbom.cdx.json; do
+            test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }
+          done
+          echo "all baseline-evidence artifacts present and non-empty"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -132,6 +159,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_upgrade_test
+      FRESH_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_fresh_check
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -140,37 +168,85 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Generate test-only secrets (runtime, masked — never tracked text)
+        run: |
+          JWT_SECRET="$(openssl rand -hex 32)"
+          STEP_UP_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$JWT_SECRET"
+          echo "::add-mask::$STEP_UP_SECRET"
+          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
+          echo "STEP_UP_SECRET=$STEP_UP_SECRET" >> "$GITHUB_ENV"
+
       - name: Locked install
         run: npm ci
 
+      - name: Retained-fixture checksums (must stay byte-identical to f76a27a)
+        run: |
+          mkdir -p artifacts
+          npx tsx scripts/migration-manifest.ts tests/fixtures/schema-f76a27a --out artifacts/fixture-checksums.json
+
       - name: Apply the earliest retained schema (f76a27a; migrations 000 + 049)
-        run: MIGRATIONS_DIR=tests/fixtures/schema-f76a27a npm run migrate
+        run: |
+          set -o pipefail
+          MIGRATIONS_DIR=tests/fixtures/schema-f76a27a npm run migrate 2>&1 | tee artifacts/upgrade-log.txt
 
       - name: Seed legacy data that schema allowed
         run: |
-          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync('tests/fixtures/legacy-seed-f76a27a.sql','utf8'));await c.end();console.log('legacy seed applied');})().catch(e=>{console.error(e);process.exit(1);})"
+          set -o pipefail
+          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync('tests/fixtures/legacy-seed-f76a27a.sql','utf8'));await c.end();console.log('legacy seed applied');})().catch(e=>{console.error(e);process.exit(1);})" 2>&1 | tee -a artifacts/upgrade-log.txt
 
       - name: Upgrade to the current head (050..latest on top of legacy data)
-        run: npm run migrate
+        run: |
+          set -o pipefail
+          npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+
+      - name: Legacy-seed survival and NOT VALID constraint state
+        run: |
+          set -o pipefail
+          npx tsx scripts/verify-upgrade-state.ts | tee artifacts/constraint-state.txt
 
       - name: Fingerprint the upgraded schema
         run: |
-          mkdir -p artifacts
+          set -o pipefail
           npx tsx scripts/schema-fingerprint.ts --out artifacts/upgraded-schema-fingerprint.json | tee artifacts/upgraded-schema-fingerprint.txt
+
+      - name: Fresh chain in a second database
+        run: |
+          set -o pipefail
+          node -e "const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query('CREATE DATABASE cockpit_fresh_check');await c.end();})().catch(e=>{console.error(e);process.exit(1);})"
+          DATABASE_URL="$FRESH_DATABASE_URL" npm run migrate
+          DATABASE_URL="$FRESH_DATABASE_URL" npx tsx scripts/schema-fingerprint.ts --out artifacts/fresh-schema-fingerprint.json | tee artifacts/fresh-schema-fingerprint.txt
+
+      - name: Fingerprints must be identical (fresh chain vs upgrade path)
+        run: |
+          set -o pipefail
+          FRESH=$(grep -oE 'schema_fingerprint_sha256=[0-9a-f]{64}' artifacts/fresh-schema-fingerprint.txt | cut -d= -f2)
+          UPGRADED=$(grep -oE 'schema_fingerprint_sha256=[0-9a-f]{64}' artifacts/upgraded-schema-fingerprint.txt | cut -d= -f2)
+          { echo "fresh=$FRESH"; echo "upgraded=$UPGRADED"; } | tee artifacts/fingerprint-equality.txt
+          test -n "$FRESH"
+          test -n "$UPGRADED"
+          test "$FRESH" = "$UPGRADED"
+          echo "equal=true" | tee -a artifacts/fingerprint-equality.txt
 
       - name: Application starts against the upgraded database
         run: |
           npm run build
           node dist/src/server.js & echo $! > server.pid
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:3000/healthz > /dev/null 2>&1; then break; fi
+            if curl -fsS http://127.0.0.1:3000/healthz > artifacts/upgraded-healthz.json 2>/dev/null; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:3000/healthz
+          cat artifacts/upgraded-healthz.json
           kill "$(cat server.pid)"
-        env:
-          JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
-          STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
+
+      - name: Evidence completeness (every required artifact exists and is non-empty)
+        run: |
+          for f in fixture-checksums.json upgrade-log.txt constraint-state.txt \
+                   upgraded-schema-fingerprint.json fresh-schema-fingerprint.json \
+                   fingerprint-equality.txt upgraded-healthz.json; do
+            test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }
+          done
+          echo "all upgrade-evidence artifacts present and non-empty"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -184,26 +260,56 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Build image
+      - name: Build image and record digest, runtime user, healthcheck
         run: |
+          set -o pipefail
           mkdir -p artifacts
           docker build --iidfile artifacts/image-id.txt -t service-cockpit:ci .
           docker image inspect service-cockpit:ci --format '{{.Id}}' | tee artifacts/image-digest.txt
-          docker image inspect service-cockpit:ci --format '{{json .Config.User}} {{json .Config.Healthcheck.Test}}' | tee artifacts/image-config.txt
+          { echo "runtime_user=$(docker image inspect service-cockpit:ci --format '{{.Config.User}}')";
+            echo "healthcheck=$(docker image inspect service-cockpit:ci --format '{{json .Config.Healthcheck}}')";
+            echo "exposed_ports=$(docker image inspect service-cockpit:ci --format '{{json .Config.ExposedPorts}}')";
+          } | tee artifacts/container-config.txt
+          test -s artifacts/image-digest.txt
+          grep -q 'runtime_user=cockpit' artifacts/container-config.txt
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: container-evidence
           path: artifacts/
 
   secret-scan:
-    name: secret scan (full history)
+    name: secret scan (genuine full history)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Full-history gitleaks scan (pinned image, --log-opts=--all)
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          IMAGE='zricethezav/gitleaks:v8.24.3@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055'
+          REVISIONS=$(git rev-list --all --count)
+          BRANCHES=$(git branch -r | wc -l)
+          CMD="git --log-opts=--all --redact -v --report-format=sarif --report-path=/repo/artifacts/gitleaks.sarif /repo"
+          { echo "scanner=gitleaks";
+            echo "image=$IMAGE";
+            echo "version=$(docker run --rm "$IMAGE" version)";
+            echo "command=gitleaks $CMD";
+            echo "scope=full history via --log-opts=--all";
+            echo "revisions_scanned=$REVISIONS";
+            echo "remote_branches=$BRANCHES";
+            echo "suppressions=.gitleaksignore (exact finding fingerprints only, see file)";
+          } | tee artifacts/scan-evidence.txt
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" "$IMAGE" $CMD 2>&1 | tail -20 | tee -a artifacts/scan-evidence.txt
+          test -s artifacts/gitleaks.sarif
+          cp .gitleaksignore artifacts/suppressions.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: secret-scan-evidence
+          path: artifacts/

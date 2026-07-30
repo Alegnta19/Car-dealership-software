@@ -86,10 +86,16 @@ npm run typecheck
 npm run ratchet:check
 ```
 
-The ratchet compares strict-mode (`tsconfig.strict.json`) and ESLint findings against
-`quality-baselines.json` per file: existing debt is recorded, new debt fails. If your
+```bash
+npm run format:check
+```
+
+The ratchet compares strict-mode (`tsconfig.strict.json`), ESLint, and Prettier
+formatting findings against `quality-baselines.json` per file: existing debt is
+recorded, new debt fails (`format:check` runs the formatting dimension alone). If your
 change *reduces* debt, run `npm run ratchet:update` and commit the lower baseline.
-Never raise the baseline to admit new findings.
+Never raise the baseline to admit new findings. New files must be clean in all three
+dimensions — `npm run format` formats what you're working on.
 
 ```bash
 npm run schema:fingerprint

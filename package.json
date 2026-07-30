@@ -19,7 +19,9 @@
     "ratchet:check": "tsx scripts/quality-ratchet.ts check",
     "ratchet:update": "tsx scripts/quality-ratchet.ts update",
     "schema:fingerprint": "tsx scripts/schema-fingerprint.ts",
-    "seed:mpi": "tsx scripts/seed-mpi-template.ts"
+    "seed:mpi": "tsx scripts/seed-mpi-template.ts",
+    "format": "prettier --write .",
+    "format:check": "tsx scripts/quality-ratchet.ts check format"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -32,6 +34,7 @@
     "@types/node": "^20.17.10",
     "@types/pg": "^8.11.10",
     "eslint": "^10.8.0",
+    "prettier": "^3.9.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.65.0"
