@@ -82,11 +82,16 @@ src/
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered, transactional migration runner
 scripts/seed-mpi-template.ts         per-tenant standard bilingual MPI checklist
+scripts/quality-ratchet.ts           strictness + lint debt ratchet (blocks new debt)
+scripts/schema-fingerprint.ts        deterministic schema-shape SHA-256
+.github/workflows/ci.yml             FBL-000 baseline CI (4 jobs, pinned)
 tests/                               39 unit + 4 documentation + 72 database-backed
 docs/
   PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
   REMEDIATION.md                     what was fixed, why, and what remains
   PLATFORM-CONTEXT.md                origin platform, adjacent systems, integration hazards
+  DEVELOPMENT.md                     one-command setup, test, migrate, seed, teardown
+  FBL-000-BASELINE-REPORT.md         reproducible-baseline evidence and recorded debt
 ```
 
 ---
@@ -233,6 +238,13 @@ Point `TEST_DATABASE_URL` at a throwaway database and run:
 ```bash
 npm run test:integration
 ```
+
+CI (`.github/workflows/ci.yml`) runs the whole suite against a real, digest-pinned
+PostgreSQL 16 with `REQUIRE_DB_TESTS=1`, so the database-backed suites can never be
+silently skipped there, plus a migration-upgrade job from the earliest retained schema
+fixture, a container build, and a full-history secret scan. Quality debt is ratcheted:
+`npm run ratchet:check` fails on any new strict-mode or lint finding beyond
+`quality-baselines.json`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 The database-backed suites TRUNCATE every table, so two guards stand in front of them:
 `TEST_DATABASE_URL` is read on its own and never falls back to `DATABASE_URL`, and the database

@@ -1,0 +1,209 @@
+# FBL-000 — Reproducible Baseline.
+#
+# Every job runs from a clean clone with a locked install. The database-backed suites
+# are REQUIRED here: REQUIRE_DB_TESTS=1 turns the local "skip without a database"
+# behavior into a hard failure, so CI can never report green while silently skipping
+# them. Actions are pinned by commit SHA and container images by digest; Dependabot
+# (.github/dependabot.yml) is the approved mechanism that proposes updates to both.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Test-only values; the length matters (the server asserts >= 32 chars), the secrecy does not.
+  JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
+  STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
+
+jobs:
+  verify:
+    name: typecheck, lint ratchet, build, all tests, scans
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cockpit_ci_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
+      REQUIRE_DB_TESTS: "1"
+      JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
+      STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Locked install
+        run: npm ci
+
+      - name: Tool versions (artifact input)
+        run: |
+          mkdir -p artifacts
+          { echo "node=$(node --version)"; echo "npm=$(npm --version)";
+            echo "tsc=$(npx tsc --version)"; echo "eslint=$(npx eslint --version)";
+            echo "postgres_image=postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777";
+          } | tee artifacts/tool-versions.txt
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Quality ratchet (strictness + lint, no new debt)
+        run: npm run ratchet:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Migrations apply from an empty database
+        run: npm run migrate
+
+      - name: Migration idempotency (second run applies nothing)
+        run: |
+          npm run migrate 2>&1 | tee artifacts/migrate-second-run.log
+          grep -q '"applied":0' artifacts/migrate-second-run.log
+
+      - name: Application starts and readiness succeeds (compiled output)
+        run: |
+          node dist/src/server.js & echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz > artifacts/healthz.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat artifacts/healthz.json
+          curl -fsS http://127.0.0.1:3000/metrics | head -5 > artifacts/metrics-head.txt
+          kill "$(cat server.pid)"
+
+      - name: All declared tests (zero skipped required suites)
+        run: |
+          npx tsx --test --test-concurrency=1 \
+            tests/*.test.ts 2>&1 | tee artifacts/test-output.log
+          tail -n 20 artifacts/test-output.log | grep -E 'ℹ (tests|suites|pass|fail|skipped|duration_ms)' > artifacts/test-counts.txt
+          cat artifacts/test-counts.txt
+          grep -qE 'ℹ skipped 0' artifacts/test-counts.txt
+          grep -qE 'ℹ fail 0' artifacts/test-counts.txt
+
+      - name: Schema fingerprint (fresh chain)
+        run: npx tsx scripts/schema-fingerprint.ts --out artifacts/schema-fingerprint.json | tee artifacts/schema-fingerprint.txt
+
+      - name: Dependency audit (gate on high/critical)
+        run: |
+          npm audit --json > artifacts/npm-audit.json || true
+          npm audit --audit-level=high
+
+      - name: SBOM (CycloneDX)
+        run: npm sbom --sbom-format cyclonedx --omit dev > artifacts/sbom.cdx.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: baseline-evidence
+          path: artifacts/
+
+  migration-upgrade:
+    name: upgrade from earliest retained schema fixture
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cockpit_upgrade_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_upgrade_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Locked install
+        run: npm ci
+
+      - name: Apply the earliest retained schema (f76a27a; migrations 000 + 049)
+        run: MIGRATIONS_DIR=tests/fixtures/schema-f76a27a npm run migrate
+
+      - name: Seed legacy data that schema allowed
+        run: |
+          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync('tests/fixtures/legacy-seed-f76a27a.sql','utf8'));await c.end();console.log('legacy seed applied');})().catch(e=>{console.error(e);process.exit(1);})"
+
+      - name: Upgrade to the current head (050..latest on top of legacy data)
+        run: npm run migrate
+
+      - name: Fingerprint the upgraded schema
+        run: |
+          mkdir -p artifacts
+          npx tsx scripts/schema-fingerprint.ts --out artifacts/upgraded-schema-fingerprint.json | tee artifacts/upgraded-schema-fingerprint.txt
+
+      - name: Application starts against the upgraded database
+        run: |
+          npm run build
+          node dist/src/server.js & echo $! > server.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/healthz
+          kill "$(cat server.pid)"
+        env:
+          JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnopqrstuv
+          STEP_UP_SECRET: ci-step-up-secret-0123456789abcdefghijklmnopq
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: upgrade-evidence
+          path: artifacts/
+
+  container:
+    name: container build (digest-pinned base)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build image
+        run: |
+          mkdir -p artifacts
+          docker build --iidfile artifacts/image-id.txt -t service-cockpit:ci .
+          docker image inspect service-cockpit:ci --format '{{.Id}}' | tee artifacts/image-digest.txt
+          docker image inspect service-cockpit:ci --format '{{json .Config.User}} {{json .Config.Healthcheck.Test}}' | tee artifacts/image-config.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-evidence
+          path: artifacts/
+
+  secret-scan:
+    name: secret scan (full history)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -13,3 +13,6 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# CI/local evidence output (uploaded as build artifacts in CI, never committed)
+artifacts/

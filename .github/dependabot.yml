@@ -1,0 +1,22 @@
+# The approved update mechanism for every pin in this repository (FBL-000):
+# npm dependencies (lockfile), the digest-pinned container bases in the Dockerfile and
+# docker-compose.yml, and the SHA-pinned actions in the CI workflow. Updates arrive as
+# pull requests that must pass the full baseline CI before merge — pins never drift
+# silently and are never edited by hand without evidence.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

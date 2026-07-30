@@ -4,10 +4,11 @@
 # and the runtime image carries the migrations so the compose migrate step can run the
 # exact code it ships with.
 #
-# node:20-alpine is pinned by major tag; pin by digest at release time
-# (docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine).
+# The base image is pinned by digest (multi-arch manifest-list digest for node:20-alpine,
+# resolved 2026-07-30); Dependabot's docker ecosystem is the approved mechanism that
+# proposes digest updates (.github/dependabot.yml).
 
-FROM node:20-alpine AS builder
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS builder
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -17,7 +18,7 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 RUN npx tsc -p tsconfig.build.json
 
-FROM node:20-alpine AS runner
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production

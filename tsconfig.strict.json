@@ -1,0 +1,13 @@
+{
+  // Full-strict reporting config for the FBL-000 ratchet. The main tsconfig keeps
+  // noImplicitAny off; this one turns it on so the debt is COUNTED and new debt is
+  // BLOCKED (scripts/quality-ratchet.ts) without mass-fixing existing code.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": false
+  }
+}

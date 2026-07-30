@@ -43,6 +43,17 @@ if (INTEGRATION_DATABASE_URL && process.env.ALLOW_DESTRUCTIVE_TESTS !== '1') {
   assertDisposable(INTEGRATION_DATABASE_URL);
 }
 
+// In CI the database-backed suites are REQUIRED: a missing TEST_DATABASE_URL must fail
+// the build, not silently skip 72 tests and report green (FBL-000: "eliminate conditional
+// skips for required suites"). Locally the skip remains so `npm test` works without a
+// database.
+if (process.env.REQUIRE_DB_TESTS === '1' && !INTEGRATION_DATABASE_URL) {
+  throw new Error(
+    'REQUIRE_DB_TESTS=1 but TEST_DATABASE_URL is not set — the database-backed suites are ' +
+      'required in this environment and must not be skipped.',
+  );
+}
+
 export const skipIntegration = !INTEGRATION_DATABASE_URL;
 
 if (INTEGRATION_DATABASE_URL) {
