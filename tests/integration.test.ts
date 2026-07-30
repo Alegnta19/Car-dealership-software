@@ -12,8 +12,8 @@ import {
   type TestWorld,
 } from './helpers/db';
 import * as promClient from 'prom-client';
-import { closePool, query } from '../src/shared/database/pool';
-import { signStepUpToken } from '../src/shared/security/step-up';
+import { closePool, query, withTransaction } from '../src/shared/database/pool';
+import { consumeStepUpToken, signStepUpToken } from '../src/shared/security/step-up';
 import { refreshAggregatedMetrics } from '../src/modules/service-cockpit/services/metrics-aggregator';
 import * as svc from '../src/modules/service-cockpit/services/service-cockpit-service';
 
@@ -204,12 +204,43 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
     const moved = await svc.transitionRO(w.tenantA, ro.ro_id, 'authorized', { step_up_token: token });
     assert.equal(moved.status, 'authorized');
 
-    // The same token cannot be replayed on the way back through the state machine.
+    // A token bound to a different action is refused — binding, not consumption.
     await svc.transitionRO(w.tenantA, ro.ro_id, 'in_repair', {});
     await assert.rejects(
       () => svc.transitionRO(w.tenantA, ro.ro_id, 'canceled', { step_up_token: token }),
       (err: any) => err.code === 'step_up_required',
     );
+
+    // Consumption specifically: replaying the *same* token for the *same* action on the
+    // *same* resource must fail, and the only thing that can make it fail is the ledger.
+    // Asserted through consumeStepUpToken directly, because the state machine will not
+    // let one repair order make the same gated transition twice.
+    const fresh = signStepUpToken(binding);
+    await withTransaction((tx) => consumeStepUpToken(tx, fresh, binding));
+    await assert.rejects(
+      () => withTransaction((tx) => consumeStepUpToken(tx, fresh, binding)),
+      (err: any) => err.code === 'step_up_required' && /already been used/i.test(err.message),
+      'a spent token is refused on replay',
+    );
+  });
+
+  test('a rolled-back operation releases its step-up token for a genuine retry', async () => {
+    const binding = {
+      tenantId: w.tenantA.tenantId,
+      userId: w.tenantA.userId,
+      action: 'ro.transition:authorized',
+      resourceId: randomUUID(),
+    };
+    const token = signStepUpToken(binding);
+
+    // Consume it inside a transaction that then fails: the ledger row must roll back
+    // with it, or a transient error would burn the customer's step-up.
+    await assert.rejects(() => withTransaction(async (tx) => {
+      await consumeStepUpToken(tx, token, binding);
+      throw new Error('simulated downstream failure');
+    }), /simulated downstream failure/);
+
+    await withTransaction((tx) => consumeStepUpToken(tx, token, binding));
   });
 
   test('transitioning to authorized without a step-up token is refused', async () => {
@@ -428,23 +459,33 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
 
   test('updated_at is maintained by the database, not by remembering to set it', async () => {
     const appt = await newAppointment();
-    const before = await query(`SELECT updated_at FROM service_appointments WHERE appointment_id=$1`, [
+
+    // Back-date it, so "the trigger fired" and "nothing happened" cannot look alike.
+    await query(
+      `UPDATE service_appointments SET updated_at = NOW() - INTERVAL '10 days' WHERE appointment_id=$1`,
+      [appt.appointment_id],
+    );
+    await query(
+      `UPDATE service_appointments SET updated_at = NOW() - INTERVAL '10 days' WHERE appointment_id=$1`,
+      [appt.appointment_id],
+    );
+    const stale = await query(`SELECT updated_at FROM service_appointments WHERE appointment_id=$1`, [
       appt.appointment_id,
     ]);
+    const staleAt = new Date(stale.rows[0].updated_at).getTime();
 
-    // A statement that deliberately omits updated_at.
-    await query(`UPDATE service_appointments SET odometer_note = NULL WHERE appointment_id=$1`, [appt.appointment_id])
-      .catch(async () => {
-        await query(`UPDATE service_appointments SET scheduled_end=NOW() WHERE appointment_id=$1`, [appt.appointment_id]);
-      });
+    // A statement that touches a different column and deliberately never mentions
+    // updated_at. Only the trigger can move it.
+    await query(`UPDATE service_appointments SET scheduled_end = NOW() WHERE appointment_id=$1`, [
+      appt.appointment_id,
+    ]);
 
     const after = await query(`SELECT updated_at FROM service_appointments WHERE appointment_id=$1`, [
       appt.appointment_id,
     ]);
-    assert.ok(
-      new Date(after.rows[0].updated_at).getTime() >= new Date(before.rows[0].updated_at).getTime(),
-      'updated_at should advance',
-    );
+    const afterAt = new Date(after.rows[0].updated_at).getTime();
+    assert.ok(afterAt > staleAt, 'updated_at must advance without the statement setting it');
+    assert.ok(Date.now() - afterAt < 60_000, 'and it must advance to now, not to some other stale value');
   });
 
   test('a rejected second offer leaves no orphan appointment behind', async () => {
@@ -640,12 +681,22 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
   });
 
   test('a ratio with no denominator publishes nothing rather than a misleading zero', async () => {
-    const emptyTenantLocation = randomUUID();
+    // Real activity at this location, but none of it gives the comeback rate a
+    // denominator: no repair order has closed, so there is nothing to divide by.
+    // The series must be absent, not 0.
+    const appt = await newAppointment();
+    await svc.checkIn(w.tenantA, appt.appointment_id, {});
+
     await refreshAggregatedMetrics();
     const exposition = await promClient.register.metrics();
+
     assert.ok(
-      !exposition.includes(`location="${emptyTenantLocation}"`),
-      'a location with no activity produces no series at all',
+      exposition.includes(`service_queue_depth{queue_type="waiting_checkin",location="${w.locationA}"} 1`),
+      'the location is live and publishing what it can measure',
+    );
+    assert.ok(
+      !exposition.split('\n').some((l) => l.startsWith('service_comeback_rate{') && l.includes(w.locationA)),
+      'but a ratio with a zero denominator publishes no series at all',
     );
   });
 

@@ -362,8 +362,10 @@ this file, the README and the architecture reference. Schema support is in `051_
   had their hours counted once per profile; capacity is now summed separately and looked up by map.
 - **`createFirstServiceOffer` is atomic.** The appointment and the offer are inserted in one
   transaction, so a rejected duplicate offer no longer strands an appointment.
-- **The SLA breach metric has a population.** `sla_due_at` was never written; queue items now take a
-  due time from the tenant's `service_sla_defaults` (migration 051), or an explicit value.
+- **Queue items can now carry an SLA due time at all.** `sla_due_at` was never written by any
+  path; `createServiceQueueItem` now applies the tenant's `service_sla_defaults` target for the
+  queue, or an explicit value. Nothing seeds those defaults yet, so the breach metric stays inert
+  until a tenant configures one — see Outstanding work.
 - **`summariseMoney` is strict.** `amount_cents` of `null`, `true` or `[]` counted as a priced line
   worth zero (`Number()` makes them finite); only a real `number` is now accepted.
 - **Time entries are serialised.** `recordTimeEntry` takes `FOR UPDATE` on the ticket, so two racing
@@ -376,6 +378,94 @@ this file, the README and the architecture reference. Schema support is in `051_
   no longer grows without bound.
 - **`syncQueueForRO` covers `authorized` and `sublet_in_progress`.** Those non-terminal states had no
   queue mapping, so a repair order briefly vanished from every cockpit view while sitting in them.
+
+---
+
+## Post-review corrections, round three
+
+A six-lens review (tenancy, authorization integrity, atomicity, SQL and metric arithmetic, general
+correctness, documentation) ran over the previous round with every finding double-verified against a
+live database. Twenty-eight findings survived, plus eleven from a completeness pass. Two were
+dangerous, several were bugs inside the previous round's own fixes, and the rest were correctness or
+documentation gaps.
+
+**The test harness could destroy a real database.** `tests/helpers/db.ts` resolved its connection as
+`TEST_DATABASE_URL ?? DATABASE_URL`, and the suite TRUNCATEs every table in `beforeEach`. A developer
+with a staging URL exported in their shell destroyed it by running `npm test`. It now reads
+`TEST_DATABASE_URL` alone, and additionally refuses any database whose name does not look disposable
+(`test`, `tmp`, `temp`, `scratch`, `ci`), with `ALLOW_DESTRUCTIVE_TESTS=1` as the deliberate override.
+Both guards are covered by the check that a sentinel row survives a full `npm test`.
+
+**A repair that sat behind the migration it repaired could never run.** Migration 050 added two CHECK
+constraints that validate immediately, so on any database carrying pre-050 free-text `queue_type` or
+`root_cause_category` values it aborted — and because the runner applies files in order and stops on
+failure, 051, which held the `NOT VALID` fix, was unreachable. The `NOT VALID` form now lives in 050
+itself. Verified by upgrading a database seeded with non-conforming values: both migrations applied,
+old rows survived, new invalid writes were rejected.
+
+**Nothing bound what the customer approved to what they were billed.** `updateLineItem` let any
+shop-floor role rewrite `price_ref` and `sold_hours` on any line in the tenant, including after
+approval, with no event or audit row; it also accepted `assigned_tech_user_id` directly, which
+bypassed the active-profile check in `dispatchTech`. The fields are now split by role — commercial
+terms need an advisor or manager, `status` is shop-floor and only on a line the technician was
+dispatched to — assignment is refused outright, and an approved line's terms are frozen in both the
+service layer and a database trigger. `ro_authorizations.approved_snapshot` (migration 052) records
+each approved line exactly as the customer saw it, which is what an invoice dispute is settled
+against. The read-validate-write now holds `FOR UPDATE` and re-asserts `authorization_status`, so a
+concurrent customer decline becomes a conflict rather than a silent overwrite.
+
+**Work the customer never answered could be delivered.** No gate inspected `authorization_status`.
+`ready_for_pickup` now refuses while any line is still `pending` (`decision_outstanding`), and
+`in_repair` requires at least one approved or not-required line (`no_approved_work`).
+
+**A partially decided estimate was a dead end, twice over.** The previous round derived
+`partially_approved` but only accepted decisions on a `sent` estimate, so the remaining lines could
+never be decided. Decisions are now accepted on `partially_approved` too. Fixing that exposed a
+second bug of the same shape as the comeback-rate error: the estimate's status was derived from the
+increment rather than the population, so a later decline erased an earlier approval. It is now
+computed from a cumulative tally of the estimate's line states.
+
+**Metric arithmetic.** Technician efficiency and proficiency double-counted a line worked under more
+than one ticket (now rolled up per line item, and `dispatchTech` supersedes the prior ticket as
+`reassigned`). SLA breach counted only still-open breaches, so clearing overdue work improved the
+number (now measured against completion time). MPI conversion blended every tenant into one global
+series (now grouped by location). Gauges are cleared per group rather than globally, so one failing
+query no longer blanks every series for an interval. The parts wait-time high-water mark starts at
+process start rather than the epoch, so a restart no longer replays history into a cumulative
+histogram.
+
+**Also:** malformed and oversized request bodies are 400s rather than 500s with a stack trace;
+`assertRequiredEnv` checks secret length, not just presence, so the service cannot boot healthy and
+then fail every authenticated request; "today's appointments" is computed in a caller-supplied
+timezone instead of the database server's; `getRO` reads sequentially rather than checking out eight
+pool connections per request; `TEXT[]` and timestamp inputs are validated; `offset` is bounded;
+technician notes are no longer echoed into the Spanish field of a "bilingual" recommendation; queue
+items enforce assignee ownership on status changes as well as claims; the step-up ledger is pruned on
+each aggregation pass; and `markAppointmentNoShow` finally makes the `no_show` status and the
+`no_show_followup` queue reachable.
+
+**A follow-up review of this round found the price snapshot itself was unsound.** Nothing expired a
+superseded estimate, so two versions could be `sent` at once; a customer following the older portal
+link had their decision accepted, and `approved_snapshot` recorded the line's *current* price rather
+than the price the estimate they answered had shown — a customer who approved a $100.00 estimate was
+recorded as agreeing to $999.99. The stale approval also consumed the lines, so the current estimate
+could never be decided and the repair order could not reach `authorized` without adding new work.
+Three rules now close it: commercial terms are frozen from the moment a line goes in front of the
+customer (`pending_terms_frozen`) until they answer, so what was shown and what was approved cannot
+diverge; returning to `estimate_pending` withdraws the outstanding estimate as `expired` and returns
+its undecided lines to un-shown, which is what makes a re-quote work; and a decision must answer the
+current version (`estimate_superseded`). This is the third time a fix in this programme introduced a
+defect of the same shape — deriving a value from the wrong population — which is the argument for the
+route-layer suite below rather than for more review.
+
+**Testing.** The structural gap was that no test touched the HTTP layer, which is where role
+boundaries live — every existing test called the service as an advisor, so nothing ever asked what a
+technician could reach. `tests/routes.test.ts` adds 22 tests through the real stack via `createApp()`.
+Three tests that passed regardless of the behaviour they named were rewritten: the step-up test
+asserted action binding rather than consumption, the `updated_at` test used a `>=` comparison that a
+frozen column satisfied, and the "no denominator" test asserted the absence of a random UUID. Both
+database-backed suites now run serially, since two suites truncating one database in parallel clobber
+each other.
 
 ---
 

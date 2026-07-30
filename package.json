@@ -2,7 +2,7 @@
   "name": "car-dealership-software",
   "version": "0.1.0",
   "private": true,
-  "description": "Dealer management platform — Phase 248 Service Cockpit v2 & Fixed Ops operations",
+  "description": "Dealer management platform \u2014 Phase 248 Service Cockpit v2 & Fixed Ops operations",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20"
@@ -12,8 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
-    "test": "tsx --test tests/*.test.ts",
-    "test:integration": "tsx --test tests/integration.test.ts",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "test:integration": "tsx --test --test-concurrency=1 tests/integration.test.ts tests/routes.test.ts",
     "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {

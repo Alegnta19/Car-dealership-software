@@ -8,8 +8,41 @@ import type { AuthContext } from '../../src/modules/service-cockpit/services/ser
  * transaction rollback, row locking, unique-index backstops, tenant predicates — has no
  * meaning against a mock. They are skipped rather than failed when one is not
  * configured, so `npm test` still works on a machine without a database.
+ *
+ * `TEST_DATABASE_URL` ONLY. This deliberately does not fall back to `DATABASE_URL`:
+ * this suite calls TRUNCATE on every table, and a developer with a staging or
+ * production URL exported in their shell would otherwise destroy it by running
+ * `npm test`. Opting in has to be an explicit, separate act.
  */
-export const INTEGRATION_DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+export const INTEGRATION_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+/**
+ * Second gate: the database must also *name* itself as disposable. Even a deliberate
+ * `TEST_DATABASE_URL` is refused unless the database name says so, which stops a
+ * mistyped or copy-pasted connection string from wiping something real.
+ */
+const DISPOSABLE_NAME = /(^|[_-])(test|tmp|temp|scratch|ci)([_-]|$)/i;
+
+function assertDisposable(url: string): void {
+  let name: string;
+  try {
+    name = decodeURIComponent(new URL(url).pathname.replace(/^\//, ''));
+  } catch {
+    throw new Error(`TEST_DATABASE_URL is not a valid URL: ${url}`);
+  }
+  if (!DISPOSABLE_NAME.test(name)) {
+    throw new Error(
+      `Refusing to run destructive integration tests against database "${name}". ` +
+        'This suite TRUNCATEs every table. Name the database so it is obviously disposable ' +
+        '(e.g. dealership_test, dealership_ci) or set ALLOW_DESTRUCTIVE_TESTS=1 to override.',
+    );
+  }
+}
+
+if (INTEGRATION_DATABASE_URL && process.env.ALLOW_DESTRUCTIVE_TESTS !== '1') {
+  assertDisposable(INTEGRATION_DATABASE_URL);
+}
+
 export const skipIntegration = !INTEGRATION_DATABASE_URL;
 
 if (INTEGRATION_DATABASE_URL) {

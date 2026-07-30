@@ -129,19 +129,24 @@ ALTER TABLE tech_profiles
 -- queue filters and in comeback reporting.
 -- ──────────────────────────────────────────────────────────────
 
+-- NOT VALID: both columns were free text in 049, so a database that already holds rows
+-- may carry values outside these sets. Validating on ADD would abort this migration —
+-- and because the runner applies files in order and stops on failure, every later
+-- migration would be unreachable too. NOT VALID constrains all new writes immediately
+-- and leaves history alone; run VALIDATE CONSTRAINT once the data is cleaned.
 ALTER TABLE service_queue_items
   DROP CONSTRAINT IF EXISTS service_queue_items_queue_type_check;
 ALTER TABLE service_queue_items
   ADD CONSTRAINT service_queue_items_queue_type_check CHECK (queue_type IN (
     'appointments_today','waiting_checkin','waiting_authorization','waiting_parts',
-    'in_repair','qc','ready_pickup','comeback_review','no_show_followup'));
+    'in_repair','qc','ready_pickup','comeback_review','no_show_followup')) NOT VALID;
 
 ALTER TABLE comeback_cases
   DROP CONSTRAINT IF EXISTS comeback_cases_root_cause_check;
 ALTER TABLE comeback_cases
   ADD CONSTRAINT comeback_cases_root_cause_check CHECK (root_cause_category IN (
     'workmanship','parts_failure','misdiagnosis','incomplete_repair',
-    'customer_expectation','vendor_sublet','unrelated'));
+    'customer_expectation','vendor_sublet','unrelated')) NOT VALID;
 
 -- ──────────────────────────────────────────────────────────────
 -- 7) Indexes for the aggregation job

@@ -54,7 +54,9 @@ const PARTS = [ROLES.PARTS_CLERK, ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER];
 // ────────────────────────────────────────────────────────────
 
 router.get('/home', authenticate, authorize(...READ_ROLES), handler(async (req, res) => {
-  const data = await svc.getServiceCockpitHome(requireContext(req), req.query.location_id as string | undefined);
+  const data = await svc.getServiceCockpitHome(requireContext(req), req.query.location_id as string | undefined, {
+    timezone: req.query.timezone,
+  });
   res.json({ success: true, data });
 }));
 
@@ -92,6 +94,11 @@ router.post('/appointments/:appointmentId/confirm', authenticate, authorize(...W
 
 router.post('/appointments/:appointmentId/check-in', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
   const data = await svc.checkIn(requireContext(req), req.params.appointmentId, { odometer: req.body?.odometer });
+  res.json({ success: true, data });
+}));
+
+router.post('/appointments/:appointmentId/no-show', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  const data = await svc.markAppointmentNoShow(requireContext(req), req.params.appointmentId);
   res.json({ success: true, data });
 }));
 
@@ -143,6 +150,11 @@ router.post('/ros/:roId/line-items', authenticate, authorize(...WRITE_SERVICE), 
   res.status(201).json({ success: true, data });
 }));
 
+/**
+ * Shop floor may report progress; only advisors and managers may change what the
+ * customer is billed. `updateLineItem` enforces that split per field, and restricts a
+ * technician to the lines they were dispatched to.
+ */
 router.patch('/ros/:roId/line-items/:lineItemId', authenticate, authorize(...SHOP_FLOOR), handler(async (req, res) => {
   const data = await svc.updateLineItem(requireContext(req), req.params.roId, req.params.lineItemId, req.body);
   res.json({ success: true, data });

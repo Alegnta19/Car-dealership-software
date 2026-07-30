@@ -1,3 +1,4 @@
+import * as promClient from 'prom-client';
 import { query } from '../../../shared/database/pool';
 import { pruneConsumedStepUpTokens } from '../../../shared/security/step-up';
 import { logger } from '../../../shared/utils/logger';
@@ -40,25 +41,13 @@ function ratio(numerator: unknown, denominator: unknown): number | null {
   return n / d;
 }
 
-/**
- * Every gauge this module owns, cleared at the start of each pass.
- *
- * Gauges are level readings, not counters: without a reset a queue that drained, or a
- * location that went quiet, would keep publishing its last non-zero value forever.
- * Histograms are deliberately excluded — they are cumulative by definition.
+/*
+ * Gauges are level readings, not counters, so each pass clears them before republishing —
+ * otherwise a queue that drained, or a location that went quiet, would keep reporting its
+ * last non-zero value forever. The clearing is done per group (see the group table in
+ * `refreshAggregatedMetrics`) so one failing query cannot blank unrelated series.
+ * Histograms are excluded throughout: they are cumulative by definition.
  */
-const RESETTABLE_GAUGES = [
-  svcPartsBackorderRate,
-  svcQCFailRate,
-  svcTechUtilization,
-  svcTechEfficiency,
-  svcTechProficiency,
-  svcSLABreachRate,
-  svcMPIConversionRate,
-  svcComebackRate,
-  svcFirstServiceCaptureRate,
-  svcQueueDepth,
-];
 
 async function refreshPartsMetrics(): Promise<void> {
   const rows = (
@@ -110,8 +99,15 @@ async function refreshPartsMetrics(): Promise<void> {
   }
 }
 
-/** Parts received at or before this instant have already been observed. */
-let partsWaitHighWater = new Date(0);
+/**
+ * Parts received at or before this instant have already been observed.
+ *
+ * Process-local, and deliberately initialised to "now" rather than the epoch: the
+ * histogram it feeds is cumulative and resets with the process, so starting at the epoch
+ * made every restart replay the entire parts history into it, spiking the count and
+ * skewing every quantile. A restart now simply resumes from the moment it came up.
+ */
+let partsWaitHighWater = new Date();
 
 async function refreshQualityMetrics(): Promise<void> {
   // A QC failure is a repair order sent back from qc to in_repair — the transition is
@@ -201,15 +197,23 @@ async function refreshTechnicianMetrics(): Promise<void> {
            FROM paired p
           WHERE p.event_type IN ('start','resume') AND p.next_at IS NOT NULL
           GROUP BY p.tenant_id, p.ticket_id
+       ),
+       clocked AS (
+         SELECT twt.tenant_id, twt.line_item_id, SUM(w.clocked_hours) AS clocked_hours
+           FROM worked w
+           JOIN tech_work_tickets twt ON twt.ticket_id = w.ticket_id AND twt.tenant_id = w.tenant_id
+          GROUP BY twt.tenant_id, twt.line_item_id
        )
+       -- Rolled up per LINE ITEM before joining it: a line worked under two tickets
+       -- (a reassignment, a paused-and-resumed job) otherwise contributed its sold and
+       -- estimated hours once per ticket, inflating efficiency and proficiency.
        SELECT ro.location_id,
-              SUM(w.clocked_hours)                  AS clocked_hours,
+              SUM(c.clocked_hours)                  AS clocked_hours,
               SUM(COALESCE(li.sold_hours, 0))       AS sold_hours,
               SUM(COALESCE(li.estimated_hours, 0))  AS estimated_hours
-         FROM worked w
-         JOIN tech_work_tickets twt ON twt.ticket_id = w.ticket_id AND twt.tenant_id = w.tenant_id
-         JOIN ro_line_items li ON li.line_item_id = twt.line_item_id AND li.tenant_id = twt.tenant_id
-         JOIN repair_orders ro ON ro.ro_id = twt.ro_id AND ro.tenant_id = twt.tenant_id
+         FROM clocked c
+         JOIN ro_line_items li ON li.line_item_id = c.line_item_id AND li.tenant_id = c.tenant_id
+         JOIN repair_orders ro ON ro.ro_id = li.ro_id AND ro.tenant_id = li.tenant_id
         GROUP BY ro.location_id`,
       [WINDOW_DAYS],
     ),
@@ -251,14 +255,23 @@ async function refreshQueueMetrics(): Promise<void> {
     svcQueueDepth.set({ queue_type: row.queue_type, location: row.location_id }, Number(row.cnt));
   }
 
+  // A breach counts whether or not the item is still open. Filtering the numerator to
+  // 'queued'/'in_progress' meant an item that blew its SLA and was then completed left
+  // the numerator while staying in the denominator — so the worse a shop performed at
+  // clearing overdue work, the better its breach rate looked.
   const sla = (
     await query(
       `SELECT location_id, queue_type,
               COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE sla_due_at < NOW() AND status IN ('queued','in_progress'))::int AS breached
-         FROM service_queue_items
-        WHERE sla_due_at IS NOT NULL
-          AND created_at > NOW() - ($1 || ' days')::interval
+              COUNT(*) FILTER (
+                WHERE sla_due_at < COALESCE(completed_at, NOW()))::int AS breached
+         FROM (
+           SELECT location_id, queue_type, sla_due_at,
+                  CASE WHEN status IN ('done','canceled') THEN updated_at END AS completed_at
+             FROM service_queue_items
+            WHERE sla_due_at IS NOT NULL
+              AND created_at > NOW() - ($1 || ' days')::interval
+         ) q
         GROUP BY location_id, queue_type`,
       [WINDOW_DAYS],
     )
@@ -273,21 +286,27 @@ async function refreshQueueMetrics(): Promise<void> {
 async function refreshConversionMetrics(): Promise<void> {
   // How many recommendations put in front of a customer were accepted, by priority —
   // the closest thing the schema has to a recommendation "type".
+  // Grouped by location as well as priority. Grouping by priority alone blended every
+  // tenant into one global series, so a shop converting 100% and one converting 0%
+  // published as 50% and neither could see its own number.
   const rows = (
     await query(
-      `SELECT priority AS recommendation_type,
-              COUNT(*) FILTER (WHERE status='accepted')::int AS accepted,
-              COUNT(*) FILTER (WHERE status IN ('sent_to_customer','accepted','declined','expired'))::int AS presented
-         FROM service_recommendations
-        WHERE created_at > NOW() - ($1 || ' days')::interval
-        GROUP BY priority`,
+      `SELECT ro.location_id, sr.priority AS recommendation_type,
+              COUNT(*) FILTER (WHERE sr.status='accepted')::int AS accepted,
+              COUNT(*) FILTER (WHERE sr.status IN ('sent_to_customer','accepted','declined','expired'))::int AS presented
+         FROM service_recommendations sr
+         JOIN repair_orders ro ON ro.ro_id = sr.ro_id AND ro.tenant_id = sr.tenant_id
+        WHERE sr.created_at > NOW() - ($1 || ' days')::interval
+        GROUP BY ro.location_id, sr.priority`,
       [WINDOW_DAYS],
     )
   ).rows;
 
   for (const row of rows) {
     const rate = ratio(row.accepted, row.presented);
-    if (rate !== null) svcMPIConversionRate.set({ recommendation_type: row.recommendation_type }, rate);
+    if (rate !== null) {
+      svcMPIConversionRate.set({ recommendation_type: row.recommendation_type, location: row.location_id }, rate);
+    }
   }
 
   const retention = (
@@ -320,19 +339,21 @@ async function pruneExpiredStepUpTokens(): Promise<void> {
  * corrects it.
  */
 export async function refreshAggregatedMetrics(): Promise<void> {
-  for (const gauge of RESETTABLE_GAUGES) gauge.reset();
-
-  const groups: Array<[string, () => Promise<void>]> = [
-    ['parts', refreshPartsMetrics],
-    ['quality', refreshQualityMetrics],
-    ['technicians', refreshTechnicianMetrics],
-    ['queues', refreshQueueMetrics],
-    ['conversion', refreshConversionMetrics],
-    ['step_up_ledger', pruneExpiredStepUpTokens],
+  // Each group clears only its OWN gauges, and only once it has data to replace them
+  // with. Resetting everything up front meant one failing query blanked every series for
+  // a whole interval — the opposite of the "a stale gauge beats no metrics" intent.
+  const groups: Array<[string, () => Promise<void>, promClient.Gauge<string>[]]> = [
+    ['parts', refreshPartsMetrics, [svcPartsBackorderRate]],
+    ['quality', refreshQualityMetrics, [svcQCFailRate, svcComebackRate]],
+    ['technicians', refreshTechnicianMetrics, [svcTechUtilization, svcTechEfficiency, svcTechProficiency]],
+    ['queues', refreshQueueMetrics, [svcQueueDepth, svcSLABreachRate]],
+    ['conversion', refreshConversionMetrics, [svcMPIConversionRate, svcFirstServiceCaptureRate]],
+    ['step_up_ledger', pruneExpiredStepUpTokens, []],
   ];
 
-  for (const [name, run] of groups) {
+  for (const [name, run, owned] of groups) {
     try {
+      for (const gauge of owned) gauge.reset();
       await run();
     } catch (err) {
       logger.error({ err, group: name }, 'Metrics aggregation group failed');

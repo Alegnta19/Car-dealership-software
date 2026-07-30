@@ -65,20 +65,9 @@ CREATE TRIGGER trg_first_service_offers_updated_at
   BEFORE UPDATE ON first_service_offers
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- 050 added these CHECKs validating immediately, which fails on a database that
--- already holds free-text values from 049. NOT VALID constrains new writes while
--- leaving history alone; validate them separately once the data is cleaned.
-ALTER TABLE service_queue_items DROP CONSTRAINT IF EXISTS service_queue_items_queue_type_check;
-ALTER TABLE service_queue_items
-  ADD CONSTRAINT service_queue_items_queue_type_check CHECK (queue_type IN (
-    'appointments_today','waiting_checkin','waiting_authorization','waiting_parts',
-    'in_repair','qc','ready_pickup','comeback_review','no_show_followup')) NOT VALID;
-
-ALTER TABLE comeback_cases DROP CONSTRAINT IF EXISTS comeback_cases_root_cause_check;
-ALTER TABLE comeback_cases
-  ADD CONSTRAINT comeback_cases_root_cause_check CHECK (root_cause_category IN (
-    'workmanship','parts_failure','misdiagnosis','incomplete_repair',
-    'customer_expectation','vendor_sublet','unrelated')) NOT VALID;
+-- The NOT VALID form of these two CHECKs now lives in 050 itself, where it has to be:
+-- a repair that sits behind the migration it repairs can never run, because the runner
+-- stops on the first failure. Nothing to do here.
 
 -- ============================================================
 -- Total: 1 table, 1 column, 1 trigger, 2 indexes, 2 revalidated CHECKs

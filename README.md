@@ -42,6 +42,7 @@ migrations/
   049_phase248_service_cockpit.sql   20 tables, 45 index statements
   050_phase248_hardening.sql         triggers, constraints, 2 more tables
   051_phase248_metrics_support.sql   received_at, SLA defaults, corrections
+  052_phase248_authorization_binding.sql  approved-price snapshot + freeze
 src/
   app.ts                             express wiring, /healthz, /metrics
   server.ts                          startup, env validation, graceful shutdown
@@ -53,11 +54,11 @@ src/
     utils/                           logger (with redaction), id helpers
   modules/service-cockpit/
     domain/                          pure rules: state machine, authorization
-    routes/index.ts                  38 endpoints
+    routes/index.ts                  39 endpoints
     services/service-cockpit-service.ts   business logic and SQL
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered, transactional migration runner
-tests/                               39 unit + 28 integration tests
+tests/                               39 unit + 51 database-backed tests
 docs/
   PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
   REMEDIATION.md                     what was fixed, why, and what remains
@@ -147,7 +148,7 @@ architecture reference appendix.
 The token must carry `sub` (user UUID), `tid` (tenant UUID), `roles` (array) and `exp`, signed HS256
 with `JWT_SECRET`. `exp` is mandatory — a token without one would be a permanent credential.
 
-Endpoint catalog: [docs/PHASE-248-SERVICE-COCKPIT-V2.md](docs/PHASE-248-SERVICE-COCKPIT-V2.md#7-api-surface--38-endpoints).
+Endpoint catalog: [docs/PHASE-248-SERVICE-COCKPIT-V2.md](docs/PHASE-248-SERVICE-COCKPIT-V2.md#7-api-surface--39-endpoints).
 
 ---
 
@@ -176,21 +177,28 @@ publishes nothing rather than a misleading zero.
 npm test
 ```
 
-**39 unit tests** cover the repair-order state machine, authorization and estimate-status derivation,
-step-up token binding and expiry, JWT verification (algorithm confusion, missing or non-numeric
-expiry, non-object payloads), tenant-override rejection, and role enforcement. They run without a
-database.
+**39 unit tests** cover the repair-order state machine, authorization and estimate-status
+derivation, step-up token binding and expiry, JWT verification (algorithm confusion, missing or
+non-numeric expiry, non-object payloads), tenant-override rejection, and role enforcement. They run
+without a database.
 
-**28 integration tests** run against a real PostgreSQL instance and cover what a mock cannot:
-cross-tenant reads and writes, check-in idempotency and its unique-index backstop, transaction
-rollback leaving no partial state, the authorization gate against all-declined and
-superseded-estimate approvals, step-up single-use replay, queue lifecycle, inspection upsert, clock
-sequencing, the quality gate, the retention bridge and its rollback, the metrics aggregator's
-arithmetic, and trigger-maintained `updated_at`. Point `TEST_DATABASE_URL` at a throwaway database
-and run:
+**51 database-backed tests** need a real PostgreSQL instance. 29 exercise the service layer for
+what a mock cannot express — cross-tenant reads and writes, check-in idempotency and its
+unique-index backstop, transaction rollback, the authorization gate, step-up consumption and
+release, queue lifecycle, clock sequencing and the metric arithmetic. The other 22 go through the
+real HTTP stack via `createApp()`, which is where role boundaries actually live: that a technician
+cannot rewrite `price_ref` or `sold_hours`, cannot assign themselves work, and cannot touch a line
+they were not dispatched to; that an approved price is frozen; that a vehicle with an undecided
+line cannot be handed back.
+
+Point `TEST_DATABASE_URL` at a throwaway database and run:
 
 ```bash
 npm run test:integration
 ```
 
-They skip cleanly when no database is configured, so `npm test` still works without one.
+The database-backed suites TRUNCATE every table, so two guards stand in front of them:
+`TEST_DATABASE_URL` is read on its own and never falls back to `DATABASE_URL`, and the database
+name must look disposable (containing `test`, `tmp`, `temp`, `scratch` or `ci`). Both suites run
+serially — sharing one database in parallel would let them clobber each other. Without
+`TEST_DATABASE_URL` they skip, so `npm test` still works on a machine with no database.

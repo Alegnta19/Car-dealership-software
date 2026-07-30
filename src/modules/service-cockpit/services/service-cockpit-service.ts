@@ -56,7 +56,7 @@ const svcTechEfficiency = new promClient.Gauge({ name: 'service_tech_efficiency'
 const svcTechProficiency = new promClient.Gauge({ name: 'service_tech_proficiency', help: 'Tech proficiency', labelNames: ['location'] });
 const svcQueueDepth = new promClient.Gauge({ name: 'service_queue_depth', help: 'Queue depth', labelNames: ['queue_type', 'location'] });
 const svcSLABreachRate = new promClient.Gauge({ name: 'service_sla_breach_rate', help: 'SLA breach rate', labelNames: ['job_type', 'location'] });
-const svcMPIConversionRate = new promClient.Gauge({ name: 'service_mpi_conversion_rate', help: 'MPI conversion rate', labelNames: ['recommendation_type'] });
+const svcMPIConversionRate = new promClient.Gauge({ name: 'service_mpi_conversion_rate', help: 'MPI conversion rate', labelNames: ['recommendation_type', 'location'] });
 const svcFirstServiceCaptureRate = new promClient.Gauge({ name: 'service_retention_first_service_capture_rate', help: 'First service capture rate', labelNames: ['location'] });
 
 /**
@@ -157,6 +157,25 @@ function requireOneOf<T extends string>(value: unknown, allowed: readonly T[], f
   return value as T;
 }
 
+/**
+ * Guards the `TEXT[]` columns. Postgres rejects a bare string or object with
+ * "malformed array literal", which would otherwise surface as a 500 rather than a 400.
+ */
+function requireStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+    throw new ValidationError(`${field} must be an array of strings`);
+  }
+  return value as string[];
+}
+
+/** Validates an optional timestamp, rejecting nulls and unparseable values alike. */
+function requireTimestamp(value: unknown, field: string): string {
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    throw new ValidationError(`${field} must be a timestamp`);
+  }
+  return value;
+}
+
 function hasAnyRole(ctx: AuthContext, ...roles: Role[]): boolean {
   return ctx.roles.includes(ROLES.ADMIN) || ctx.roles.some((r) => roles.includes(r));
 }
@@ -182,6 +201,8 @@ function pagination(input: { limit?: unknown; offset?: unknown } | undefined, de
   const limit = parse(input?.limit, 'limit');
   const offset = parse(input?.offset, 'offset');
   if (limit === 0) throw new ValidationError('limit must be greater than zero');
+  // Bounded well inside bigint: an offset past this overflows in Postgres and 500s.
+  if (offset !== undefined && offset > 1_000_000) throw new ValidationError('offset must not exceed 1000000');
 
   return { limit: Math.min(limit ?? defaultLimit, maxLimit), offset: offset ?? 0 };
 }
@@ -311,15 +332,23 @@ async function assertRO(ex: Executor, ctx: AuthContext, roId: string, opts: { lo
   return ro;
 }
 
-/** Loads a line item proven to belong to both the caller's tenant and the given RO. */
-async function assertLineItem(ex: Executor, ctx: AuthContext, roId: string, lineItemId: string): Promise<any> {
+/**
+ * Loads a line item proven to belong to both the caller's tenant and the given RO.
+ * `lock: true` takes `FOR UPDATE`, which any read-validate-write on the line needs.
+ */
+async function assertLineItem(
+  ex: Executor,
+  ctx: AuthContext,
+  roId: string,
+  lineItemId: string,
+  opts: { lock?: boolean } = {},
+): Promise<any> {
   requireUuid(lineItemId, 'line_item_id');
   const item = (
-    await ex.query(`SELECT * FROM ro_line_items WHERE line_item_id=$1 AND ro_id=$2 AND tenant_id=$3`, [
-      lineItemId,
-      roId,
-      ctx.tenantId,
-    ])
+    await ex.query(
+      `SELECT * FROM ro_line_items WHERE line_item_id=$1 AND ro_id=$2 AND tenant_id=$3${opts.lock ? ' FOR UPDATE' : ''}`,
+      [lineItemId, roId, ctx.tenantId],
+    )
   ).rows[0];
   if (!item) throw new NotFoundError('Line item not found on this repair order', { code: 'line_item_not_found' });
   return item;
@@ -330,16 +359,22 @@ async function assertLineItem(ex: Executor, ctx: AuthContext, roId: string, line
  * rows. Any unknown id is rejected outright rather than silently skipped — a caller
  * must not be able to probe for, or act on, ids that are not theirs.
  */
-async function assertLineItemsOnRO(ex: Executor, ctx: AuthContext, roId: string, ids: string[]): Promise<any[]> {
+async function assertLineItemsOnRO(
+  ex: Executor,
+  ctx: AuthContext,
+  roId: string,
+  ids: string[],
+  opts: { lock?: boolean } = {},
+): Promise<any[]> {
   if (ids.length === 0) return [];
   for (const id of ids) requireUuid(id, 'line_item_id');
 
   const rows = (
-    await ex.query(`SELECT * FROM ro_line_items WHERE line_item_id = ANY($1) AND ro_id=$2 AND tenant_id=$3`, [
-      ids,
-      roId,
-      ctx.tenantId,
-    ])
+    await ex.query(
+      `SELECT * FROM ro_line_items WHERE line_item_id = ANY($1) AND ro_id=$2 AND tenant_id=$3
+        ORDER BY line_item_id${opts.lock ? ' FOR UPDATE' : ''}`,
+      [ids, roId, ctx.tenantId],
+    )
   ).rows;
 
   if (rows.length !== ids.length) {
@@ -352,13 +387,43 @@ async function assertLineItemsOnRO(ex: Executor, ctx: AuthContext, roId: string,
   return rows;
 }
 
+/**
+ * The dealership's timezone for day-boundary questions. Location timezones belong to
+ * the platform's location domain, which this service does not own, so the caller
+ * supplies one and `SERVICE_DEFAULT_TIMEZONE` is the fallback. Validated against the
+ * IANA database here so an unknown name is a 400 rather than a Postgres error.
+ */
+function resolveTimezone(supplied?: unknown): string {
+  const candidate = typeof supplied === 'string' && supplied.trim() !== ''
+    ? supplied
+    : process.env.SERVICE_DEFAULT_TIMEZONE ?? 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate });
+  } catch {
+    throw new ValidationError(`Unknown timezone: ${candidate}`, { code: 'unknown_timezone' });
+  }
+  return candidate;
+}
+
+/** Runs promise-returning thunks one at a time, so one request holds one connection. */
+async function sequentially<T>(thunks: Array<() => Promise<T>>): Promise<T[]> {
+  const out: T[] = [];
+  for (const thunk of thunks) out.push(await thunk());
+  return out;
+}
+
 // ============================================================
 // 1) SCM2 — Service Cockpit Module v2
 // ============================================================
 
-export async function getServiceCockpitHome(ctx: AuthContext, locationId?: string): Promise<any> {
+export async function getServiceCockpitHome(
+  ctx: AuthContext,
+  locationId?: string,
+  options?: { timezone?: unknown },
+): Promise<any> {
   if (locationId !== undefined) requireUuid(locationId, 'location_id');
 
+  const timezone = resolveTimezone(options?.timezone);
   const params: unknown[] = locationId ? [ctx.tenantId, locationId] : [ctx.tenantId];
   const scope = (column: string) => (locationId ? ` AND ${column}=$2` : '');
 
@@ -380,12 +445,17 @@ export async function getServiceCockpitHome(ctx: AuthContext, locationId?: strin
     )
   ).rows;
 
+  // "Today" is the dealership's today, not the database server's. Comparing against
+  // CURRENT_DATE rolled the panel over at the server's midnight, which on a UTC server
+  // is late afternoon on the US west coast — the board cleared mid-shift.
   const todayAppts = (
     await query(
       `SELECT status, COUNT(*)::int AS cnt FROM service_appointments
-       WHERE tenant_id=$1${scope('location_id')} AND scheduled_start::date = CURRENT_DATE
+       WHERE tenant_id=$1${scope('location_id')}
+         AND (scheduled_start AT TIME ZONE $${params.length + 1})::date
+           = (NOW() AT TIME ZONE $${params.length + 1})::date
        GROUP BY status`,
-      params,
+      [...params, timezone],
     )
   ).rows;
 
@@ -501,7 +571,10 @@ export async function createAppointment(
   requireUuid(params.location_id, 'location_id');
   requireUuid(params.mdm_customer_id, 'mdm_customer_id');
   requireUuid(params.mdm_vehicle_id, 'mdm_vehicle_id');
-  if (Number.isNaN(Date.parse(params.scheduled_start))) throw new ValidationError('scheduled_start must be a timestamp');
+  requireTimestamp(params.scheduled_start, 'scheduled_start');
+  if (params.scheduled_end !== undefined && params.scheduled_end !== null) {
+    requireTimestamp(params.scheduled_end, 'scheduled_end');
+  }
 
   const source = params.source ? requireOneOf(params.source, APPOINTMENT_SOURCES, 'source') : 'phone';
   const language = params.language_preference
@@ -580,11 +653,12 @@ export async function updateAppointment(ctx: AuthContext, appointmentId: string,
 
   // Validated to the same standard as the create path — otherwise a bad value reaches
   // a CHECK constraint or a timestamp column and comes back as an opaque 500.
-  for (const field of ['scheduled_start', 'scheduled_end'] as const) {
-    const value = updates[field];
-    if (value !== undefined && value !== null && (typeof value !== 'string' || Number.isNaN(Date.parse(value)))) {
-      throw new ValidationError(`${field} must be a timestamp`);
-    }
+  // scheduled_start is NOT NULL in the schema, so a null here must be a 400 rather than
+  // a constraint violation surfacing as a 500. scheduled_end is nullable, so an explicit
+  // null is a legitimate "clear it".
+  if (updates.scheduled_start !== undefined) requireTimestamp(updates.scheduled_start, 'scheduled_start');
+  if (updates.scheduled_end !== undefined && updates.scheduled_end !== null) {
+    requireTimestamp(updates.scheduled_end, 'scheduled_end');
   }
   if (updates.language_preference !== undefined) {
     requireOneOf(updates.language_preference, LANGUAGE_PREFERENCES, 'language_preference');
@@ -722,6 +796,50 @@ export async function checkIn(ctx: AuthContext, appointmentId: string, params: {
   }
 
   return { ...result.ro, appointment_id: appointmentId, idempotent_replay: !result.created };
+}
+
+/**
+ * Records that the customer never arrived, and queues the follow-up call.
+ *
+ * `no_show` has been in the appointment status enum since 049, but nothing could ever set
+ * it: `updateAppointment` refuses raw status writes and no other path produced it. The
+ * `no_show_followup` queue, and the cockpit view built on it, were therefore unreachable.
+ */
+export async function markAppointmentNoShow(ctx: AuthContext, appointmentId: string): Promise<any> {
+  requireUuid(appointmentId, 'appointment_id');
+
+  return withTransaction(async (tx) => {
+    const appt = (
+      await tx.query(`SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`, [
+        appointmentId,
+        ctx.tenantId,
+      ])
+    ).rows[0];
+    if (!appt) throw new NotFoundError('Appointment not found');
+    if (!['requested', 'scheduled', 'confirmed'].includes(appt.status)) {
+      throw new ConflictError(`An appointment that is '${appt.status}' cannot be marked a no-show`, {
+        code: 'invalid_appointment_status',
+        details: { status: appt.status },
+      });
+    }
+
+    const row = (
+      await tx.query(
+        `UPDATE service_appointments SET status='no_show', updated_at=NOW()
+          WHERE appointment_id=$1 AND tenant_id=$2 RETURNING *`,
+        [appointmentId, ctx.tenantId],
+      )
+    ).rows[0];
+
+    await recordAppointmentEvent(tx, ctx, appointmentId, 'no_show', { user_id: ctx.userId });
+    await createServiceQueueItem(tx, ctx, {
+      location_id: appt.location_id,
+      queue_type: 'no_show_followup',
+      appointment_id: appointmentId,
+    });
+
+    return row;
+  });
 }
 
 /**
@@ -867,14 +985,18 @@ export async function getRO(ctx: AuthContext, roId: string, options?: { event_li
   const ro = await assertRO({ query }, ctx, roId);
   const events_page = pagination({ limit: options?.event_limit }, 30, 200);
 
-  const [lineItems, events, estimates, auths, partsList, subletJobs, tickets] = await Promise.all([
-    query(`SELECT * FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
-    query(`SELECT * FROM ro_events WHERE ro_id=$1 AND tenant_id=$2 ORDER BY occurred_at DESC LIMIT $3`, [roId, ctx.tenantId, events_page.limit]),
-    query(`SELECT * FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2 ORDER BY version DESC`, [roId, ctx.tenantId]),
-    query(`SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`, [roId, ctx.tenantId]),
-    query(`SELECT * FROM ro_parts_lines WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
-    query(`SELECT * FROM ro_sublet_jobs WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
-    query(`SELECT * FROM tech_work_tickets WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
+  // Sequential, not Promise.all: fanning seven child reads out concurrently checked out
+  // eight pool connections for a single request against a default pool of ten, so a
+  // handful of simultaneous reads exhausted the pool and turned into 500s instead of
+  // queueing. These are indexed point lookups; the round-trips are cheap.
+  const [lineItems, events, estimates, auths, partsList, subletJobs, tickets] = await sequentially([
+    () => query(`SELECT * FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
+    () => query(`SELECT * FROM ro_events WHERE ro_id=$1 AND tenant_id=$2 ORDER BY occurred_at DESC LIMIT $3`, [roId, ctx.tenantId, events_page.limit]),
+    () => query(`SELECT * FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2 ORDER BY version DESC`, [roId, ctx.tenantId]),
+    () => query(`SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`, [roId, ctx.tenantId]),
+    () => query(`SELECT * FROM ro_parts_lines WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
+    () => query(`SELECT * FROM ro_sublet_jobs WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
+    () => query(`SELECT * FROM tech_work_tickets WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
   ]);
 
   return {
@@ -945,6 +1067,50 @@ export async function transitionRO(
           ),
         });
       }
+
+      // Billing gate: no line may still be awaiting a customer decision. Otherwise work
+      // the customer was asked about but never answered could be completed and handed
+      // back — and then invoiced — with no approval behind it.
+      const undecided = (
+        await tx.query(
+          `SELECT line_item_id, description FROM ro_line_items
+            WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status='pending'`,
+          [roId, ctx.tenantId],
+        )
+      ).rows;
+      if (undecided.length > 0) {
+        throw new UnprocessableError('Every line item must have a recorded customer decision before pickup', {
+          code: 'decision_outstanding',
+          details: { undecided_line_items: undecided.map((l: any) => l.line_item_id) },
+          messageI18n: i18n(
+            'The customer has not decided on all recommended work',
+            'El cliente no ha decidido sobre todo el trabajo recomendado',
+          ),
+        });
+      }
+    }
+
+    // Work may only begin once the customer has approved something to do. Lines still
+    // `pending` are fine here — they may be decided while the approved work proceeds —
+    // but at least one line must carry a real approval.
+    if (toStatus === 'in_repair') {
+      const approvedWork = (
+        await tx.query(
+          `SELECT 1 FROM ro_line_items
+            WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status IN ('approved','not_required')
+            LIMIT 1`,
+          [roId, ctx.tenantId],
+        )
+      ).rows[0];
+      if (!approvedWork) {
+        throw new UnprocessableError('No line item on this repair order is approved to work on', {
+          code: 'no_approved_work',
+          messageI18n: i18n(
+            'No approved work on this repair order',
+            'No hay trabajo aprobado en esta orden de reparación',
+          ),
+        });
+      }
     }
 
     if (transitionRequiresAuthorization(toStatus)) {
@@ -988,6 +1154,24 @@ export async function transitionRO(
       throw new ConflictError('Repair order changed while the transition was being applied', {
         code: 'concurrent_modification',
       });
+    }
+
+    // Returning to `estimate_pending` is the re-quote edge: the outstanding estimate is
+    // withdrawn and the lines the customer had not yet answered go back to un-shown, so
+    // they can be re-priced and put in front of them again. Without this the old estimate
+    // stayed answerable and its lines stayed locked, so a re-quote could neither be
+    // decided nor superseded.
+    if (toStatus === 'estimate_pending') {
+      await tx.query(
+        `UPDATE ro_estimates SET status='expired', updated_at=NOW()
+          WHERE ro_id=$1 AND tenant_id=$2 AND status IN ('sent','partially_approved')`,
+        [roId, ctx.tenantId],
+      );
+      await tx.query(
+        `UPDATE ro_line_items SET authorization_status='not_required', updated_at=NOW()
+          WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status='pending'`,
+        [roId, ctx.tenantId],
+      );
     }
 
     await syncQueueForRO(tx, ctx, updated);
@@ -1064,14 +1248,23 @@ export async function addLineItem(
 }
 
 /**
- * Work-progress edits to a line item.
+ * Fields on a line item, split by who may write them and why.
  *
- * `authorization_status` and `authorization_ref` are not settable here — they are
- * written only by `recordAuthorization`, from a real customer decision. Allowing them
- * to be PATCHed would let any caller mark work approved without evidence, which is
- * exactly what the repair-order authorization gate checks for.
+ * The split is the point. `price_ref` and `sold_hours` decide what the customer is
+ * billed, so they belong to the commercial roles; `status` is shop-floor progress.
+ * Previously every shop-floor role could write all of them on any line in the tenant,
+ * which meant a technician could rewrite the money on a repair order they had never
+ * touched — and that number flowed straight into the estimate the customer approved.
+ *
+ * `assigned_tech_user_id` is absent entirely: assignment goes through `dispatchTech`,
+ * which verifies the technician has an active profile at the repair order's location.
+ * Accepting it here was a way around that check.
+ *
+ * `authorization_status`/`authorization_ref` are written only by `generateEstimate` and
+ * `recordAuthorization`, from a real customer decision.
  */
-const LINE_ITEM_UPDATABLE = ['status', 'assigned_tech_user_id', 'sold_hours', 'price_ref'] as const;
+const LINE_ITEM_PROGRESS_FIELDS = ['status'] as const;
+const LINE_ITEM_COMMERCIAL_FIELDS = ['sold_hours', 'price_ref'] as const;
 
 export async function updateLineItem(
   ctx: AuthContext,
@@ -1086,18 +1279,44 @@ export async function updateLineItem(
       });
     }
   }
-  if (updates.status !== undefined) requireOneOf(updates.status, LINE_STATUSES, 'status');
-  if (updates.assigned_tech_user_id !== undefined && updates.assigned_tech_user_id !== null) {
-    requireUuid(updates.assigned_tech_user_id, 'assigned_tech_user_id');
+  if ('assigned_tech_user_id' in updates) {
+    throw new ForbiddenError('assigned_tech_user_id is set by dispatch, not directly', {
+      code: 'assignment_via_dispatch_only',
+    });
   }
+
+  const commercial = (LINE_ITEM_COMMERCIAL_FIELDS as readonly string[]).filter((f) => f in updates);
+  const supervises = hasAnyRole(ctx, ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER);
+  if (commercial.length > 0 && !supervises) {
+    throw new ForbiddenError('Only a service advisor or manager may change what the customer is billed', {
+      code: 'commercial_fields_restricted',
+      details: { fields: commercial },
+    });
+  }
+
+  if (updates.status !== undefined) requireOneOf(updates.status, LINE_STATUSES, 'status');
   if (updates.sold_hours !== undefined && updates.sold_hours !== null
       && (typeof updates.sold_hours !== 'number' || updates.sold_hours < 0)) {
     throw new ValidationError('sold_hours must be a non-negative number');
   }
+  if (updates.price_ref !== undefined && updates.price_ref !== null
+      && (typeof updates.price_ref !== 'object' || Array.isArray(updates.price_ref))) {
+    throw new ValidationError('price_ref must be an object');
+  }
 
   return withTransaction(async (tx) => {
     await assertRO(tx, ctx, roId);
-    const line = await assertLineItem(tx, ctx, roId, lineItemId);
+    // Locked: the guards below are a read-validate-write, so without FOR UPDATE a
+    // customer decline landing concurrently would be read as "still pending" here and
+    // then silently overwritten by this update.
+    const line = await assertLineItem(tx, ctx, roId, lineItemId, { lock: true });
+
+    // A technician may only move work they were actually dispatched to.
+    if (!supervises && line.assigned_tech_user_id !== ctx.userId) {
+      throw new ForbiddenError('This line item is assigned to another technician', {
+        code: 'not_line_item_assignee',
+      });
+    }
 
     // `status` on a declined line is the record that the customer said no. Letting it
     // be rewritten would quietly return declined work to the shop floor.
@@ -1107,10 +1326,28 @@ export async function updateLineItem(
       });
     }
 
+    // Commercial terms are frozen from the moment the line goes in front of the customer
+    // until they answer, and permanently once they have agreed. Allowing an edit while the
+    // line is `pending` is what let the price shown on an estimate diverge from the price
+    // recorded as approved.
+    if (line.authorization_status === 'pending' && commercial.length > 0) {
+      throw new ConflictError(
+        'This line is out with the customer; move the repair order back to estimate_pending to re-quote it',
+        { code: 'pending_terms_frozen', details: { fields: commercial } },
+      );
+    }
+    if (line.authorization_status === 'approved' && commercial.length > 0) {
+      throw new ConflictError(
+        'This line is customer-approved; its price is now part of the agreement and cannot be changed',
+        { code: 'approved_terms_frozen', details: { fields: commercial } },
+      );
+    }
+
+    const writable = [...LINE_ITEM_PROGRESS_FIELDS, ...(supervises ? LINE_ITEM_COMMERCIAL_FIELDS : [])] as string[];
     const sets: string[] = [];
     const vals: unknown[] = [lineItemId, roId, ctx.tenantId];
     for (const [k, v] of Object.entries(updates)) {
-      if ((LINE_ITEM_UPDATABLE as readonly string[]).includes(k)) {
+      if (writable.includes(k)) {
         vals.push(k === 'price_ref' ? JSON.stringify(v) : v);
         sets.push(`${k}=$${vals.length}`);
       }
@@ -1118,12 +1355,24 @@ export async function updateLineItem(
     if (sets.length === 0) throw new ValidationError('No updatable fields supplied');
     sets.push('updated_at=NOW()');
 
-    return (
+    // The authorization_status is re-asserted so a decision that commits between the
+    // read above and this write turns into a lost-update conflict rather than a silent
+    // overwrite.
+    vals.push(line.authorization_status);
+    const updated = (
       await tx.query(
-        `UPDATE ro_line_items SET ${sets.join(',')} WHERE line_item_id=$1 AND ro_id=$2 AND tenant_id=$3 RETURNING *`,
+        `UPDATE ro_line_items SET ${sets.join(',')}
+          WHERE line_item_id=$1 AND ro_id=$2 AND tenant_id=$3 AND authorization_status=$${vals.length}
+          RETURNING *`,
         vals,
       )
     ).rows[0];
+    if (!updated) {
+      throw new ConflictError('The line item changed while this update was being applied', {
+        code: 'concurrent_modification',
+      });
+    }
+    return updated;
   });
 }
 
@@ -1220,6 +1469,9 @@ export async function recordMPIResult(
     });
   }
   const severity = params.severity ? requireOneOf(params.severity, MPI_SEVERITIES, 'severity') : 'info';
+  const evidenceRefs = params.evidence_artifact_refs === undefined
+    ? []
+    : requireStringArray(params.evidence_artifact_refs, 'evidence_artifact_refs');
 
   return withTransaction(async (tx) => {
     const session = (
@@ -1253,7 +1505,7 @@ export async function recordMPIResult(
                notes=EXCLUDED.notes,
                evidence_artifact_refs=EXCLUDED.evidence_artifact_refs
          RETURNING *`,
-        [generateId(), ctx.tenantId, mpiSessionId, params.item_key, status, severity, params.notes ?? null, params.evidence_artifact_refs ?? []],
+        [generateId(), ctx.tenantId, mpiSessionId, params.item_key, status, severity, params.notes ?? null, evidenceRefs],
       )
     ).rows[0];
   });
@@ -1299,8 +1551,12 @@ export async function submitMPISession(ctx: AuthContext, mpiSessionId: string): 
           JSON.stringify(i18n(`MPI: ${r.item_key} (${r.status})`, `IPM: ${r.item_key} (${r.status})`)),
           JSON.stringify(
             i18n(
-              r.notes || `Inspection item ${r.item_key} needs ${r.status === 'fail' ? 'immediate ' : ''}attention`,
-              r.notes || `El artículo ${r.item_key} necesita atención${r.status === 'fail' ? ' inmediata' : ''}`,
+              // The generated sentence is genuinely bilingual. A technician's free-text
+              // note is not — echoing it into the Spanish field would present English
+              // prose to a Spanish-speaking customer as if it had been translated. The
+              // note is carried separately so the portal can label it as untranslated.
+              `Inspection item ${r.item_key} needs ${r.status === 'fail' ? 'immediate ' : ''}attention`,
+              `El artículo ${r.item_key} necesita atención${r.status === 'fail' ? ' inmediata' : ''}`,
             ),
           ),
           priority,
@@ -1623,13 +1879,34 @@ export async function recordAuthorization(
       ])
     ).rows[0];
     if (!estimate) throw new NotFoundError('Estimate not found on this repair order', { code: 'estimate_not_found' });
-    if (estimate.status !== 'sent') {
-      throw new ConflictError(`Estimate is '${estimate.status}'; only a sent estimate can be decided`, {
+    // `partially_approved` is decidable too: a customer who approved some lines and
+    // left the rest open must be able to come back and decide the remainder. Accepting
+    // only `sent` made the partial state a dead end that could never be completed.
+    if (!['sent', 'partially_approved'].includes(estimate.status)) {
+      throw new ConflictError(`Estimate is '${estimate.status}'; only a sent or partially decided estimate can be decided`, {
         code: 'estimate_not_sent',
       });
     }
 
-    const decidedLines = await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined]);
+    // A decision must answer the version currently in front of the customer. Accepting an
+    // older one let a stale portal link bind the customer to terms they never saw.
+    const current = (
+      await tx.query(
+        `SELECT estimate_id, version FROM ro_estimates
+          WHERE ro_id=$1 AND tenant_id=$2 ORDER BY version DESC LIMIT 1`,
+        [roId, ctx.tenantId],
+      )
+    ).rows[0];
+    if (current && current.estimate_id !== estimate.estimate_id) {
+      throw new ConflictError('This estimate has been superseded by a newer version', {
+        code: 'estimate_superseded',
+        details: { answered_version: estimate.version, current_version: current.version },
+      });
+    }
+
+    // Locked in a stable order so two decisions on overlapping lines serialise instead
+    // of interleaving.
+    const decidedLines = await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined], { lock: true });
     const notPending = decidedLines.filter((l: any) => l.authorization_status !== 'pending');
     if (notPending.length > 0) {
       throw new ConflictError('One or more line items are not awaiting a customer decision', {
@@ -1638,16 +1915,34 @@ export async function recordAuthorization(
       });
     }
 
+    // Snapshot what the customer actually agreed to, before any of it can move. This is
+    // the record an invoice dispute is settled against, and the reason a later price
+    // edit on an approved line is refused rather than silently accepted.
+    const approvedSet = new Set(approved);
+    const snapshot: Record<string, unknown> = {};
+    for (const l of decidedLines) {
+      if (!approvedSet.has(l.line_item_id)) continue;
+      snapshot[l.line_item_id] = {
+        description: l.description,
+        line_type: l.line_type,
+        labor_op_code: l.labor_op_code,
+        estimated_hours: l.estimated_hours,
+        sold_hours: l.sold_hours,
+        price_ref: l.price_ref,
+      };
+    }
+
     const authStatus = deriveAuthorizationStatus(approved, declined);
     const authId = generateId();
     const auth = (
       await tx.query(
         `INSERT INTO ro_authorizations (authorization_id,tenant_id,ro_id,estimate_id,method,status,
-           approved_items,declined_items,evidence_refs,customer_language_used,authorized_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW()) RETURNING *`,
+           approved_items,declined_items,evidence_refs,customer_language_used,approved_snapshot,authorized_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) RETURNING *`,
         [
           authId, ctx.tenantId, roId, params.estimate_id, params.method, authStatus,
           approved, declined, JSON.stringify(params.evidence_refs ?? {}), language,
+          JSON.stringify(snapshot),
         ],
       )
     ).rows[0];
@@ -1667,21 +1962,29 @@ export async function recordAuthorization(
       );
     }
 
-    // Counted AFTER the updates above: whatever is still `pending` on this repair
-    // order is a line of this estimate the customer has not decided yet.
-    const remainingUndecided = Number(
-      (
-        await tx.query(
-          `SELECT COUNT(*)::int AS cnt FROM ro_line_items
-            WHERE ro_id=$1 AND tenant_id=$2 AND authorization_status='pending'`,
-          [roId, ctx.tenantId],
-        )
-      ).rows[0].cnt,
-    );
+    // Counted AFTER the updates above, and over the estimate's WHOLE line population —
+    // not just the lines this decision covered. A customer who approves some lines now
+    // and declines the rest later leaves two authorization records; deriving the
+    // estimate's status from the second one alone would report `declined` and lose the
+    // approval recorded by the first.
+    const tally = (
+      await tx.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE authorization_status='approved')::int AS approved,
+           COUNT(*) FILTER (WHERE authorization_status='declined')::int AS declined,
+           COUNT(*) FILTER (WHERE authorization_status='pending')::int  AS pending
+         FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2`,
+        [roId, ctx.tenantId],
+      )
+    ).rows[0];
 
     await tx.query(
       `UPDATE ro_estimates SET status=$3, updated_at=NOW() WHERE estimate_id=$1 AND tenant_id=$2`,
-      [params.estimate_id, ctx.tenantId, deriveEstimateStatus(approved.length, declined.length, remainingUndecided)],
+      [
+        params.estimate_id,
+        ctx.tenantId,
+        deriveEstimateStatus(Number(tally.approved), Number(tally.declined), Number(tally.pending)),
+      ],
     );
 
     await recordROEvent(tx, ctx, roId, 'authorization_received', { user_id: ctx.userId }, {
@@ -1874,6 +2177,16 @@ export async function dispatchTech(
         details: { tech_user_id: params.tech_user_id, location_id: ro.location_id },
       });
     }
+
+    // Re-dispatching supersedes the previous assignment rather than stacking a second
+    // live ticket on the same line. Two open tickets meant two sets of clock entries for
+    // one job, which double-counted the line's sold and estimated hours in the technician
+    // efficiency metrics. `reassigned` is the status the schema already reserved for this.
+    await tx.query(
+      `UPDATE tech_work_tickets SET status='reassigned', updated_at=NOW()
+        WHERE line_item_id=$1 AND tenant_id=$2 AND status IN ('assigned','started','paused')`,
+      [params.line_item_id, ctx.tenantId],
+    );
 
     const ticket = (
       await tx.query(
@@ -2070,6 +2383,7 @@ export async function createComebackCase(
     throw new ValidationError('A comeback must reference two different repair orders');
   }
   const rootCause = requireOneOf(params.root_cause_category, COMEBACK_ROOT_CAUSES, 'root_cause_category');
+  const reasonCodes = params.reason_codes === undefined ? [] : requireStringArray(params.reason_codes, 'reason_codes');
   const severity = params.severity ? requireOneOf(params.severity, COMEBACK_SEVERITIES, 'severity') : 'sev2';
 
   const comeback = await withTransaction(async (tx) => {
@@ -2094,7 +2408,7 @@ export async function createComebackCase(
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
         [
           generateId(), ctx.tenantId, params.original_ro_id, params.new_ro_id,
-          rootCause, params.reason_codes ?? [], severity,
+          rootCause, reasonCodes, severity,
         ],
       )
     ).rows[0];
@@ -2312,22 +2626,42 @@ export async function updateServiceQueueItemStatus(
 ): Promise<any> {
   requireUuid(queueItemId, 'queue_item_id');
   const status = requireOneOf(params.status, QUEUE_STATUSES, 'status');
+  if (params.block_reason_codes !== undefined) requireStringArray(params.block_reason_codes, 'block_reason_codes');
 
-  // Block reasons are only rewritten when supplied, or cleared when the item unblocks.
-  const sets = ['status=$3', 'updated_at=NOW()'];
-  const vals: unknown[] = [queueItemId, ctx.tenantId, status];
-  if (params.block_reason_codes !== undefined) {
-    vals.push(params.block_reason_codes);
-    sets.push(`block_reason_codes=$${vals.length}`);
-  } else if (status !== 'blocked') {
-    sets.push('block_reason_codes=NULL');
-  }
+  return withTransaction(async (tx) => {
+    const item = (
+      await tx.query(`SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`, [
+        queueItemId,
+        ctx.tenantId,
+      ])
+    ).rows[0];
+    if (!item) throw new NotFoundError('Queue item not found');
 
-  const row = (
-    await query(`UPDATE service_queue_items SET ${sets.join(',')} WHERE queue_item_id=$1 AND tenant_id=$2 RETURNING *`, vals)
-  ).rows[0];
-  if (!row) throw new NotFoundError('Queue item not found');
-  return row;
+    // Same rule `assignServiceQueueItem` applies: a technician works their own queue.
+    // Without it, closing or cancelling any item in the tenant was unrestricted — the
+    // guard existed on claiming an item but not on finishing one.
+    const supervises = hasAnyRole(ctx, ROLES.SERVICE_MANAGER, ROLES.SERVICE_ADVISOR);
+    if (!supervises && item.assigned_to_user_id && item.assigned_to_user_id !== ctx.userId) {
+      throw new ForbiddenError('This queue item is assigned to another user', { code: 'queue_item_taken' });
+    }
+
+    // Block reasons are only rewritten when supplied, or cleared when the item unblocks.
+    const sets = ['status=$3', 'updated_at=NOW()'];
+    const vals: unknown[] = [queueItemId, ctx.tenantId, status];
+    if (params.block_reason_codes !== undefined) {
+      vals.push(params.block_reason_codes);
+      sets.push(`block_reason_codes=$${vals.length}`);
+    } else if (status !== 'blocked') {
+      sets.push('block_reason_codes=NULL');
+    }
+
+    return (
+      await tx.query(
+        `UPDATE service_queue_items SET ${sets.join(',')} WHERE queue_item_id=$1 AND tenant_id=$2 RETURNING *`,
+        vals,
+      )
+    ).rows[0];
+  });
 }
 
 export async function escalateServiceQueueItem(

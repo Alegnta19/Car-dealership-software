@@ -13,6 +13,14 @@ function assertRequiredEnv(): void {
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
+
+  // The verifiers enforce a 32-character minimum at call time. Checking only presence
+  // here let the service start, pass its health check, and then fail every authenticated
+  // request with a 500 — a configuration error presenting as an outage.
+  const tooShort = (['JWT_SECRET', 'STEP_UP_SECRET'] as const).filter((key) => (process.env[key] ?? '').length < 32);
+  if (tooShort.length > 0) {
+    throw new Error(`These secrets must be at least 32 characters: ${tooShort.join(', ')}`);
+  }
 }
 
 function main(): void {

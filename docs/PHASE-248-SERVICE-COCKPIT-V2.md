@@ -7,7 +7,7 @@
 | **Origin** | `phase-248-service-cockpit-v2` bundle (3 files, 1,523 lines) |
 | **Status** | Hardened and expanded into a runnable service — see [REMEDIATION.md](REMEDIATION.md) |
 | **Stack** | Node.js / TypeScript · Express · PostgreSQL · prom-client (Prometheus) |
-| **Surface** | 23 tables · 38 endpoints · 13 subdomains · 15 metrics |
+| **Surface** | 23 tables · 39 endpoints · 13 subdomains · 15 metrics |
 
 ---
 
@@ -19,7 +19,7 @@
 4. [Domain Architecture — 13 Subdomain Cluster Map](#4-domain-architecture--13-subdomain-cluster-map)
 5. [Data Model — 23 Tables](#5-data-model--23-tables)
 6. [Repair Order State Machine](#6-repair-order-state-machine)
-7. [API Surface — 38 Endpoints](#7-api-surface--38-endpoints)
+7. [API Surface — 39 Endpoints](#7-api-surface--39-endpoints)
 8. [Service Layer Reference](#8-service-layer-reference)
 9. [Observability — 15 Prometheus Metrics](#9-observability--15-prometheus-metrics)
 10. [Cross-Cutting Concerns](#10-cross-cutting-concerns)
@@ -50,6 +50,7 @@ migrations/
   049_phase248_service_cockpit.sql   20 tables, 45 index statements
   050_phase248_hardening.sql         triggers, constraints, 2 more tables
   051_phase248_metrics_support.sql   received_at, SLA defaults, corrections
+  052_phase248_authorization_binding.sql  approved-price snapshot + freeze
 src/
   app.ts                             express wiring, /healthz, /metrics
   server.ts                          startup, env validation, graceful shutdown
@@ -64,11 +65,11 @@ src/
   modules/service-cockpit/
     domain/state-machine.ts          RO statuses, transitions, gate flags
     domain/authorization.ts          authorization/estimate status derivation
-    routes/index.ts                  38 endpoints, role-gated
+    routes/index.ts                  39 endpoints, role-gated
     services/service-cockpit-service.ts   business logic, SQL, metrics
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered transactional migration runner
-tests/                               39 unit + 28 integration tests
+tests/                               39 unit + 51 database-backed tests
 ```
 
 Layering is strict: **routes → service → database**. Routes contain no SQL; the service contains no
@@ -106,7 +107,7 @@ Single source of truth for what each subdomain owns.
 | # | Code | Subdomain | Tables owned | Service functions | HTTP endpoints |
 |---|---|---|---|---|---|
 | 1 | **SCM2** | Service Cockpit Module v2 (dashboards) | — (reads across all) | `getServiceCockpitHome`, `queryServiceCockpitView` | `GET /home`, `POST /query/view` |
-| 2 | **SSIS2** | Service Scheduling & Intake | `service_appointments`, `service_appointment_events` | `createAppointment`, `updateAppointment`, `confirmAppointment`, `checkIn`, `quickStartIntake` | 5 |
+| 2 | **SSIS2** | Service Scheduling & Intake | `service_appointments`, `service_appointment_events` | `createAppointment`, `updateAppointment`, `confirmAppointment`, `checkIn`, `markAppointmentNoShow`, `quickStartIntake` | 6 |
 | 3 | **ROLS2** | Repair Order Lifecycle | `repair_orders`, `ro_events`, `ro_line_items` | `createRO`, `getRO`, `transitionRO`, `addLineItem`, `updateLineItem` | 5 |
 | 4 | **DMRS2** | Digital MPI & Recommendations | `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations` | `listMPITemplates`, `startMPISession`, `recordMPIResult`, `submitMPISession`, `sendRecommendationsToCustomer` | 5 |
 | 5 | **EAS2** | Estimate & Authorization | `ro_estimates`, `ro_authorizations` | `generateEstimate`, `sendEstimate`, `listAuthorizations`, `recordAuthorization` | 4 |
@@ -119,7 +120,7 @@ Single source of truth for what each subdomain owns.
 | 12 | **CSPP2** | Customer Service Portal Packager | `service_portal_tasks` | `listPortalTasks`, `updatePortalTaskStatus` | 2 |
 | 13 | **PSFSRB2** | Post-Sale First Service Retention Bridge | `first_service_offers` | `createFirstServiceOffer` | 1 |
 
-The subdomain endpoint counts sum to 38. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the step-up ledger, migration 050).
+The subdomain endpoint counts sum to 39. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the step-up ledger, migration 050).
 
 Notable structural facts:
 
@@ -131,7 +132,7 @@ Notable structural facts:
 
 ```mermaid
 flowchart LR
-  subgraph HTTP["routes/index.ts (38 endpoints)"]
+  subgraph HTTP["routes/index.ts (39 endpoints)"]
     R[Express Router]
   end
   subgraph SVC["services/service-cockpit-service.ts"]
@@ -164,7 +165,7 @@ flowchart LR
 
 Conventions shared by every table: UUID surrogate PK defaulting to `gen_random_uuid()`; `tenant_id UUID NOT NULL` (no FK, no row-level security — isolation is enforced in the query layer, see [§10](#10-cross-cutting-concerns)); `created_at TIMESTAMPTZ DEFAULT NOW()` plus `updated_at` on all mutable tables (the three append-only event tables — `service_appointment_events`, `ro_events`, `tech_time_entries` — carry `occurred_at` instead of `updated_at`); `updated_at` maintained by a `BEFORE UPDATE` trigger (migration 050) on every mutable table; status columns are `TEXT` with `CHECK (status IN (...))` enums; money/pricing/vendor/supplier details are held as `*_ref` JSONB blobs rather than typed columns; all FKs are default `NO ACTION` (no `ON DELETE` behavior defined).
 
-Totals across migrations 049–051: **23 Phase-248 domain tables** (25 with `audit_events` and `schema_migrations`), and 19 `updated_at` triggers.
+Totals across migrations 049–052: **23 Phase-248 domain tables** (25 with `audit_events` and `schema_migrations`), and 20 triggers.
 
 ### 5.1 SSIS2 — Scheduling & Intake
 
@@ -311,12 +312,14 @@ stateDiagram-v2
 
 **Gates and instrumentation in `transitionRO`.** The whole function runs in one transaction with the repair-order row locked `FOR UPDATE`, so the read that validates a transition and the write that performs it cannot be interleaved:
 
+- **Re-quote (`awaiting_authorization → estimate_pending`).** Withdraws the outstanding estimate as `expired` and returns its still-undecided lines to `not_required`, so they can be re-priced and shown again. Commercial terms are frozen while a line is `pending` (`pending_terms_frozen`), which is what keeps the price the customer was shown identical to the price recorded as approved.
 - **Authorization gate (`→ authorized`).** Requires an `ro_authorizations` row that is `status='approved'`, has a **non-empty `approved_items` array**, and references the RO's **latest estimate version**. An approval of estimate v1 does not authorize work priced in v3, and an all-declined decision (stored as `declined`) does not satisfy the gate at all. Failure returns a bilingual `authorization_required` (HTTP 422).
 - **Step-up gate (`→ authorized`, `→ canceled`).** Requires a valid step-up token bound to this tenant, user, action and repair order. Failure returns `step_up_required` (HTTP 403).
 - **Guarded write.** The `UPDATE` re-asserts the source status; if it matches zero rows, another request changed the RO first and the caller gets `concurrent_modification` (HTTP 409) rather than a silent lost update.
 - `→ closed` observes the `service_ro_cycle_time_minutes_p95` histogram (minutes since RO creation), after commit.
 - Every successful transition appends a `status_changed` event to `ro_events` inside the same transaction, plus a post-commit audit row.
-- `qc → ready_for_pickup` requires every line item to be completed, declined or canceled (`work_incomplete`, 422). There is no item-by-item quality checklist beyond that.
+- **Work gate (`→ in_repair`).** At least one line must be `approved` or `not_required`, so work cannot begin on a repair order the customer has approved nothing on (`no_approved_work`, 422).
+- **Delivery gates (`qc → ready_for_pickup`).** Every line must be completed, declined or canceled (`work_incomplete`, 422), and no line may still be awaiting a customer decision (`decision_outstanding`, 422) — otherwise work the customer was asked about but never answered could be delivered and invoiced. There is no item-by-item quality checklist beyond that.
 
 **Lifecycle-driven status changes** — these functions move `repair_orders.status` as a side effect of their own operation rather than through `transitionRO`. Each is a conditional `UPDATE … AND status IN (…)` inside the operation's transaction, so it respects the map's edges and is atomic with the work that caused it:
 `checkIn` (creates the RO at `checked_in`), `startMPISession` (`checked_in → inspection_in_progress`), `generateEstimate` (`inspection_in_progress|checked_in → estimate_pending`), `sendEstimate` (`estimate_pending → awaiting_authorization`), `createComebackCase` (`closed → comeback`). None of them can reach `authorized` or `canceled`, so neither gate is bypassable this way.
@@ -325,9 +328,9 @@ The appointment lifecycle has no equivalent map: `confirmAppointment` and `check
 
 ---
 
-## 7. API Surface — 38 Endpoints
+## 7. API Surface — 39 Endpoints
 
-Mounted at `/api/service`. All 38 endpoints run `authenticate` then `authorize(...roles)`, and rejects a request whose body or query `tenant_id` disagrees with the token.
+Mounted at `/api/service`. All 39 endpoints run `authenticate` then `authorize(...roles)`, and rejects a request whose body or query `tenant_id` disagrees with the token.
 
 Success responses are `{ success: true, data }`; mutations return the full row. All errors use the central envelope `{ success: false, error: { code, message, details? } }` — see [§10](#10-cross-cutting-concerns) for codes. There are no DELETE endpoints. List endpoints accept validated, capped `limit`/`offset`.
 
@@ -335,44 +338,45 @@ Success responses are `{ success: true, data }`; mutations return the full row. 
 
 | # | Method & Path | Roles | Service fn | Required input | Success |
 |---|---|---|---|---|---|
-| 1 | `GET /home` | R | `getServiceCockpitHome` | `location_id?` (query) | 200 |
+| 1 | `GET /home` | R | `getServiceCockpitHome` | `location_id?`, `timezone?` (query; IANA name, defaults to `SERVICE_DEFAULT_TIMEZONE`) | 200 |
 | 2 | `POST /query/view` | R | `queryServiceCockpitView` | `view_id` (known view; `overrides` rejected) | 200 |
 | 3 | `POST /appointments` | W | `createAppointment` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`, `scheduled_start` | 201 |
 | 4 | `PATCH /appointments/:appointmentId` | W | `updateAppointment` | any of: `scheduled_start/end`, `concerns`, `preferred_contact_channel`, `language_preference` (**`status` refused**) | 200 |
 | 5 | `POST /appointments/:appointmentId/confirm` | W | `confirmAppointment` | — (source must be `requested`/`scheduled`) | 200 |
 | 6 | `POST /appointments/:appointmentId/check-in` | W | `checkIn` | `odometer?` | 200 (creates RO + queue item; idempotent) |
-| 7 | `POST /intake/quick-start` | W | `quickStartIntake` | `location_id`, `scan_vin?`, `mdm_vehicle_id?` | 200 (preview + vehicle history; `persisted: false`) |
-| 8 | `POST /ros` | W | `createRO` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`; an `appointment_id` may convert only once | 201 / 409 `appointment_already_converted` |
-| 9 | `GET /ros/:roId` | R | `getRO` | — | 200 (full aggregate: lines, events, estimates, auths, parts, sublets, tickets) |
-| 10 | `POST /ros/:roId/transition` | W | `transitionRO` | `to_status`; `step_up_token` for `authorized`/`canceled` | 200 / 403 `step_up_required` / 404 `ro_not_found` / 409 `concurrent_modification` / 422 `invalid_transition`·`authorization_required` |
-| 11 | `POST /ros/:roId/line-items` | W | `addLineItem` | `line_type`, `description` (**authorization fields refused**) | 201 |
-| 12 | `PATCH /ros/:roId/line-items/:lineItemId` | F | `updateLineItem` | any of: `status`, `assigned_tech_user_id`, `sold_hours`, `price_ref` (**authorization fields refused; a declined line cannot be reopened**) | 200 |
-| 13 | `GET /mpi/templates` | R | `listMPITemplates` | `location_id?` (query) | 200 |
-| 14 | `POST /ros/:roId/mpi/start` | F | `startMPISession` | `template_id`, `tech_user_id` | 201 |
-| 15 | `POST /mpi/:mpiSessionId/results` | F | `recordMPIResult` | `item_key`, `status`; `severity` required unless `pass` | 201 (upserts on `item_key`) |
-| 16 | `POST /mpi/:mpiSessionId/submit` | F | `submitMPISession` | — | 200 (auto-generates recommendations) |
-| 17 | `POST /ros/:roId/recommendations/send-to-customer` | W | `sendRecommendationsToCustomer` | — | 200 (creates portal task) |
-| 18 | `POST /ros/:roId/estimates/generate` | W | `generateEstimate` | — (RO must have active line items) | 201 |
-| 19 | `POST /ros/:roId/estimates/:estimateId/send` | W | `sendEstimate` | — (estimate must belong to the RO and be `draft`) | 200 |
-| 20 | `GET /ros/:roId/authorizations` | R | `listAuthorizations` | — | 200 |
-| 21 | `POST /ros/:roId/authorizations/record` | W | `recordAuthorization` | `estimate_id`, `method`, `approved_items` and/or `declined_items`; `evidence_refs` for artifact-backed methods, `step_up_token` for `staff_attestation` | 201 |
-| 22 | `POST /ros/:roId/parts/request` | P | `requestPart` | `line_item_id`, `part_number`, `description` | 201 |
-| 23 | `PATCH /parts/:partLineId` | P | `updatePartLine` | any of: `status`, `eta`, `supplier_ref` | 200 |
-| 24 | `POST /ros/:roId/sublet/create` | P | `createSubletJob` | `line_item_id`, `vendor_ref` | 201 |
-| 25 | `PATCH /sublet/:subletJobId` | P | `updateSubletJob` | any of: `status`, `invoice_artifact_ref` | 200 |
-| 26 | `POST /dispatch/assign` | W | `dispatchTech` | `ro_id`, `line_item_id`, `tech_user_id` | 201 |
-| 27 | `POST /tech/tickets/:ticketId/status` | F | `updateTicketStatus` | `status` (own ticket, unless advisor/manager) | 200 |
-| 28 | `POST /tech/tickets/:ticketId/time` | F | `recordTimeEntry` | `event_type` (`start\|pause\|resume\|stop`) | 201 |
-| 29 | `POST /warranty/claims` | W + `warranty_admin` | `createWarrantyClaim` | `ro_id` | 201 |
-| 30 | `POST /comebacks` | W | `createComebackCase` | `original_ro_id` (must be `closed`), `new_ro_id`, `root_cause_category` | 201 |
-| 31 | `PATCH /comebacks/:comebackId` | W | `updateComebackCase` | `status` | 200 |
-| 32 | `GET /queues` | R | `listServiceQueueItems` | `location_id?`, `queue_type?`, `status?` (query) | 200 |
-| 33 | `POST /queues/:queueItemId/assign` | F | `assignServiceQueueItem` | — (assignee = caller; must be open and unclaimed) | 200 / 409 `queue_item_taken`·`queue_item_closed` |
-| 34 | `POST /queues/:queueItemId/update-status` | F | `updateServiceQueueItemStatus` | `status` | 200 |
-| 35 | `POST /queues/:queueItemId/escalate` | M | `escalateServiceQueueItem` | `reason` (`create_runbook: true` rejected) | 200 (priority → p0) |
-| 36 | `GET /ros/:roId/portal-tasks` | R | `listPortalTasks` | — | 200 |
-| 37 | `PATCH /portal-tasks/:portalTaskId` | W | `updatePortalTaskStatus` | `status` | 200 |
-| 38 | `POST /retention/first-service` | W | `createFirstServiceOffer` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`, `deal_id` | 201 / 409 `offer_already_exists` |
+| 7 | `POST /appointments/:appointmentId/no-show` | W | `markAppointmentNoShow` | — (source must be `requested`/`scheduled`/`confirmed`) | 200 (queues `no_show_followup`) / 409 |
+| 8 | `POST /intake/quick-start` | W | `quickStartIntake` | `location_id`, `scan_vin?`, `mdm_vehicle_id?` | 200 (preview + vehicle history; `persisted: false`) |
+| 9 | `POST /ros` | W | `createRO` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`; an `appointment_id` may convert only once | 201 / 409 `appointment_already_converted` |
+| 10 | `GET /ros/:roId` | R | `getRO` | — | 200 (full aggregate: lines, events, estimates, auths, parts, sublets, tickets) |
+| 11 | `POST /ros/:roId/transition` | W | `transitionRO` | `to_status`; `step_up_token` for `authorized`/`canceled` | 200 / 403 `step_up_required` / 404 `ro_not_found` / 409 `concurrent_modification` / 422 `invalid_transition`·`authorization_required` |
+| 12 | `POST /ros/:roId/line-items` | W | `addLineItem` | `line_type`, `description` (**authorization fields refused**) | 201 |
+| 13 | `PATCH /ros/:roId/line-items/:lineItemId` | F | `updateLineItem` | `status` (own line, or any for W); `sold_hours`/`price_ref` require W (**authorization fields and `assigned_tech_user_id` refused; declined lines cannot be reopened; approved prices are frozen**) | 200 |
+| 14 | `GET /mpi/templates` | R | `listMPITemplates` | `location_id?` (query) | 200 |
+| 15 | `POST /ros/:roId/mpi/start` | F | `startMPISession` | `template_id`, `tech_user_id` | 201 |
+| 16 | `POST /mpi/:mpiSessionId/results` | F | `recordMPIResult` | `item_key`, `status`; `severity` required unless `pass` | 201 (upserts on `item_key`) |
+| 17 | `POST /mpi/:mpiSessionId/submit` | F | `submitMPISession` | — | 200 (auto-generates recommendations) |
+| 18 | `POST /ros/:roId/recommendations/send-to-customer` | W | `sendRecommendationsToCustomer` | — | 200 (creates portal task) |
+| 19 | `POST /ros/:roId/estimates/generate` | W | `generateEstimate` | — (RO must have active line items) | 201 |
+| 20 | `POST /ros/:roId/estimates/:estimateId/send` | W | `sendEstimate` | — (estimate must belong to the RO and be `draft`) | 200 |
+| 21 | `GET /ros/:roId/authorizations` | R | `listAuthorizations` | — | 200 |
+| 22 | `POST /ros/:roId/authorizations/record` | W | `recordAuthorization` | `estimate_id`, `method`, `approved_items` and/or `declined_items`; `evidence_refs` for artifact-backed methods, `step_up_token` for `staff_attestation` | 201 |
+| 23 | `POST /ros/:roId/parts/request` | P | `requestPart` | `line_item_id`, `part_number`, `description` | 201 |
+| 24 | `PATCH /parts/:partLineId` | P | `updatePartLine` | any of: `status`, `eta`, `supplier_ref` | 200 |
+| 25 | `POST /ros/:roId/sublet/create` | P | `createSubletJob` | `line_item_id`, `vendor_ref` | 201 |
+| 26 | `PATCH /sublet/:subletJobId` | P | `updateSubletJob` | any of: `status`, `invoice_artifact_ref` | 200 |
+| 27 | `POST /dispatch/assign` | W | `dispatchTech` | `ro_id`, `line_item_id`, `tech_user_id` | 201 |
+| 28 | `POST /tech/tickets/:ticketId/status` | F | `updateTicketStatus` | `status` (own ticket, unless advisor/manager) | 200 |
+| 29 | `POST /tech/tickets/:ticketId/time` | F | `recordTimeEntry` | `event_type` (`start\|pause\|resume\|stop`) | 201 |
+| 30 | `POST /warranty/claims` | W + `warranty_admin` | `createWarrantyClaim` | `ro_id` | 201 |
+| 31 | `POST /comebacks` | W | `createComebackCase` | `original_ro_id` (must be `closed`), `new_ro_id`, `root_cause_category` | 201 |
+| 32 | `PATCH /comebacks/:comebackId` | W | `updateComebackCase` | `status` | 200 |
+| 33 | `GET /queues` | R | `listServiceQueueItems` | `location_id?`, `queue_type?`, `status?` (query) | 200 |
+| 34 | `POST /queues/:queueItemId/assign` | F | `assignServiceQueueItem` | — (assignee = caller; must be open and unclaimed) | 200 / 409 `queue_item_taken`·`queue_item_closed` |
+| 35 | `POST /queues/:queueItemId/update-status` | F | `updateServiceQueueItemStatus` | `status` | 200 |
+| 36 | `POST /queues/:queueItemId/escalate` | M | `escalateServiceQueueItem` | `reason` (`create_runbook: true` rejected) | 200 (priority → p0) |
+| 37 | `GET /ros/:roId/portal-tasks` | R | `listPortalTasks` | — | 200 |
+| 38 | `PATCH /portal-tasks/:portalTaskId` | W | `updatePortalTaskStatus` | `status` | 200 |
+| 39 | `POST /retention/first-service` | W | `createFirstServiceOffer` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`, `deal_id` | 201 / 409 `offer_already_exists` |
 
 ---
 
@@ -501,23 +505,30 @@ sequenceDiagram
   A->>DB: POST /appointments/:id/confirm
   C->>A: arrives
   A->>DB: POST /appointments/:id/check-in
-  Note over DB: appointment → converted_to_ro<br/>RO created @ checked_in<br/>queue item: waiting_checkin
+  Note over DB: appointment → converted_to_ro<br/>RO created @ checked_in<br/>queue: waiting_checkin
   T->>DB: POST /ros/:roId/mpi/start (RO → inspection_in_progress)
-  T->>DB: POST /mpi/:sid/results (× N items)
+  T->>DB: POST /mpi/:sid/results (× N, severity required unless pass)
   T->>DB: POST /mpi/:sid/submit
-  Note over DB: attention/fail results →<br/>service_recommendations (p0/p1/p2)
+  Note over DB: attention/fail results →<br/>recommendations (p0/p1/p2 by severity)
   A->>DB: POST /ros/:roId/recommendations/send-to-customer
-  Note over DB: task in service_portal_tasks
+  A->>DB: POST /ros/:roId/line-items (× N)
+  A->>DB: PATCH /ros/:roId/line-items/:id { price_ref }
   A->>DB: POST /ros/:roId/estimates/generate (RO → estimate_pending)
   A->>DB: POST /ros/:roId/estimates/:eid/send (RO → awaiting_authorization)
-  C->>A: approves items (portal/signature/…)
+  C->>A: decides line by line
   A->>DB: POST /ros/:roId/authorizations/record
-  Note over DB: status derived from the decision;<br/>line items approved/declined
+  Note over DB: status derived from the decision;<br/>approved lines snapshotted;<br/>their prices now frozen
   A->>DB: POST /ros/:roId/transition {authorized, step_up_token}
   Note over DB: gate: approval of the CURRENT<br/>estimate with ≥1 approved line
-  A->>DB: POST /dispatch/assign (per line item)
+  A->>DB: POST /ros/:roId/transition {in_repair}
+  Note over DB: gate: ≥1 line approved or not_required
+  A->>DB: POST /dispatch/assign (needs an active tech_profile at this location)
   T->>DB: POST /tech/tickets/:tid/time {start} … {stop}
-  A->>DB: POST /ros/:roId/transition {qc} → {ready_for_pickup} → {closed}
+  T->>DB: PATCH /ros/:roId/line-items/:id {status: completed}
+  A->>DB: POST /ros/:roId/transition {qc}
+  A->>DB: POST /ros/:roId/transition {ready_for_pickup}
+  Note over DB: gates: no open work,<br/>no undecided line
+  A->>DB: POST /ros/:roId/transition {closed}
   Note over DB: cycle-time histogram observed
 ```
 
@@ -555,6 +566,18 @@ re-run. Everything added since is in 050, which is additive.
 
 **No `ON DELETE` behaviour.** All foreign keys remain `NO ACTION`, so deleting a parent with
 children errors. This suits the append-only posture but is undocumented in the schema itself.
+
+**Recommendation outcomes are never recorded.** `service_recommendations.status` can reach
+`sent_to_customer`, but nothing sets `accepted`, `declined` or `expired` — the customer's answer is
+captured against line items, not against the recommendation that proposed them. Two things depend on
+that link and are therefore inert: the `service_mpi_conversion_rate` numerator is always zero, and
+the "previously declined recommendations" list in `quickStartIntake` is always empty. Closing this
+needs a decision about whether a recommendation is the same object as the line item it becomes.
+
+**SLA targets must be configured before the breach metric reports.** `sla_due_at` is only populated
+when a tenant has a `service_sla_defaults` row for that queue, and nothing writes those rows yet —
+there is no endpoint or seed for them. Until one exists, queue items carry no due time and
+`service_sla_breach_rate` has no population to measure.
 
 **No cursor pagination.** `limit`/`offset` is adequate for the cockpit's page sizes but drifts on a
 busy queue; a keyset cursor would be stable.
@@ -617,7 +640,7 @@ Three invariants a new endpoint must preserve:
 
 ## 14. Appendix — Quick Reference
 
-**Tables (23):** `service_appointments`, `service_appointment_events`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `step_up_token_uses` — plus `audit_events` and `schema_migrations` from the platform migration.
+**Tables (23 domain):** `service_appointments`, `service_appointment_events`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `service_sla_defaults`, `step_up_token_uses` — plus `audit_events` and `schema_migrations`, giving 25 in the database.
 
 **RO statuses (14):** `draft`, `checked_in`, `inspection_in_progress`, `estimate_pending`, `awaiting_authorization`, `authorized`, `in_repair`, `waiting_parts`, `sublet_in_progress`, `qc`, `ready_for_pickup`, `closed`, `canceled`, `comeback`
 
@@ -625,9 +648,9 @@ Three invariants a new endpoint must preserve:
 
 **RO event types:** `created`, `created_from_appointment`, `status_changed`, `mpi_started`, `mpi_submitted`, `recommendations_sent`, `estimate_generated`, `estimate_sent`, `authorization_received`, `comeback_opened`, `comeback_linked`
 
-**Appointment event types:** `confirmed`, `checked_in`
+**Appointment event types:** `confirmed`, `checked_in`, `no_show`
 
-**Audit actions:** `service.appointment.created`, `service.ro.created`, `service.ro.created_from_appointment`, `service.ro.transitioned`, `service.authorization.recorded`, `service.comeback.created`, `service.queue_item.escalated`
+**Audit actions:** `service.appointment.created`, `service.ro.created`, `service.ro.created_from_appointment`, `service.ro.transitioned`, `service.authorization.recorded`, `service.comeback.created`, `service.queue_item.escalated`, `service.retention.first_service_offered`
 
 **Roles:** `platform_admin`, `service_manager`, `service_advisor`, `service_technician`, `parts_clerk`, `warranty_admin`, `service_viewer`
 
@@ -637,6 +660,6 @@ Three invariants a new endpoint must preserve:
 
 **Authorization methods:** `portal`, `signature`, `staff_attestation`, `recorded_call_ref` · **Priorities:** `p0` (safety) > `p1` (maintenance) > `p2` · **Comeback severities:** `sev0`–`sev3`
 
-**Error codes:** `validation_error`, `evidence_required`, `severity_required`, `tech_not_available`, `invalid_time_sequence`, `work_incomplete`, `offer_already_exists`, `unauthorized`, `forbidden`, `tenant_mismatch`, `step_up_required`, `not_found`, `ro_not_found`, `line_item_not_found`, `estimate_not_found`, `unknown_line_items`, `contradictory_decision`, `line_items_not_pending`, `line_item_declined`, `invalid_appointment_status`, `appointment_already_converted`, `invalid_session_status`, `ro_not_inspectable`, `ro_not_estimable`, `ro_not_estimate_pending`, `estimate_not_draft`, `estimate_not_sent`, `original_ro_not_closed`, `no_line_items`, `queue_item_taken`, `queue_item_closed`, `mixed_currency`, `concurrent_modification`, `invalid_transition`, `authorization_required`, `status_not_directly_updatable`, `authorization_fields_readonly`, `unknown_view`, `overrides_unsupported`, `runbook_unsupported`, `not_ticket_assignee`, `route_not_found`, `internal_error`
+**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `work_incomplete`
 
 **Queue types (closed set, DB-enforced):** `appointments_today`, `waiting_checkin`, `waiting_authorization`, `waiting_parts`, `in_repair`, `qc`, `ready_pickup`, `comeback_review`, `no_show_followup`
