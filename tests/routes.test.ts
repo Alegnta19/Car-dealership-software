@@ -233,13 +233,20 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
       { to_status: 'authorized', step_up_token: stepUp('ro.transition:authorized') });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, { status: 'canceled' });
+    // The second line was put to the customer, never answered, and the work done anyway.
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, { status: 'completed' });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
 
     const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
     assert.equal(pickup.status, 422);
     assert.equal(pickup.body.error.code, 'decision_outstanding',
       'a line the customer never answered blocks delivery');
+
+    // Withdrawing that line instead releases the vehicle: cancelled work is not
+    // outstanding, because there is nothing left to do and nothing to bill.
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, { status: 'canceled' });
+    const retry = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    assert.equal(retry.status, 200, JSON.stringify(retry.body));
   });
 
   test('a partially decided estimate can still receive its remaining decision', async () => {
@@ -382,6 +389,65 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     // The ledger row is the only thing that makes a second use fail.
     const spent = await query('SELECT jti FROM step_up_token_uses WHERE resource_id=$1', [roId]);
     assert.equal(spent.rows.length, 1, 'the token was recorded as consumed');
+  });
+
+  // ── Billable work added after the estimate went out ─────────
+
+  /** Drives a repair order to in_repair with one approved, priced line. */
+  async function roInRepair() {
+    const { roId, lineId } = await pricedRO();
+    const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
+    await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
+    await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
+      estimate_id: est.body.data.estimate_id, method: 'portal',
+      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+    });
+    await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'authorized',
+      step_up_token: signStepUpToken({
+        tenantId: tenant, userId: advisor.userId, action: 'ro.transition:authorized', resourceId: roId,
+      }),
+    });
+    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
+    return { roId, lineId };
+  }
+
+  test('a chargeable line invented mid-repair cannot be delivered', async () => {
+    const { roId, lineId } = await roInRepair();
+
+    // Extra work found on the bench, priced, and never put to the customer. It carries the
+    // default not_required rather than pending, so a gate that only looks for pending lines
+    // would let it through and it would land on the invoice unapproved.
+    const extra = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
+      line_type: 'labor', description: 'Found on the bench', estimated_hours: 2,
+    });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${extra.body.data.line_item_id}`, {
+      price_ref: { amount_cents: 80_000, currency: 'USD' },
+    });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${extra.body.data.line_item_id}`, { status: 'completed' });
+    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
+
+    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    assert.equal(pickup.status, 422);
+    assert.equal(pickup.body.error.code, 'decision_outstanding');
+  });
+
+  test('unpriced warranty or goodwill work still delivers without a customer decision', async () => {
+    const { roId, lineId } = await roInRepair();
+
+    // No price: warranty, internal or goodwill work, which is exactly what not_required is
+    // for. This must not be caught by the chargeable-work gate.
+    const warranty = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
+      line_type: 'labor', description: 'Warranty recall', estimated_hours: 1,
+    });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${warranty.body.data.line_item_id}`, { status: 'completed' });
+    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
+
+    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    assert.equal(pickup.status, 200, JSON.stringify(pickup.body));
+    assert.equal(pickup.body.data.status, 'ready_for_pickup');
   });
 
   // ── Re-quoting ──────────────────────────────────────────────

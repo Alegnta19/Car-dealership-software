@@ -460,32 +460,39 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
   test('updated_at is maintained by the database, not by remembering to set it', async () => {
     const appt = await newAppointment();
 
-    // Back-date it, so "the trigger fired" and "nothing happened" cannot look alike.
-    await query(
-      `UPDATE service_appointments SET updated_at = NOW() - INTERVAL '10 days' WHERE appointment_id=$1`,
+    // First direction: the column is not the statement's to write. This UPDATE asks for a
+    // ten-day-old value and must not get it -- `set_updated_at` is a BEFORE UPDATE trigger
+    // that assigns NOW() unconditionally, so it overrides whatever the statement supplied.
+    // (An earlier version of this test back-dated the row as a setup step and then compared
+    // timestamps in JavaScript. The back-dating was silently undone by the very trigger
+    // under test, so both readings were really NOW() taken milliseconds apart, and the
+    // assertion passed or failed on clock resolution.)
+    const backdated = await query(
+      `UPDATE service_appointments SET updated_at = NOW() - INTERVAL '10 days'
+        WHERE appointment_id=$1
+        RETURNING updated_at > NOW() - INTERVAL '1 minute' AS trigger_won, updated_at::text AS at`,
       [appt.appointment_id],
     );
-    await query(
-      `UPDATE service_appointments SET updated_at = NOW() - INTERVAL '10 days' WHERE appointment_id=$1`,
-      [appt.appointment_id],
-    );
-    const stale = await query(`SELECT updated_at FROM service_appointments WHERE appointment_id=$1`, [
-      appt.appointment_id,
-    ]);
-    const staleAt = new Date(stale.rows[0].updated_at).getTime();
+    assert.ok(backdated.rows[0].trigger_won, 'the trigger must override an updated_at supplied by the statement');
+    const before = backdated.rows[0].at;
 
-    // A statement that touches a different column and deliberately never mentions
-    // updated_at. Only the trigger can move it.
+    // Second direction: it advances on a statement that never mentions it. Compared inside
+    // Postgres against the captured text, so the check keeps full microsecond precision --
+    // a JavaScript Date truncates to whole milliseconds, which is what made this flaky.
+    // The sleep puts the two statements in provably distinct transaction clocks.
+    await query(`SELECT pg_sleep(0.05)`);
     await query(`UPDATE service_appointments SET scheduled_end = NOW() WHERE appointment_id=$1`, [
       appt.appointment_id,
     ]);
 
-    const after = await query(`SELECT updated_at FROM service_appointments WHERE appointment_id=$1`, [
-      appt.appointment_id,
-    ]);
-    const afterAt = new Date(after.rows[0].updated_at).getTime();
-    assert.ok(afterAt > staleAt, 'updated_at must advance without the statement setting it');
-    assert.ok(Date.now() - afterAt < 60_000, 'and it must advance to now, not to some other stale value');
+    const after = await query(
+      `SELECT updated_at > $2::timestamptz AS advanced,
+              updated_at <= NOW()          AS not_in_the_future
+         FROM service_appointments WHERE appointment_id=$1`,
+      [appt.appointment_id, before],
+    );
+    assert.ok(after.rows[0].advanced, 'updated_at must advance without the statement setting it');
+    assert.ok(after.rows[0].not_in_the_future, 'and it must advance to now, not to some other value');
   });
 
   test('a rejected second offer leaves no orphan appointment behind', async () => {
@@ -653,7 +660,27 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
         event_type: 'stop', occurred_at: new Date(Date.now() - 3_600_000).toISOString(),
       });
       await svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { sold_hours: 1 });
+      await svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { status: 'completed' });
     }
+
+    // A third job, clocked but still open. It belongs in the utilization numerator -- the
+    // bay really was busy -- but must stay out of efficiency and proficiency, whose
+    // numerators are whole-line figures that only mean something once the work is done.
+    const openAppt = await newAppointment();
+    const openRO = await svc.checkIn(w.tenantA, openAppt.appointment_id, {});
+    const openLine = await svc.addLineItem(w.tenantA, openRO.ro_id, {
+      line_type: 'labor', description: 'Job still open', estimated_hours: 8,
+    });
+    const openTicket = await svc.dispatchTech(w.tenantA, {
+      ro_id: openRO.ro_id, line_item_id: openLine.line_item_id, tech_user_id: tech,
+    });
+    await svc.recordTimeEntry(w.tenantA, openTicket.ticket_id, {
+      event_type: 'start', occurred_at: new Date(Date.now() - 7_200_000).toISOString(),
+    });
+    await svc.recordTimeEntry(w.tenantA, openTicket.ticket_id, {
+      event_type: 'stop', occurred_at: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    await svc.updateLineItem(w.tenantA, openRO.ro_id, openLine.line_item_id, { sold_hours: 8 });
 
     await refreshAggregatedMetrics();
     const exposition = await promClient.register.metrics();
@@ -663,14 +690,19 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
       return Number(line!.slice(line!.lastIndexOf(' ') + 1));
     };
 
-    // Two clocked hours against one technician's 40h/week over the 30-day window.
-    const expectedUtilization = 2 / (40 * (30 / 7));
+    // Three clocked hours in total against one technician's 40h/week over the 30-day
+    // window -- the open job's hour counts here too.
+    const expectedUtilization = 3 / (40 * (30 / 7));
     assert.ok(
       Math.abs(seriesFor('service_tech_utilization') - expectedUtilization) < 1e-4,
-      'scheduled hours counted once per technician, not once per ticket',
+      'scheduled hours counted once per technician, not once per ticket, and open work still counts as clocked',
     );
-    assert.ok(Math.abs(seriesFor('service_tech_efficiency') - 1) < 1e-4, '2 sold ÷ 2 clocked');
-    assert.ok(Math.abs(seriesFor('service_tech_proficiency') - 1) < 1e-4, '2 estimated ÷ 2 clocked');
+
+    // Efficiency and proficiency see only the two finished jobs: 2 sold ÷ 2 clocked and
+    // 2 estimated ÷ 2 clocked. If the open job leaked in, its 8 sold hours against 1
+    // clocked hour would drag efficiency to 10/3.
+    assert.ok(Math.abs(seriesFor('service_tech_efficiency') - 1) < 1e-4, '2 sold ÷ 2 clocked on finished work');
+    assert.ok(Math.abs(seriesFor('service_tech_proficiency') - 1) < 1e-4, '2 estimated ÷ 2 clocked on finished work');
 
     // No parts were requested, so the backorder ratio has no denominator and is absent
     // rather than reported as a confident zero.
@@ -733,5 +765,234 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
     assert.equal(estimate.totals_ref.currency, 'USD');
     assert.equal(estimate.totals_ref.priced_line_count, 1);
     assert.equal(estimate.totals_ref.unpriced_line_count, 1);
+  });
+
+  // -- Round five: populations, boundaries and label bounds ----
+
+  const estimateStatus = async (estimateId: string) =>
+    (await query(`SELECT status FROM ro_estimates WHERE estimate_id=$1`, [estimateId])).rows[0].status;
+
+  const stepUp = (roId: string) => signStepUpToken({
+    tenantId: w.tenantA.tenantId,
+    userId: w.tenantA.userId,
+    action: 'ro.transition:authorized',
+    resourceId: roId,
+  });
+
+  test('a supplemental estimate is scored on its own lines, not the whole repair order', async () => {
+    const appt = await newAppointment();
+    const ro = await svc.checkIn(w.tenantA, appt.appointment_id, {});
+    const brakes = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Brakes' });
+    const wipers = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Wipers' });
+
+    const v1 = await svc.generateEstimate(w.tenantA, ro.ro_id, {});
+    await svc.sendEstimate(w.tenantA, ro.ro_id, v1.estimate_id, {});
+    await svc.recordAuthorization(w.tenantA, ro.ro_id, {
+      estimate_id: v1.estimate_id,
+      method: 'portal',
+      approved_items: [brakes.line_item_id],
+      declined_items: [wipers.line_item_id],
+      evidence_refs: { portal_submission_id: randomUUID() },
+    });
+    assert.equal(await estimateStatus(v1.estimate_id), 'partially_approved', 'one line taken, one refused');
+
+    await svc.transitionRO(w.tenantA, ro.ro_id, 'authorized', { step_up_token: stepUp(ro.ro_id) });
+    await svc.transitionRO(w.tenantA, ro.ro_id, 'in_repair', {});
+
+    // Extra work found on the bench, quoted as a supplemental and approved outright.
+    const coolant = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Coolant flush' });
+    const v2 = await svc.generateEstimate(w.tenantA, ro.ro_id, {});
+    await svc.sendEstimate(w.tenantA, ro.ro_id, v2.estimate_id, {});
+    await svc.recordAuthorization(w.tenantA, ro.ro_id, {
+      estimate_id: v2.estimate_id,
+      method: 'portal',
+      approved_items: [coolant.line_item_id],
+      evidence_refs: { portal_submission_id: randomUUID() },
+    });
+
+    // v2 asked about one line and the customer took it. Counting the whole repair order
+    // instead dragged the earlier decline into v2's score and reported partially_approved.
+    assert.equal(await estimateStatus(v2.estimate_id), 'approved', 'v2 is scored on the line v2 asked about');
+    assert.equal(await estimateStatus(v1.estimate_id), 'partially_approved', 'and v1 is left as the customer left it');
+  });
+
+  test('a line withdrawn while undecided does not hold its estimate open forever', async () => {
+    const appt = await newAppointment();
+    const ro = await svc.checkIn(w.tenantA, appt.appointment_id, {});
+    const keep = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Brakes' });
+    const drop = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Wipers' });
+
+    const est = await svc.generateEstimate(w.tenantA, ro.ro_id, {});
+    await svc.sendEstimate(w.tenantA, ro.ro_id, est.estimate_id, {});
+
+    // Withdrawn before the customer answered: no longer outstanding, and never decided.
+    await svc.updateLineItem(w.tenantA, ro.ro_id, drop.line_item_id, { status: 'canceled' });
+    await svc.recordAuthorization(w.tenantA, ro.ro_id, {
+      estimate_id: est.estimate_id,
+      method: 'portal',
+      approved_items: [keep.line_item_id],
+      evidence_refs: { portal_submission_id: randomUUID() },
+    });
+
+    assert.equal(
+      await estimateStatus(est.estimate_id),
+      'approved',
+      'every surviving line was approved, so a cancelled line must not count as still pending',
+    );
+  });
+
+  test('price_ref must carry a readable amount', async () => {
+    const appt = await newAppointment();
+    const ro = await svc.checkIn(w.tenantA, appt.appointment_id, {});
+    const line = await svc.addLineItem(w.tenantA, ro.ro_id, { line_type: 'labor', description: 'Brakes' });
+
+    const rejected: unknown[] = [
+      { amount_cents: 'call for price' },
+      { amount_cents: -1 },
+      { amount_cents: Number.NaN },
+      { amount_cents: 100, currency: 7 },
+      [1, 2],
+    ];
+    for (const bad of rejected) {
+      await assert.rejects(
+        () => svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { price_ref: bad }),
+        (err: any) => err.statusCode === 400,
+        `price_ref ${JSON.stringify(bad)} must be refused at the boundary`,
+      );
+    }
+
+    // The shape the rest of the system reads is still accepted, including "no charge".
+    await svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { price_ref: { amount_cents: 0, currency: 'USD' } });
+    await svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { price_ref: {} });
+  });
+
+  test('a line whose stored price cannot be read blocks handover instead of crashing the gate', async () => {
+    const { ro, line, estimate } = await roAwaitingAuthorization();
+    await svc.recordAuthorization(w.tenantA, ro.ro_id, {
+      estimate_id: estimate.estimate_id,
+      method: 'portal',
+      approved_items: [line.line_item_id],
+      evidence_refs: { portal_submission_id: randomUUID() },
+    });
+    await svc.transitionRO(w.tenantA, ro.ro_id, 'authorized', { step_up_token: stepUp(ro.ro_id) });
+    await svc.transitionRO(w.tenantA, ro.ro_id, 'in_repair', {});
+    await svc.updateLineItem(w.tenantA, ro.ro_id, line.line_item_id, { status: 'completed' });
+
+    // Written straight to the table, the way data predating the validation looks. The
+    // delivery gate casts amount_cents to numeric, so free text here used to raise
+    // invalid_text_representation -- and because the gate runs on every handover attempt,
+    // the repair order was wedged at HTTP 500 with no route out through the API.
+    await query(
+      `INSERT INTO ro_line_items (line_item_id,tenant_id,ro_id,line_type,description,
+         authorization_status,status,price_ref)
+       VALUES ($1,$2,$3,'parts','Legacy part','not_required','completed','{"amount_cents":"call for price"}')`,
+      [randomUUID(), w.tenantA.tenantId, ro.ro_id],
+    );
+
+    await svc.transitionRO(w.tenantA, ro.ro_id, 'qc', {});
+    await assert.rejects(
+      () => svc.transitionRO(w.tenantA, ro.ro_id, 'ready_for_pickup', {}),
+      (err: any) => err.code === 'decision_outstanding' && err.statusCode === 422,
+      'an unreadable price fails closed with an actionable 422, not a 500',
+    );
+  });
+
+  test('creating a repair order validates the same fields check-in does', async () => {
+    const base = {
+      location_id: w.locationA,
+      mdm_customer_id: w.customer,
+      mdm_vehicle_id: w.vehicle,
+    };
+
+    await assert.rejects(
+      () => svc.createRO(w.tenantA, { ...base, odometer: 12.5 }),
+      (err: any) => err.statusCode === 400 && /odometer/.test(err.message),
+    );
+    await assert.rejects(
+      () => svc.createRO(w.tenantA, { ...base, odometer: -1 }),
+      (err: any) => err.statusCode === 400,
+    );
+    await assert.rejects(
+      () => svc.createRO(w.tenantA, { ...base, promised_time: 'tomorrow afternoon' }),
+      (err: any) => err.statusCode === 400 && /promised_time/.test(err.message),
+    );
+
+    const ok = await svc.createRO(w.tenantA, { ...base, odometer: 42_000, promised_time: futureISO() });
+    assert.equal(ok.odometer, 42_000);
+  });
+
+  test('concerns must be an array wherever it is written', async () => {
+    await assert.rejects(
+      () => svc.createAppointment(w.tenantA, {
+        location_id: w.locationA,
+        mdm_customer_id: w.customer,
+        mdm_vehicle_id: w.vehicle,
+        scheduled_start: futureISO(),
+        concerns: 'brakes squeal at low speed',
+      }),
+      (err: any) => err.statusCode === 400 && /concerns must be an array/.test(err.message),
+    );
+
+    const appt = await newAppointment();
+    await assert.rejects(
+      () => svc.updateAppointment(w.tenantA, appt.appointment_id, { concerns: 'still a string' }),
+      (err: any) => err.statusCode === 400 && /concerns must be an array/.test(err.message),
+    );
+
+    // The column defaults to an array and every reader assumes one.
+    assert.ok(Array.isArray(appt.concerns));
+  });
+
+  test('an unsupported view override is refused whatever type it arrives as', async () => {
+    // A query string turns everything into a string, which is how a caller most easily
+    // reaches this argument. The guard used to look for object keys without first
+    // establishing that the value WAS an object, so every scalar fell through and was
+    // quietly dropped -- leaving the caller believing their filter had been applied.
+    const refused: unknown[] = ['location=store2', 42, true, ['location'], { location: 'store2' }];
+    for (const override of refused) {
+      await assert.rejects(
+        () => svc.queryServiceCockpitView(w.tenantA, 'todays_queue', override),
+        (err: any) => err.code === 'overrides_unsupported',
+        `override ${JSON.stringify(override)} must be refused, not ignored`,
+      );
+    }
+
+    // Absent, or present but empty, both mean "no overrides" and are fine.
+    await svc.queryServiceCockpitView(w.tenantA, 'todays_queue');
+    await svc.queryServiceCockpitView(w.tenantA, 'todays_queue', {});
+  });
+
+  test('an unrecognised queue type is published as "other" rather than as its own series', async () => {
+    // The CHECK constraints on these columns were added NOT VALID so that history holding
+    // free text would not block the migration, which means such rows can still be present.
+    // Simulated by dropping the constraint for the length of this test.
+    await query(`ALTER TABLE service_queue_items DROP CONSTRAINT service_queue_items_queue_type_check`);
+    try {
+      for (const legacy of ['legacy_queue_alpha', 'legacy_queue_beta']) {
+        await query(
+          `INSERT INTO service_queue_items (queue_item_id,tenant_id,location_id,queue_type,status,priority)
+           VALUES ($1,$2,$3,$4,'queued','p1')`,
+          [randomUUID(), w.tenantA.tenantId, w.locationA, legacy],
+        );
+      }
+
+      await refreshAggregatedMetrics();
+      const exposition = await promClient.register.metrics();
+
+      assert.ok(
+        !/service_queue_depth\{queue_type="legacy_queue/.test(exposition),
+        'free text from the database must never become a Prometheus label on an unauthenticated endpoint',
+      );
+      assert.ok(
+        exposition.includes(`service_queue_depth{queue_type="other",location="${w.locationA}"} 2`),
+        'and the two collapsed rows must be summed, not overwritten by whichever was written last',
+      );
+    } finally {
+      await query(
+        `ALTER TABLE service_queue_items ADD CONSTRAINT service_queue_items_queue_type_check CHECK (queue_type IN (
+           'appointments_today','waiting_checkin','waiting_authorization','waiting_parts',
+           'in_repair','qc','ready_pickup','comeback_review','no_show_followup')) NOT VALID`,
+      );
+    }
   });
 });

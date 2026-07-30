@@ -2,7 +2,7 @@ import * as promClient from 'prom-client';
 import { query } from '../../../shared/database/pool';
 import { pruneConsumedStepUpTokens } from '../../../shared/security/step-up';
 import { logger } from '../../../shared/utils/logger';
-import { aggregatedMetrics } from './service-cockpit-service';
+import { aggregatedMetrics, COMEBACK_ROOT_CAUSES, QUEUE_TYPES } from './service-cockpit-service';
 
 // ============================================================
 // Phase 248 — Metrics aggregation
@@ -31,8 +31,31 @@ const {
   svcQueueDepth,
 } = aggregatedMetrics;
 
+type Publish = () => void;
+
 /** How far back rate calculations look. */
 const WINDOW_DAYS = Number(process.env.METRICS_WINDOW_DAYS ?? 30);
+
+/*
+ * Label values that come from a database column are bounded here before they reach the
+ * registry.
+ *
+ * `queue_type` and `root_cause_category` carry CHECK constraints, but both were added
+ * NOT VALID so that history containing free text would not block the migration — which
+ * means the columns can still hold arbitrary strings today. /metrics is unauthenticated
+ * and a Prometheus label is a new time series per distinct value, so publishing those
+ * strings verbatim turned old free-text data into unbounded cardinality on a public
+ * surface. Anything outside the known set is reported as `other`: the series stays
+ * countable and the unrecognised value is logged once per pass instead.
+ */
+const KNOWN_QUEUE_TYPES: ReadonlySet<string> = new Set(QUEUE_TYPES);
+const KNOWN_ROOT_CAUSES: ReadonlySet<string> = new Set(COMEBACK_ROOT_CAUSES);
+
+function boundedLabel(value: unknown, known: ReadonlySet<string>, field: string): string {
+  if (typeof value === 'string' && known.has(value)) return value;
+  logger.debug({ field, value }, 'Unrecognised label value collapsed to "other"');
+  return 'other';
+}
 
 function ratio(numerator: unknown, denominator: unknown): number | null {
   const n = Number(numerator);
@@ -49,7 +72,7 @@ function ratio(numerator: unknown, denominator: unknown): number | null {
  * Histograms are excluded throughout: they are cumulative by definition.
  */
 
-async function refreshPartsMetrics(): Promise<void> {
+async function refreshPartsMetrics(): Promise<Publish> {
   const rows = (
     await query(
       `SELECT ro.location_id,
@@ -63,10 +86,12 @@ async function refreshPartsMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of rows) {
-    const rate = ratio(row.backordered, row.total);
-    if (rate !== null) svcPartsBackorderRate.set({ location: row.location_id }, rate);
-  }
+  const publishBackorder: Publish = () => {
+    for (const row of rows) {
+      const rate = ratio(row.backordered, row.total);
+      if (rate !== null) svcPartsBackorderRate.set({ location: row.location_id }, rate);
+    }
+  };
 
   // Observed once per part, keyed on `received_at` — a timestamp written when the part
   // first arrives and never moved again. Measuring from `updated_at` re-observed the
@@ -97,6 +122,8 @@ async function refreshPartsMetrics(): Promise<void> {
     const seen = new Date(row.received_at);
     if (seen > partsWaitHighWater) partsWaitHighWater = seen;
   }
+
+  return publishBackorder;
 }
 
 /**
@@ -109,7 +136,7 @@ async function refreshPartsMetrics(): Promise<void> {
  */
 let partsWaitHighWater = new Date();
 
-async function refreshQualityMetrics(): Promise<void> {
+async function refreshQualityMetrics(): Promise<Publish> {
   // A QC failure is a repair order sent back from qc to in_repair — the transition is
   // in the event log even though no checklist exists yet.
   const rows = (
@@ -127,10 +154,12 @@ async function refreshQualityMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of rows) {
-    const rate = ratio(row.failures, row.inspections);
-    if (rate !== null) svcQCFailRate.set({ location: row.location_id }, rate);
-  }
+  const publishQC: Publish = () => {
+    for (const row of rows) {
+      const rate = ratio(row.failures, row.inspections);
+      if (rate !== null) svcQCFailRate.set({ location: row.location_id }, rate);
+    }
+  };
 
   // The denominator is "repair orders that CLOSED in the window", taken from the event
   // log rather than from current status. Opening a comeback flips the original out of
@@ -148,11 +177,17 @@ async function refreshQualityMetrics(): Promise<void> {
         GROUP BY ro.location_id`,
       [WINDOW_DAYS],
     ),
+    // Same cohort as the denominator: comebacks against repair orders that CLOSED in the
+    // window, not comebacks RAISED in it. Counting by raise date mixed in returns against
+    // work closed months earlier, which can report more comebacks than there were closures.
     query(
-      `SELECT ro.location_id, cc.root_cause_category AS category, COUNT(*)::int AS comebacks
+      `SELECT ro.location_id, cc.root_cause_category AS category, COUNT(DISTINCT cc.comeback_id)::int AS comebacks
          FROM comeback_cases cc
          JOIN repair_orders ro ON cc.original_ro_id = ro.ro_id AND ro.tenant_id = cc.tenant_id
-        WHERE cc.created_at > NOW() - ($1 || ' days')::interval
+         JOIN ro_events e ON e.ro_id = cc.original_ro_id AND e.tenant_id = cc.tenant_id
+        WHERE e.event_type = 'status_changed'
+          AND e.payload_ref->>'to' = 'closed'
+          AND e.occurred_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id, cc.root_cause_category`,
       [WINDOW_DAYS],
     ),
@@ -162,10 +197,18 @@ async function refreshQualityMetrics(): Promise<void> {
     closings.rows.map((r: any) => [r.location_id, Number(r.closed_ros)]),
   );
 
-  for (const row of comebacks.rows) {
-    const rate = ratio(row.comebacks, closedByLocation.get(row.location_id));
-    if (rate !== null) svcComebackRate.set({ location: row.location_id, category: row.category }, rate);
-  }
+  return () => {
+    publishQC();
+    for (const row of comebacks.rows) {
+      const rate = ratio(row.comebacks, closedByLocation.get(row.location_id));
+      if (rate !== null) {
+        svcComebackRate.set(
+          { location: row.location_id, category: boundedLabel(row.category, KNOWN_ROOT_CAUSES, 'root_cause_category') },
+          rate,
+        );
+      }
+    }
+  };
 }
 
 /**
@@ -179,7 +222,7 @@ async function refreshQualityMetrics(): Promise<void> {
  * summed separately from `tech_profiles`: joining the two would fan out a technician who
  * holds profiles at more than one location, counting their hours once per profile.
  */
-async function refreshTechnicianMetrics(): Promise<void> {
+async function refreshTechnicianMetrics(): Promise<Publish> {
   const [work, capacity] = await Promise.all([
     query(
       `WITH paired AS (
@@ -207,10 +250,17 @@ async function refreshTechnicianMetrics(): Promise<void> {
        -- Rolled up per LINE ITEM before joining it: a line worked under two tickets
        -- (a reassignment, a paused-and-resumed job) otherwise contributed its sold and
        -- estimated hours once per ticket, inflating efficiency and proficiency.
+       -- Two different populations, deliberately. Efficiency and proficiency compare a
+       -- WHOLE-LINE figure (sold, estimated) against clocked time, so they may only count
+       -- lines whose work has finished; a half-worked line makes the bay look ever more
+       -- efficient the longer it stays open. Utilization has no whole-line numerator --
+       -- clocked hours are clocked hours -- so restricting it to completed lines would
+       -- have hidden every hour spent on work still in progress.
        SELECT ro.location_id,
-              SUM(c.clocked_hours)                  AS clocked_hours,
-              SUM(COALESCE(li.sold_hours, 0))       AS sold_hours,
-              SUM(COALESCE(li.estimated_hours, 0))  AS estimated_hours
+              SUM(c.clocked_hours)                                                       AS clocked_hours,
+              SUM(c.clocked_hours) FILTER (WHERE li.status = 'completed')                AS clocked_hours_done,
+              SUM(COALESCE(li.sold_hours, 0)) FILTER (WHERE li.status = 'completed')      AS sold_hours,
+              SUM(COALESCE(li.estimated_hours, 0)) FILTER (WHERE li.status = 'completed') AS estimated_hours
          FROM clocked c
          JOIN ro_line_items li ON li.line_item_id = c.line_item_id AND li.tenant_id = c.tenant_id
          JOIN repair_orders ro ON ro.ro_id = li.ro_id AND ro.tenant_id = li.tenant_id
@@ -231,17 +281,19 @@ async function refreshTechnicianMetrics(): Promise<void> {
     capacity.rows.map((r: any) => [r.location_id, Number(r.scheduled_hours)]),
   );
 
-  for (const row of work.rows) {
-    const efficiency = ratio(row.sold_hours, row.clocked_hours);
-    const proficiency = ratio(row.estimated_hours, row.clocked_hours);
-    const utilization = ratio(row.clocked_hours, scheduledByLocation.get(row.location_id));
-    if (efficiency !== null) svcTechEfficiency.set({ location: row.location_id }, efficiency);
-    if (proficiency !== null) svcTechProficiency.set({ location: row.location_id }, proficiency);
-    if (utilization !== null) svcTechUtilization.set({ location: row.location_id }, utilization);
-  }
+  return () => {
+    for (const row of work.rows) {
+      const efficiency = ratio(row.sold_hours, row.clocked_hours_done);
+      const proficiency = ratio(row.estimated_hours, row.clocked_hours_done);
+      const utilization = ratio(row.clocked_hours, scheduledByLocation.get(row.location_id));
+      if (efficiency !== null) svcTechEfficiency.set({ location: row.location_id }, efficiency);
+      if (proficiency !== null) svcTechProficiency.set({ location: row.location_id }, proficiency);
+      if (utilization !== null) svcTechUtilization.set({ location: row.location_id }, utilization);
+    }
+  };
 }
 
-async function refreshQueueMetrics(): Promise<void> {
+async function refreshQueueMetrics(): Promise<Publish> {
   const depth = (
     await query(
       `SELECT location_id, queue_type, COUNT(*)::int AS cnt
@@ -251,9 +303,6 @@ async function refreshQueueMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of depth) {
-    svcQueueDepth.set({ queue_type: row.queue_type, location: row.location_id }, Number(row.cnt));
-  }
 
   // A breach counts whether or not the item is still open. Filtering the numerator to
   // 'queued'/'in_progress' meant an item that blew its SLA and was then completed left
@@ -266,8 +315,12 @@ async function refreshQueueMetrics(): Promise<void> {
               COUNT(*) FILTER (
                 WHERE sla_due_at < COALESCE(completed_at, NOW()))::int AS breached
          FROM (
+           -- updated_at is a last-modified column the trigger bumps on ANY later touch,
+           -- so using it as the completion time let an unrelated edit retroactively turn an
+           -- on-time item into a breach. Judged against now instead: an item that is closed
+           -- and was never overdue while open cannot become overdue afterwards.
            SELECT location_id, queue_type, sla_due_at,
-                  CASE WHEN status IN ('done','canceled') THEN updated_at END AS completed_at
+                  CASE WHEN status IN ('done','canceled') THEN LEAST(updated_at, NOW()) END AS completed_at
              FROM service_queue_items
             WHERE sla_due_at IS NOT NULL
               AND created_at > NOW() - ($1 || ' days')::interval
@@ -277,13 +330,41 @@ async function refreshQueueMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of sla) {
-    const rate = ratio(row.breached, row.total);
-    if (rate !== null) svcSLABreachRate.set({ job_type: row.queue_type, location: row.location_id }, rate);
-  }
+  return () => {
+    // Several raw queue_type values can collapse onto `other`, so depths are summed
+    // per published label rather than set — otherwise the last row written would win and
+    // the depth would under-report.
+    const depthByLabel = new Map<string, number>();
+    for (const row of depth) {
+      const label = boundedLabel(row.queue_type, KNOWN_QUEUE_TYPES, 'queue_type');
+      const key = `${label} ${row.location_id}`;
+      depthByLabel.set(key, (depthByLabel.get(key) ?? 0) + Number(row.cnt));
+    }
+    for (const [key, cnt] of depthByLabel) {
+      const [queue_type, location] = key.split(' ');
+      svcQueueDepth.set({ queue_type, location }, cnt);
+    }
+
+    // Breach rates are ratios, so collapsed labels must be recombined from their parts
+    // before dividing; averaging two rates would weight a 1-item queue like a 100-item one.
+    const slaByLabel = new Map<string, { breached: number; total: number }>();
+    for (const row of sla) {
+      const label = boundedLabel(row.queue_type, KNOWN_QUEUE_TYPES, 'queue_type');
+      const key = `${label} ${row.location_id}`;
+      const acc = slaByLabel.get(key) ?? { breached: 0, total: 0 };
+      acc.breached += Number(row.breached);
+      acc.total += Number(row.total);
+      slaByLabel.set(key, acc);
+    }
+    for (const [key, acc] of slaByLabel) {
+      const [job_type, location] = key.split(' ');
+      const rate = ratio(acc.breached, acc.total);
+      if (rate !== null) svcSLABreachRate.set({ job_type, location }, rate);
+    }
+  };
 }
 
-async function refreshConversionMetrics(): Promise<void> {
+async function refreshConversionMetrics(): Promise<Publish> {
   // How many recommendations put in front of a customer were accepted, by priority —
   // the closest thing the schema has to a recommendation "type".
   // Grouped by location as well as priority. Grouping by priority alone blended every
@@ -302,12 +383,6 @@ async function refreshConversionMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of rows) {
-    const rate = ratio(row.accepted, row.presented);
-    if (rate !== null) {
-      svcMPIConversionRate.set({ recommendation_type: row.recommendation_type, location: row.location_id }, rate);
-    }
-  }
 
   const retention = (
     await query(
@@ -321,15 +396,24 @@ async function refreshConversionMetrics(): Promise<void> {
     )
   ).rows;
 
-  for (const row of retention) {
-    const rate = ratio(row.converted, row.offered);
-    if (rate !== null) svcFirstServiceCaptureRate.set({ location: row.location_id }, rate);
-  }
+  return () => {
+    for (const row of rows) {
+      const rate = ratio(row.accepted, row.presented);
+      if (rate !== null) {
+        svcMPIConversionRate.set({ recommendation_type: row.recommendation_type, location: row.location_id }, rate);
+      }
+    }
+    for (const row of retention) {
+      const rate = ratio(row.converted, row.offered);
+      if (rate !== null) svcFirstServiceCaptureRate.set({ location: row.location_id }, rate);
+    }
+  };
 }
 
-async function pruneExpiredStepUpTokens(): Promise<void> {
+async function pruneExpiredStepUpTokens(): Promise<Publish> {
   const removed = await pruneConsumedStepUpTokens({ query });
   if (removed > 0) logger.debug({ removed }, 'Pruned consumed step-up tokens');
+  return () => undefined;
 }
 
 /**
@@ -342,7 +426,7 @@ export async function refreshAggregatedMetrics(): Promise<void> {
   // Each group clears only its OWN gauges, and only once it has data to replace them
   // with. Resetting everything up front meant one failing query blanked every series for
   // a whole interval — the opposite of the "a stale gauge beats no metrics" intent.
-  const groups: Array<[string, () => Promise<void>, promClient.Gauge<string>[]]> = [
+  const groups: Array<[string, () => Promise<Publish>, promClient.Gauge<string>[]]> = [
     ['parts', refreshPartsMetrics, [svcPartsBackorderRate]],
     ['quality', refreshQualityMetrics, [svcQCFailRate, svcComebackRate]],
     ['technicians', refreshTechnicianMetrics, [svcTechUtilization, svcTechEfficiency, svcTechProficiency]],
@@ -353,8 +437,12 @@ export async function refreshAggregatedMetrics(): Promise<void> {
 
   for (const [name, run, owned] of groups) {
     try {
+      // Collect first, then clear and publish together. Clearing before the query meant a
+      // transient failure wiped the group's series for the whole interval, which is exactly
+      // the outcome the per-group split was meant to avoid.
+      const publish = await run();
       for (const gauge of owned) gauge.reset();
-      await run();
+      publish();
     } catch (err) {
       logger.error({ err, group: name }, 'Metrics aggregation group failed');
     }

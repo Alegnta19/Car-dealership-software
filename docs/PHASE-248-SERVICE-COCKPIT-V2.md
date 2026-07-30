@@ -390,7 +390,7 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 | Function | Behavior |
 |---|---|
 | `getServiceCockpitHome(ctx, locationId?)` | Queue summary (grouped counts), top-20 overdue SLA items, today's appointments by status, backordered-parts count, open comebacks — all consistently location-filtered when `locationId` is given. Returns six bilingual "featured views" and a `trust_summary`. |
-| `queryServiceCockpitView(ctx, viewId, overrides?)` | Maps a known view id to queue types and returns up to 100 queue items joined to their RO summary. An unknown `viewId` is a 400; non-empty `overrides` are rejected rather than ignored. |
+| `queryServiceCockpitView(ctx, viewId, overrides?)` | Maps a known view id to queue types and returns up to 100 queue items joined to their RO summary. An unknown `viewId` is a 400. `overrides` are unimplemented, so anything other than an absent or empty object is rejected rather than ignored — including scalars such as a string arriving from a query parameter. |
 
 ### SSIS2 — Scheduling & intake
 | Function | Behavior |
@@ -404,11 +404,11 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 ### ROLS2 — Repair order lifecycle
 | Function | Behavior |
 |---|---|
-| `createRO(ctx, params)` **[tx]** | Inserts at `draft` (status written explicitly, not left to the column default); verifies any supplied `appointment_id` is the caller's; writes a `created` event. Counter and audit after commit. |
+| `createRO(ctx, params)` **[tx]** | Validates `odometer` and `promised_time` on the same terms as `checkIn`; inserts at `draft` (status written explicitly, not left to the column default); verifies any supplied `appointment_id` is the caller's and not already converted; writes a `created` event. Counter and audit after commit. |
 | `getRO(ctx, roId)` | The RO plus seven child collections in parallel — line items, last-30 events, estimates (version desc), authorizations, parts, sublets, work tickets — every query tenant-scoped. |
 | `transitionRO(ctx, roId, toStatus, {reason, step_up_token})` **[tx]** | Row-locked validate-and-write with the authorization and step-up gates; see [§6](#6-repair-order-state-machine). Cycle-time histogram and audit after commit. |
 | `addLineItem(ctx, roId, params)` **[tx]** | Proves RO ownership, then inserts at `proposed` / `not_required`. |
-| `updateLineItem(ctx, roId, lineItemId, updates)` **[tx]** | Proves RO and line-item ownership. Accepts `status`, `assigned_tech_user_id`, `sold_hours`, `price_ref`; refuses the authorization fields. |
+| `updateLineItem(ctx, roId, lineItemId, updates)` **[tx]** | Proves RO and line-item ownership under a row lock. Writable fields are split by role: `status` is shop-floor progress, while `sold_hours` and `price_ref` decide what the customer is billed and are restricted to `service_advisor` / `service_manager`. A technician may only move a line they were dispatched to. `assigned_tech_user_id` is refused outright — assignment goes through `dispatchTech`, which checks the technician's profile — as are the authorization fields. `price_ref` must be an object whose `amount_cents`, if present, is a non-negative finite number. Terms on an approved line are frozen. |
 
 ### DMRS2 — MPI & recommendations
 | Function | Behavior |
@@ -422,10 +422,10 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 ### EAS2 — Estimates & authorization
 | Function | Behavior |
 |---|---|
-| `generateEstimate(ctx, roId, params)` **[tx]** | Locks the RO (serializing version assignment), snapshots non-canceled/declined lines, inserts version `MAX+1`, moves those lines to `pending` and the RO to `estimate_pending`, writes `estimate_generated`. Refuses an RO with no active lines. Totals cover line count, estimated hours, and — where lines carry `price_ref.amount_cents` — money (`amount_cents`, `currency`, `priced_line_count`, `unpriced_line_count`). |
-| `sendEstimate(ctx, roId, estimateId, params)` **[tx]** | Requires the estimate to belong to this RO and be `draft`; marks it `sent`, moves the RO to `awaiting_authorization`, writes `estimate_sent`, and enqueues `waiting_authorization` at the RO's real location. |
+| `generateEstimate(ctx, roId, params)` **[tx]** | Locks the RO (serializing version assignment), totals the undecided lines that have not been quoted yet, inserts version `MAX+1`, and marks exactly those lines `pending` — tagging them with the new `estimate_id`, which is what later scopes the estimate's status to its own population. Quotable from the intake and estimating states and, as a supplemental for work found on the bench, from the work states; `awaiting_authorization` is excluded so a re-quote goes through the explicit return to `estimate_pending`. Refuses an RO with nothing undecided to quote. Totals cover line count, estimated hours, and — where lines carry `price_ref.amount_cents` — money (`amount_cents`, `currency`, `priced_line_count`, `unpriced_line_count`). |
+| `sendEstimate(ctx, roId, estimateId, params)` **[tx]** | Requires the estimate to belong to this RO and be `draft`; marks it `sent`, writes `estimate_sent`, and enqueues `waiting_authorization` at the RO's real location. Moves the RO to `awaiting_authorization` from the pre-work states; a supplemental sent while work is under way leaves the RO where it is, so the shop is not forced to reverse out of `in_repair` to ask a question. |
 | `listAuthorizations(ctx, roId)` | Authorization rows for the caller's RO, newest first. |
-| `recordAuthorization(ctx, roId, params)` **[tx]** | The evidence path — validates the estimate belongs to this RO and is `sent`, verifies every line id is on this RO and still awaiting a decision, derives the record status from the decision, scopes the line-item updates by RO and tenant, then derives the estimate's status from what remains undecided *after* the update. Artifact-backed methods must carry `evidence_refs`; `staff_attestation` requires step-up instead. Approval-time histogram and audit after commit. |
+| `recordAuthorization(ctx, roId, params)` **[tx]** | The evidence path — validates the estimate belongs to this RO and is `sent`, verifies every line id is on this RO and still awaiting a decision, derives the record status from the decision, and snapshots the approved terms into `approved_snapshot` before anything can move. A `sent` or `partially_approved` estimate is decidable — a customer who answers some lines must be able to come back for the rest — but only the current version: an older one is refused as `estimate_superseded`. The estimate's status is then recomputed *after* the update, cumulatively (so an earlier approval is not erased by a later decline) and over that estimate's own lines (so a supplemental is not scored against an earlier estimate's decisions). A line cancelled while undecided is withdrawn rather than left outstanding. Artifact-backed methods must carry `evidence_refs`; `staff_attestation` requires step-up instead. Approval-time histogram and audit after commit. |
 
 ### POS2 / SOS2 — Parts & sublet
 `requestPart` **[tx]** and `createSubletJob` **[tx]** prove both RO and line-item ownership before inserting at `requested`. `updatePartLine` and `updateSubletJob` are tenant-scoped whitelisted updates with enum validation.
@@ -450,6 +450,8 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 
 Declared on the default `prom-client` registry and exposed at `GET /metrics`. **All fifteen are populated.** Four are per-request events; the other eleven are rates, ratios and depths computed by `services/metrics-aggregator.ts` on an interval (`METRICS_INTERVAL_MS`, default 60s) over a rolling window (`METRICS_WINDOW_DAYS`, default 30). A ratio with no denominator publishes nothing rather than a misleading zero.
 
+Label values that come from a database column are bounded before they reach the registry: `queue_type` and `root_cause_category` carry their CHECK constraints `NOT VALID`, so history may still hold free text, and a Prometheus label is a new time series per distinct value. Anything outside the known set is published as `other`, with collapsed rows summed (or recombined from numerator and denominator, for ratios) rather than overwriting one another.
+
 No metric carries a tenant label, and none is driven from a per-request read. `/metrics` is a shared, unauthenticated surface: a gauge fed by request traffic would be last-writer-wins across tenants, and a tenant label would publish a tenant roster to any scraper. Tenant-aware aggregates belong in the aggregation job.
 
 | Metric | Type | Labels | Wired? | Updated where |
@@ -468,7 +470,7 @@ No metric carries a tenant label, and none is driven from a per-request read. `/
 | `service_tech_efficiency` | Gauge | location | aggregated | sold ÷ clocked hours |
 | `service_tech_proficiency` | Gauge | location | aggregated | estimated ÷ clocked hours |
 | `service_sla_breach_rate` | Gauge | job_type, location | aggregated | overdue ÷ SLA-bearing queue items |
-| `service_mpi_conversion_rate` | Gauge | recommendation_type | aggregated | accepted ÷ presented, by priority |
+| `service_mpi_conversion_rate` | Gauge | recommendation_type, location | aggregated | accepted ÷ presented, by priority |
 
 Naming note: the `_p95` suffix is kept as specified, but it is misleading — histograms yield quantiles at query time (`histogram_quantile(0.95, …)`); the metric itself is not a p95.
 
@@ -640,6 +642,8 @@ Three invariants a new endpoint must preserve:
 
 ## 14. Appendix — Quick Reference
 
+**Migrations:** `000_platform_core`, `049_phase248_service_cockpit`, `050_phase248_hardening`, `051_phase248_metrics_support`, `052_phase248_authorization_binding`, `053_phase248_estimate_line_association`
+
 **Tables (23 domain):** `service_appointments`, `service_appointment_events`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `service_sla_defaults`, `step_up_token_uses` — plus `audit_events` and `schema_migrations`, giving 25 in the database.
 
 **RO statuses (14):** `draft`, `checked_in`, `inspection_in_progress`, `estimate_pending`, `awaiting_authorization`, `authorized`, `in_repair`, `waiting_parts`, `sublet_in_progress`, `qc`, `ready_for_pickup`, `closed`, `canceled`, `comeback`
@@ -660,6 +664,6 @@ Three invariants a new endpoint must preserve:
 
 **Authorization methods:** `portal`, `signature`, `staff_attestation`, `recorded_call_ref` · **Priorities:** `p0` (safety) > `p1` (maintenance) > `p2` · **Comeback severities:** `sev0`–`sev3`
 
-**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `work_incomplete`
+**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `estimate_superseded`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_inspection_owner`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `pending_terms_frozen`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `ticket_closed`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `work_incomplete`
 
 **Queue types (closed set, DB-enforced):** `appointments_today`, `waiting_checkin`, `waiting_authorization`, `waiting_parts`, `in_repair`, `qc`, `ready_pickup`, `comeback_review`, `no_show_followup`

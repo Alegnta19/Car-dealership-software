@@ -43,6 +43,7 @@ migrations/
   050_phase248_hardening.sql         triggers, constraints, 2 more tables
   051_phase248_metrics_support.sql   received_at, SLA defaults, corrections
   052_phase248_authorization_binding.sql  approved-price snapshot + freeze
+  053_phase248_estimate_line_association.sql  which lines an estimate asked about
 src/
   app.ts                             express wiring, /healthz, /metrics
   server.ts                          startup, env validation, graceful shutdown
@@ -58,7 +59,7 @@ src/
     services/service-cockpit-service.ts   business logic and SQL
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered, transactional migration runner
-tests/                               39 unit + 51 database-backed tests
+tests/                               39 unit + 4 documentation + 61 database-backed
 docs/
   PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
   REMEDIATION.md                     what was fixed, why, and what remains
@@ -106,8 +107,9 @@ than silently ignored.
 action and resource. See `src/shared/security/step-up.ts`.
 
 **Customer authorizations are derived, not asserted.** `recordAuthorization` validates that the
-estimate belongs to the RO and was actually sent, rejects any line-item id that is not on that RO or
-is not awaiting a decision, and derives the record's status from the decision — an all-declined
+estimate belongs to the RO, was actually sent, and is still the version in front of the customer,
+rejects any line-item id that is not on that RO or is not awaiting a decision, snapshots the approved
+terms before anything can move, and derives the record's status from the decision — an all-declined
 outcome is stored as `declined` and does not satisfy the state machine's authorization gate, which
 additionally requires the approval to reference the *current* estimate version. Methods that claim a
 customer-produced artifact must carry `evidence_refs`; the one that does not (`staff_attestation`)
@@ -167,7 +169,10 @@ recommendation conversion, comeback rate, first-service capture, and queue depth
 `/metrics` is a shared, unauthenticated surface, so no series carries a tenant label and none is
 driven from a per-request read — a gauge fed by request traffic is last-writer-wins across tenants.
 Series are labelled by `location_id`, which is already tenant-unique. A ratio with no denominator
-publishes nothing rather than a misleading zero.
+publishes nothing rather than a misleading zero, and a label value read from a database column is
+bounded against its known set before it is published — the CHECK constraints behind `queue_type` and
+`root_cause_category` are `NOT VALID`, so history may still hold free text, and a Prometheus label is
+a new time series per distinct value.
 
 ---
 
@@ -182,14 +187,20 @@ derivation, step-up token binding and expiry, JWT verification (algorithm confus
 non-numeric expiry, non-object payloads), tenant-override rejection, and role enforcement. They run
 without a database.
 
-**51 database-backed tests** need a real PostgreSQL instance. 29 exercise the service layer for
+**4 documentation tests** compare `docs/PHASE-248-SERVICE-COCKPIT-V2.md` against the code: every
+error code the API can return must be listed in the appendix and every listed code must still be
+thrown, each metric's documented labels must match its declaration, and every migration on disk must
+appear. Three review rounds turned up the same drift, so it is now a failing test rather than
+something a reader has to catch by hand. They need no database either.
+
+**61 database-backed tests** need a real PostgreSQL instance. 37 exercise the service layer for
 what a mock cannot express — cross-tenant reads and writes, check-in idempotency and its
 unique-index backstop, transaction rollback, the authorization gate, step-up consumption and
-release, queue lifecycle, clock sequencing and the metric arithmetic. The other 22 go through the
-real HTTP stack via `createApp()`, which is where role boundaries actually live: that a technician
-cannot rewrite `price_ref` or `sold_hours`, cannot assign themselves work, and cannot touch a line
-they were not dispatched to; that an approved price is frozen; that a vehicle with an undecided
-line cannot be handed back.
+release, queue lifecycle, clock sequencing, and the populations behind the metrics and the estimate
+status. The other 24 go through the real HTTP stack via `createApp()`, which is where role
+boundaries actually live: that a technician cannot rewrite `price_ref` or `sold_hours`, cannot
+assign themselves work, and cannot touch a line they were not dispatched to; that an approved price
+is frozen; that a vehicle with a chargeable undecided line cannot be handed back.
 
 Point `TEST_DATABASE_URL` at a throwaway database and run:
 

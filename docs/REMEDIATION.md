@@ -469,6 +469,82 @@ each other.
 
 ---
 
+## Post-review corrections, round four
+
+A fourth adversarial review, with each finding independently verified, produced twenty-four
+survivors. Nothing in this round was a way past the authorization gate; the pattern was narrower and
+more specific, and it is worth naming because it is now the fifth and sixth time it has appeared.
+
+**Values derived from the wrong population.** Not wrong arithmetic — wrong denominators, wrong
+numerators, wrong row sets, each computed correctly over a population that did not answer the
+question being asked.
+
+*Technician efficiency counted work that had not finished.* Efficiency and proficiency divide a
+whole-line figure (sold hours, estimated hours) by hours clocked so far, so a job still on the bench
+looked more efficient the longer it stayed open. Restricting the query to completed lines fixed that
+and immediately broke utilization, which is `clocked ÷ scheduled` and has no whole-line numerator:
+every hour spent on work in progress vanished from it. They are two different populations and are
+now computed as two, in one pass, with `FILTER`. The test pins both directions — a third job left
+open contributes to utilization and must stay out of efficiency, where its eight sold hours against
+one clocked hour would otherwise drag the ratio to 10/3.
+
+*An estimate was scored against the whole repair order.* `recordAuthorization` derives the estimate's
+status from a cumulative count of line items rather than from the decision being recorded, because
+reading the decision alone erased an earlier approval — that was round three's fix. But the count had
+nothing to scope it to: `ro_estimates` recorded a version, a status and a totals summary, never which
+lines it put in front of the customer. So a supplemental estimate covering one new line was scored
+against the earlier estimate's decisions too and reported `partially_approved` when its own line had
+been approved outright, and a line cancelled while still undecided counted as pending forever, so an
+estimate whose every surviving line was approved could never reach `approved`. Migration 053 adds
+`ro_line_items.estimate_id`, `generateEstimate` records the association it already computes, and the
+tally is scoped to it — cumulative, so round three's fix survives. Estimates predating the column have
+no tagged lines and fall back to the previous behaviour, so no existing row changes meaning.
+
+**A guarded cast, and a repair order that could not be handed back.** The billing gate cast
+`price_ref->>'amount_cents'` to `numeric`. `price_ref` is an untyped JSONB blob and `updateLineItem`
+checked only that it was an object, so `{"amount_cents": "call for price"}` stored cleanly and then
+raised `invalid_text_representation` — and because that gate runs on every handover attempt, the
+repair order was wedged at HTTP 500 with no route out through the API. Two changes: the boundary now
+requires `amount_cents`, when present, to be a non-negative finite number, and the gate reads
+`jsonb_typeof` and only evaluates the cast on the `number` branch. An amount that still cannot be read
+— legacy data — fails **closed**: a 422 naming the line, which an advisor can act on, rather than a
+silent pass on the money path.
+
+**Free text from the database became Prometheus labels.** `queue_type` and `root_cause_category` carry
+CHECK constraints, but round three added them `NOT VALID` so that history holding free text would not
+block the migration. That history still flowed straight into label values on `/metrics`, which is
+unauthenticated, and a label is a new time series per distinct value. Both are now bounded against the
+known set, with anything else published as `other`. Collapsed rows are summed for depths and
+recombined from numerator and denominator for ratios — averaging two rates would have weighted a
+one-item queue like a hundred-item one.
+
+**Validation present on one path and missing on its twin.** The partial-guard pattern again, three
+times: `checkIn` validated `odometer` and `createRO` did not, though both write the same column;
+`updateAppointment` required `concerns` to be an array and both creation paths did not, though the
+column defaults to one and every reader assumes it; and `queryServiceCockpitView` rejected unsupported
+overrides by looking for object keys without first establishing the value was an object, so a string
+arriving from a query parameter — the most likely way to reach that argument — fell through and was
+silently dropped, which is the precise outcome the guard exists to prevent.
+
+**A test that was really testing the clock.** The `updated_at` test back-dated a row ten days as
+setup, then asserted the column had advanced. The back-dating was undone by the very trigger under
+test — `set_updated_at` assigns `NOW()` on every update, unconditionally — so both readings were
+`NOW()` taken milliseconds apart and compared as JavaScript `Date`s, which truncate to whole
+milliseconds. It passed or failed on timing. It now proves both directions explicitly: that a supplied
+`updated_at` is overridden, and that a statement never mentioning the column still advances it, with
+both comparisons made inside Postgres at full precision.
+
+**Documentation that no longer described the code.** The service-layer reference still said
+`updateLineItem` accepts `assigned_tech_user_id` — refused since round two — and described the
+estimate and authorization flows as they were before supplementals existed; the metrics table was
+missing a label; four error codes were thrown but never listed. Rather than fix the drift and wait for
+it to come back a fourth time, `tests/docs.test.ts` now compares the appendix against the code on
+every run: every thrown error code must be listed, every listed code must be thrown, every metric's
+documented labels must match its declaration, and every migration on disk must appear. Drift is a
+failing test, not something a reviewer has to notice.
+
+---
+
 ## Outstanding work
 
 Known and deliberately not addressed. None of it is a defect in what ships.
@@ -488,6 +564,12 @@ from `qc -> in_repair` transitions rather than from recorded defects.
 **Estimates are not priced.** Totals sum `price_ref.amount_cents` where a caller has supplied it.
 There is no labour rate table, no parts markup, no tax and no discounting, so an estimate total is
 only as complete as what the caller wrote onto each line.
+
+**Free-text history is bounded at the edge, not cleaned.** The `NOT VALID` CHECK constraints on
+`queue_type` and `root_cause_category` still have not been validated, so rows predating them may hold
+values outside the closed set. Metrics collapse those to `other` and the API rejects them on input, but
+the data itself is untouched; `VALIDATE CONSTRAINT` should be run once an environment's history has
+been cleaned.
 
 **Concurrency is verified by construction, not by test.** The integration suite exercises rollback,
 idempotent replay and the unique-index backstops, but not genuinely simultaneous writers. The row
