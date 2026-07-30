@@ -196,7 +196,7 @@ describe('PII-safe structured logging', () => {
       authorization: 'Bearer SENTINEL-AUTH-HEADER',
       step_up_token: 'SENTINEL-STEP-UP-TOKEN',
       password: 'SENTINEL-PASSWORD-hunter2',
-      api_key: 'SENTINEL-API-KEY-12345',
+      api_key: 'SENTINEL API KEY VALUE with spaces',
       ssn: 'SENTINEL-123-45-6789',
       driver_license: 'SENTINEL-DL-99887766',
       dob: 'SENTINEL-1990-01-31',

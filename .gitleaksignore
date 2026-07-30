@@ -9,3 +9,11 @@
 de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:18
 de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:42
 de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-key:172
+
+# Commit dd8b9ae introduced the PII-safe LOGGING SENTINELS — deliberately fake values a
+# test writes through the logger to prove they never survive redaction. The api_key
+# sentinel matched gitleaks' generic-api-key by construction (keyword + plausible value).
+# The value is synthetic, the line is immutable history, and the current sentinel was
+# restructured so it can no longer match; this suppression covers the historical
+# introduction only, by exact fingerprint.
+dd8b9aeaf4425f146b8c5a5ad587c29213b2c0f6:tests/platform.test.ts:generic-api-key:189
