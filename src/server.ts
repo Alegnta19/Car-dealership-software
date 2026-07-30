@@ -1,3 +1,4 @@
+import * as promClient from 'prom-client';
 import { createApp } from './app';
 import { startMetricsAggregation } from './modules/service-cockpit/services/metrics-aggregator';
 import { closePool } from './shared/database/pool';
@@ -23,8 +24,17 @@ function assertRequiredEnv(): void {
   }
 }
 
+/** How long a graceful shutdown may take before the process force-exits. */
+const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS ?? 30_000);
+
 function main(): void {
   assertRequiredEnv();
+
+  // Node process baseline (event-loop lag, GC, heap, open handles). These series are
+  // label-free and bounded, so they satisfy the /metrics invariants (no tenant labels,
+  // nothing request-driven). Registered here rather than in createApp() so each test's
+  // app instance does not attempt a duplicate registration.
+  promClient.collectDefaultMetrics();
 
   const port = Number(process.env.PORT ?? 3000);
   const server = createApp().listen(port, () => logger.info({ port }, 'Service cockpit API listening'));
@@ -35,6 +45,18 @@ function main(): void {
   const shutdown = (signal: string) => {
     logger.info({ signal }, 'Shutting down');
     stopMetrics();
+
+    // server.close() waits for in-flight requests, but a stuck keep-alive connection can
+    // hold it open indefinitely — under an orchestrator that means SIGKILL mid-write at
+    // the end of the termination grace period, at a moment we did not choose. Bound the
+    // wait ourselves and exit non-zero so the failure is visible. unref'd, so the timer
+    // never keeps an otherwise-finished process alive.
+    const deadline = setTimeout(() => {
+      logger.error({ graceMs: SHUTDOWN_GRACE_MS }, 'Graceful shutdown timed out; forcing exit');
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS);
+    deadline.unref();
+
     server.close(() => {
       closePool()
         .catch((err) => logger.error({ err }, 'Failed to close the database pool'))

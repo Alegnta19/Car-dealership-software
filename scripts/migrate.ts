@@ -1,9 +1,17 @@
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { closePool, getPool } from '../src/shared/database/pool';
 import { logger } from '../src/shared/utils/logger';
 
-const MIGRATIONS_DIR = join(__dirname, '..', 'migrations');
+/**
+ * Works from both layouts this file runs in: scripts/migrate.ts under tsx (dev — the
+ * repo root is one level up) and dist/scripts/migrate.js in the container image (the
+ * root is two levels up; the image ships migrations/ beside dist/, not inside it).
+ * Resolved from __dirname, not process.cwd(), so the runner is not sensitive to where
+ * it is invoked from.
+ */
+const MIGRATIONS_DIR = [join(__dirname, '..', 'migrations'), join(__dirname, '..', '..', 'migrations')]
+  .find((dir) => existsSync(dir)) ?? join(__dirname, '..', 'migrations');
 
 /**
  * Applies every unapplied migration in filename order, each inside its own

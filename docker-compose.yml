@@ -1,0 +1,68 @@
+# Local/single-host deployment: postgres, a one-shot migration run, and the API.
+# Adapted from the origin platform's compose file with everything the repo has no code
+# for removed (redis, minio, scheduler, five worker pools) and its fail-open defaults
+# inverted: secrets here have NO fallback values. `${VAR:?...}` makes compose refuse to
+# start rather than boot with a well-known secret — and the server would refuse anyway
+# (src/server.ts asserts both secrets exist and are at least 32 characters).
+#
+#   cp .env.example .env   # fill in JWT_SECRET, STEP_UP_SECRET, POSTGRES_PASSWORD
+#   docker compose up --build
+#
+# Compose reads .env from this directory automatically. Never commit the real .env.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cockpit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: cockpit
+    # Not published to the host by default. Uncomment for local psql access:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cockpit -d cockpit"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # One-shot: applies migrations/ in filename order against schema_migrations, then
+  # exits. The api service waits for it to complete successfully, so the API never
+  # boots against an empty or half-migrated schema. Uses the compiled migrate runner —
+  # the production image has no tsx.
+  migrate:
+    build: .
+    command: ["node", "dist/scripts/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (minimum 32 characters)}
+      STEP_UP_SECRET: ${STEP_UP_SECRET:?STEP_UP_SECRET is required (minimum 32 characters)}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # /metrics and /healthz are unauthenticated by design (README "Observability") — in any
+  # deployment where port 3000 is reachable from outside, gate them at the ingress.
+
+volumes:
+  postgres_data:

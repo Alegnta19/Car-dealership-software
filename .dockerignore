@@ -1,0 +1,10 @@
+# Keep the build context to what the Dockerfile actually copies.
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+docs
+tests
+*.md
