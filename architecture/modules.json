@@ -1,0 +1,120 @@
+{
+  "$comment": "Machine-readable module ownership and dependency map (FBL-010). The dependency-cruiser config derives its allowed-dependency rules FROM this file and scripts/check-architecture-manifest.ts keeps it honest against the real workspace manifests — one source of truth, no silent drift. Human-readable companion: docs/architecture/MODULE-OWNERSHIP.md.",
+  "modules": {
+    "@dealer/contracts": {
+      "path": "packages/contracts",
+      "owner": "platform-architecture",
+      "purpose": "Framework-neutral shared contract types: role vocabulary, tenant context, envelopes, the internal Problem Details model.",
+      "publicEntry": "packages/contracts/src/index.ts",
+      "allowedDealerDeps": [],
+      "prohibited": [
+        "express",
+        "pg",
+        "prom-client",
+        "database entities as API contracts",
+        "business rules"
+      ],
+      "database": "none",
+      "status": "active"
+    },
+    "@dealer/platform": {
+      "path": "packages/platform",
+      "owner": "platform-architecture",
+      "purpose": "Validated configuration, request/correlation context, structured PII-safe logging, error primitives, Problem Details mapping, JWT verification.",
+      "publicEntry": "packages/platform/src/index.ts",
+      "allowedDealerDeps": ["@dealer/contracts"],
+      "prohibited": ["express", "pg", "dealership business rules"],
+      "database": "none",
+      "status": "active"
+    },
+    "@dealer/database": {
+      "path": "packages/database",
+      "owner": "platform-architecture",
+      "purpose": "PostgreSQL pool, query and transaction infrastructure. Migrations live at the repository root and are order-governed; this package never defines schema.",
+      "publicEntry": "packages/database/src/index.ts",
+      "allowedDealerDeps": ["@dealer/platform"],
+      "prohibited": ["dealership business rules", "schema definitions"],
+      "database": "connection-infrastructure",
+      "status": "active"
+    },
+    "@dealer/fixed-ops": {
+      "path": "packages/fixed-ops",
+      "owner": "fixed-operations",
+      "purpose": "Sole owner of the service-cockpit domain and application behavior: RO state machine, authorization rules, step-up security, the legacy service implementation and metrics aggregation.",
+      "publicEntry": "packages/fixed-ops/src/index.ts",
+      "allowedDealerDeps": ["@dealer/contracts", "@dealer/platform", "@dealer/database"],
+      "prohibited": ["express", "another module's persistence internals"],
+      "database": "owns the phase-248 tables (migrations 000, 049-054)",
+      "status": "active — legacy/ is an explicitly mixed application/persistence component until FBL-060"
+    },
+    "@dealer/test-kit": {
+      "path": "packages/test-kit",
+      "owner": "platform-architecture",
+      "purpose": "Shared test utilities: destructive-test guards, world builders, fixtures. Test-only.",
+      "publicEntry": "packages/test-kit/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/fixed-ops"
+      ],
+      "prohibited": ["being imported by any production package or app"],
+      "database": "none",
+      "status": "active"
+    },
+    "@dealer/ui": {
+      "path": "packages/ui",
+      "owner": "web-experience",
+      "purpose": "UI primitives boundary. Structural shell only in FBL-010.",
+      "publicEntry": "packages/ui/src/index.ts",
+      "allowedDealerDeps": ["@dealer/contracts"],
+      "prohibited": ["business rules", "product screens", "server-side dependencies"],
+      "database": "none",
+      "status": "shell"
+    },
+    "@dealer/api": {
+      "path": "apps/api",
+      "owner": "fixed-operations",
+      "purpose": "Composition root for the service-cockpit HTTP API: server startup, middleware order, route mounting, health/metrics, graceful shutdown, envelope rendering.",
+      "publicEntry": "apps/api/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/fixed-ops"
+      ],
+      "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
+      "database": "none (wires @dealer/database at composition only)",
+      "status": "active — deployable"
+    },
+    "@dealer/worker": {
+      "path": "apps/worker",
+      "owner": "platform-architecture",
+      "purpose": "Worker process shell. No jobs, queues or schedulers until FBL-040.",
+      "publicEntry": "apps/worker/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/fixed-ops"
+      ],
+      "prohibited": ["business workflows in FBL-010", "SQL", "direct pg usage"],
+      "database": "none",
+      "status": "shell — not deployed"
+    },
+    "@dealer/web": {
+      "path": "apps/web",
+      "owner": "web-experience",
+      "purpose": "Web application structural shell. No customer product UI in FBL-010.",
+      "publicEntry": "apps/web/src/index.ts",
+      "allowedDealerDeps": ["@dealer/contracts", "@dealer/ui"],
+      "prohibited": [
+        "server-side business logic",
+        "database access",
+        "product journeys in FBL-010"
+      ],
+      "database": "none",
+      "status": "shell — not deployed"
+    }
+  }
+}

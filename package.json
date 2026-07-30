@@ -21,13 +21,15 @@
     "schema:fingerprint": "tsx scripts/schema-fingerprint.ts",
     "seed:mpi": "tsx scripts/seed-mpi-template.ts",
     "format": "prettier --write .",
-    "format:check": "tsx scripts/quality-ratchet.ts check format"
+    "format:check": "tsx scripts/quality-ratchet.ts check format",
+    "architecture:check": "depcruise apps packages --config .dependency-cruiser.cjs && tsx scripts/check-architecture-manifest.ts && tsx scripts/check-env-access.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^4.17.21",
     "@types/node": "^20.17.10",
     "@types/pg": "^8.11.10",
+    "dependency-cruiser": "^18.1.0",
     "eslint": "^10.8.0",
     "prettier": "^3.9.6",
     "tsx": "^4.19.2",

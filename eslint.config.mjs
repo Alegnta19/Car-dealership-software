@@ -9,6 +9,14 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Tool configuration in CommonJS (.cjs) is legitimate require/module territory.
+    files: ['**/*.cjs'],
+    languageOptions: { sourceType: 'commonjs', globals: { require: 'readonly', module: 'writable', __dirname: 'readonly' } },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
     rules: {
       // Counted as debt, not banned outright in FBL-000: the service layer leans on
       // `any` for row shapes. The ratchet blocks growth; typed rows arrive with the
