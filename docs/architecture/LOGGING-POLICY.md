@@ -17,8 +17,9 @@ and the sentinel tests in `tests/platform.test.ts`.
 - Payment credentials (PAN, CVV, card fields).
 - Government identifiers: SSN, driver-license numbers.
 - Customer PII: email, phone, street address, date of birth.
-- Raw request/response bodies; unbounded database error payloads (errors are logged as
-  name/message/stack only).
+- Raw request/response bodies; unbounded database error payloads. Error objects reduce
+  to bounded safe fields (validated name, safe-token code, plausible status, stack
+  fingerprint) — never message, stack, or cause.
 
 ## Error objects are never serialized raw (FBL-010-R1)
 
@@ -41,7 +42,9 @@ logs record the query-free path only, with a stable `component` and `event` code
 Redaction keys are matched after lowercasing and stripping `-`/`_`, so
 `api_key` / `apiKey` / `apikey`, `database_url` / `databaseUrl`,
 `connection_string` / `connectionString`, `set-cookie` / `setCookie` and every similar
-variant are equivalent. Redaction recurses to depth 6. New sensitive key names are added
+variant are equivalent. Redaction recurses to depth 6, and reaching that boundary never
+exposes original content: anything deeper — objects, arrays, Errors — is replaced by
+the fixed `[TRUNCATED]` marker, which carries no input-derived value. New sensitive key names are added
 to `REDACTED_KEYS`; sentinel tests prove representative values never survive
 serialization — including values embedded in error messages, stack heads, causes,
 driver payloads, and HTTP query strings. Redaction is defense-in-depth, not permission:

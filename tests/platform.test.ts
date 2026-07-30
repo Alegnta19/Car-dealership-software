@@ -309,6 +309,28 @@ describe('PII-safe structured logging', () => {
     );
   });
 
+  test('a sensitive object beyond the recursion depth cannot escape redaction', () => {
+    const sentinel = 'SENTINEL DEEP OVERDEPTH PASSWORD';
+    const rawMarker = 'SENTINEL DEEP RAW OBJECT VALUE';
+    // Eight object levels: l1..l7 are benign keys; the payload sits below the
+    // depth-6 traversal boundary, where the pre-R2 logger returned the ORIGINAL
+    // object and JSON.stringify serialized it raw.
+    const deep = {
+      l1: { l2: { l3: { l4: { l5: { l6: { l7: { password: sentinel, note: rawMarker } } } } } } },
+    };
+
+    let output = '';
+    assert.doesNotThrow(() => {
+      output = captureLogs(() => logger.info({ payload: deep }, 'over-depth structure'));
+    });
+    assert.ok(!output.includes(sentinel), 'over-depth sensitive value escaped redaction');
+    assert.ok(!output.includes(rawMarker), 'the original over-depth object was serialized raw');
+    assert.ok(
+      output.includes('[TRUNCATED]'),
+      'the fixed truncation marker replaces over-depth content',
+    );
+  });
+
   test('identical failures share a stack fingerprint for incident grouping', () => {
     function boom(): Error {
       return new Error('SENTINEL-GROUPING-VALUE');

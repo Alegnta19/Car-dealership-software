@@ -114,8 +114,21 @@ function safeError(err: Error): Record<string, unknown> {
   return out;
 }
 
+/**
+ * Objects are traversed to this depth; anything deeper is replaced by the fixed
+ * TRUNCATION_MARKER. Returning the ORIGINAL object at the boundary — the pre-R2
+ * behavior — let JSON.stringify walk everything below it unredacted (FBL-010-R2).
+ */
+const MAX_REDACTION_DEPTH = 6;
+const TRUNCATION_MARKER = '[TRUNCATED]';
+
 function redact(value: unknown, depth = 0): unknown {
-  if (depth > 6 || value === null || typeof value !== 'object') return value;
+  // Primitives pass at any depth: their KEY was screened one level up, and a
+  // primitive has no interior for JSON.stringify to walk.
+  if (value === null || typeof value !== 'object') return value;
+  // Reaching the boundary never returns input-derived content — objects, arrays and
+  // Errors alike collapse to the fixed marker.
+  if (depth > MAX_REDACTION_DEPTH) return TRUNCATION_MARKER;
   if (value instanceof Error) {
     return safeError(value);
   }
