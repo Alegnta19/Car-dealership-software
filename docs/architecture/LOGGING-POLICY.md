@@ -20,10 +20,32 @@ and the sentinel tests in `tests/platform.test.ts`.
 - Raw request/response bodies; unbounded database error payloads (errors are logged as
   name/message/stack only).
 
-The logger redacts by key (see `REDACTED_KEYS`) recursively to depth 6; new sensitive
-key names are added to that set, and a sentinel test proves representative values never
-survive serialization. Redaction is defense-in-depth, not permission: do not put listed
-data into log calls in the first place.
+## Error objects are never serialized raw (FBL-010-R1)
+
+Arbitrary `Error` content is untrusted: messages embed connection strings, driver
+payloads echo row values, and `cause` chains carry anything. The logger therefore never
+emits `Error.message`, `Error.stack`, `Error.cause`, or any enumerable driver property.
+An error serializes to bounded fields only: a validated class `name`, a stable
+`code` when it matches a safe-token format (lower_snake app codes, ECONNREFUSED-style
+system codes, SQLSTATEs), a plausible `status`, and a `stack_fingerprint` — a SHA-256
+hash over the message-free stack frames for incident grouping. The original stack is
+never emitted alongside the fingerprint.
+
+## Request paths exclude query strings
+
+`req.originalUrl` carries the query string, which can carry credentials or PII; API
+logs record the query-free path only, with a stable `component` and `event` code.
+
+## Key matching is normalized, recursive, and bounded
+
+Redaction keys are matched after lowercasing and stripping `-`/`_`, so
+`api_key` / `apiKey` / `apikey`, `database_url` / `databaseUrl`,
+`connection_string` / `connectionString`, `set-cookie` / `setCookie` and every similar
+variant are equivalent. Redaction recurses to depth 6. New sensitive key names are added
+to `REDACTED_KEYS`; sentinel tests prove representative values never survive
+serialization — including values embedded in error messages, stack heads, causes,
+driver payloads, and HTTP query strings. Redaction is defense-in-depth, not permission:
+do not put listed data into log calls in the first place.
 
 Config values are safe to log only as booleans/numbers/enum names — never secret
 strings; configuration validation errors name variables, not values.

@@ -21,7 +21,12 @@ application depends on domain and declared ports; adapters implement ports; comp
 roots wire. Packages are consumed through `src/index.ts` only — deep imports are
 rejected statically (dependency-cruiser) and at runtime (`exports` maps).
 `process.env` is read only in `packages/platform/src/config.ts` and the app composition
-roots.
+roots. Apps carry no business SQL and no database query primitives: the executable
+app-SQL guard (`scripts/check-app-sql.ts`, part of `npm run architecture:check`) rejects
+imports of `query`/`getPool`/`withTransaction` from @dealer/database, direct `pg`
+imports, calls to those primitives, and SQL statement literals in app production code —
+proven in both directions by `architecture/fixtures/forbidden-app-sql`. The composition
+root may import `closePool` for lifecycle shutdown only.
 
 Databases: the phase-248 schema (root `migrations/`) is owned by @dealer/fixed-ops's
 orders; @dealer/database owns connections, never schema.

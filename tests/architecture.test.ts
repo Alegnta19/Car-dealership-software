@@ -36,8 +36,12 @@ function depcruise(target: string): { code: number; output: string } {
 }
 
 function run(script: string): { code: number; output: string } {
+  return runWith(script, []);
+}
+
+function runWith(script: string, args: string[]): { code: number; output: string } {
   try {
-    const output = execFileSync('npx', ['tsx', script], {
+    const output = execFileSync('npx', ['tsx', script, ...args], {
       cwd: ROOT,
       encoding: 'utf8',
       shell: process.platform === 'win32',
@@ -68,6 +72,21 @@ describe('architecture enforcement', () => {
       /no-outside-deep-import-into-packages[\s\S]*reaches-into-persistence/,
       'the rejection must come from the deep-import rule, on the fixture file',
     );
+  });
+
+  test('the real apps tree passes the app-SQL guard', () => {
+    const { code, output } = run('scripts/check-app-sql.ts');
+    assert.equal(code, 0, output);
+    assert.match(output, /app-SQL guard OK/);
+  });
+
+  test('an app importing a query primitive and embedding SQL is rejected', () => {
+    const { code, output } = runWith('scripts/check-app-sql.ts', [
+      'architecture/fixtures/forbidden-app-sql',
+    ]);
+    assert.notEqual(code, 0, 'the app-SQL guard accepted the forbidden fixture');
+    assert.match(output, /app-no-db-query-primitives[\s\S]*app-with-sql/);
+    assert.match(output, /app-no-sql-literals[\s\S]*SELECT/);
   });
 
   test('the ownership manifest matches the real workspace', () => {

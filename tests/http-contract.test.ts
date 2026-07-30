@@ -136,7 +136,7 @@ describe('HTTP contract characterization', () => {
     error: { code: string; message: string; details?: unknown };
   }
 
-  function renderThrough(handler: 'error' | 'notFound', err?: unknown) {
+  function renderThrough(handler: 'error' | 'notFound', err?: unknown, url?: string) {
     let statusCode = 0;
     let body: RenderedEnvelope | null = null;
     const res = {
@@ -149,7 +149,12 @@ describe('HTTP contract characterization', () => {
         return this;
       },
     };
-    const req = { method: 'GET', path: '/api/service/whatever', headers: {} };
+    const req = {
+      method: 'GET',
+      path: '/api/service/whatever',
+      originalUrl: url ?? '/api/service/whatever',
+      headers: {},
+    };
     type ErrorHandlerFn = (e: unknown, rq: unknown, rs: unknown, nx: () => void) => void;
     type NotFoundFn = (rq: unknown, rs: unknown) => void;
     if (handler === 'error')
@@ -158,16 +163,57 @@ describe('HTTP contract characterization', () => {
     return { statusCode, body: body! };
   }
 
-  test('an unexpected error renders the stable 500 envelope and leaks nothing from the error', () => {
+  function captureStreams(fn: () => void): string {
+    const chunks: string[] = [];
+    const origOut = process.stdout.write.bind(process.stdout);
+    const origErr = process.stderr.write.bind(process.stderr);
+    (process.stdout as unknown as { write: (c: string) => boolean }).write = (c: string) => {
+      chunks.push(String(c));
+      return true;
+    };
+    (process.stderr as unknown as { write: (c: string) => boolean }).write = (c: string) => {
+      chunks.push(String(c));
+      return true;
+    };
+    try {
+      fn();
+    } finally {
+      process.stdout.write = origOut;
+      process.stderr.write = origErr;
+    }
+    return chunks.join('');
+  }
+
+  test('an unexpected error leaks nothing from the error — in the response OR the logs', () => {
     const sentinel = 'SENTINEL-DB-PASSWORD-hunter2';
-    const { statusCode, body } = renderThrough('error', new Error(`connect failed: ${sentinel}`));
-    assert.equal(statusCode, 500);
-    assert.equal(body.success, false);
-    assert.equal(body.error.code, 'internal_error');
+    let rendered: { statusCode: number; body: RenderedEnvelope } | undefined;
+    const logged = captureStreams(() => {
+      rendered = renderThrough('error', new Error(`connect failed: ${sentinel}`));
+    });
+    assert.equal(rendered!.statusCode, 500);
+    assert.equal(rendered!.body.success, false);
+    assert.equal(rendered!.body.error.code, 'internal_error');
     assert.ok(
-      !JSON.stringify(body).includes(sentinel),
+      !JSON.stringify(rendered!.body).includes(sentinel),
       'internal error details must never reach the response body',
     );
+    assert.ok(
+      !logged.includes(sentinel),
+      'internal error details must never reach serialized logs either',
+    );
+  });
+
+  test('logged request paths never include the query string', () => {
+    const sentinel = 'SENTINEL-QS-TOKEN-xyz789';
+    const logged = captureStreams(() => {
+      renderThrough(
+        'error',
+        new ValidationError('nope'),
+        `/api/service/appointments?token=${sentinel}`,
+      );
+    });
+    assert.ok(logged.includes('/api/service/appointments'), 'the query-free path is logged');
+    assert.ok(!logged.includes(sentinel), 'query-string content must never reach logs');
   });
 
   test('typed application errors render the stable public envelope', () => {

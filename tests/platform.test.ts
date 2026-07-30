@@ -44,7 +44,10 @@ describe('configuration boundary', () => {
   });
 
   test('missing required variables fail naming the variable', () => {
-    assert.throws(() => loadConfig({ ...VALID_ENV, DATABASE_URL: undefined }), /DATABASE_URL is required/);
+    assert.throws(
+      () => loadConfig({ ...VALID_ENV, DATABASE_URL: undefined }),
+      /DATABASE_URL is required/,
+    );
     assert.throws(() => loadConfig({ ...VALID_ENV, JWT_SECRET: '' }), /JWT_SECRET is required/);
   });
 
@@ -67,10 +70,16 @@ describe('configuration boundary', () => {
     assert.throws(() => loadConfig({ ...VALID_ENV, PORT: '65536' }), /PORT must be an integer/);
     assert.throws(() => loadConfig({ ...VALID_ENV, PORT: 'yes' }), /PORT must be an integer/);
     assert.equal(loadConfig({ ...VALID_ENV, PORT: '65535' }).port, 65535);
-    assert.throws(() => loadConfig({ ...VALID_ENV, LOG_LEVEL: 'loud' }), /LOG_LEVEL must be one of/);
+    assert.throws(
+      () => loadConfig({ ...VALID_ENV, LOG_LEVEL: 'loud' }),
+      /LOG_LEVEL must be one of/,
+    );
     assert.throws(() => loadConfig({ ...VALID_ENV, JSON_BODY_LIMIT: 'huge' }), /JSON_BODY_LIMIT/);
     assert.throws(() => loadConfig({ ...VALID_ENV, SHUTDOWN_GRACE_MS: '50' }), /SHUTDOWN_GRACE_MS/);
-    assert.throws(() => loadConfig({ ...VALID_ENV, METRICS_WINDOW_DAYS: '0' }), /METRICS_WINDOW_DAYS/);
+    assert.throws(
+      () => loadConfig({ ...VALID_ENV, METRICS_WINDOW_DAYS: '0' }),
+      /METRICS_WINDOW_DAYS/,
+    );
   });
 });
 
@@ -102,7 +111,11 @@ describe('request context', () => {
 
     const run = (name: string) =>
       runWithRequestContext(
-        { requestId: `req-${name}-12345678`, correlationId: `cor-${name}-12345678`, startTime: Date.now() },
+        {
+          requestId: `req-${name}-12345678`,
+          correlationId: `cor-${name}-12345678`,
+          startTime: Date.now(),
+        },
         async () => {
           for (let i = 0; i < 5; i++) {
             await tick();
@@ -121,7 +134,11 @@ describe('request context', () => {
     assert.equal(getRequestContext(), undefined);
 
     runWithRequestContext(
-      { requestId: 'req-scoped-12345678', correlationId: 'req-scoped-12345678', startTime: Date.now() },
+      {
+        requestId: 'req-scoped-12345678',
+        correlationId: 'req-scoped-12345678',
+        startTime: Date.now(),
+      },
       () => {
         bindRequestActor({ tenantId: 'tenant-1', userId: 'user-1', roles: ['service_advisor'] });
         assert.equal(getRequestContext()!.tenantId, 'tenant-1');
@@ -145,7 +162,9 @@ describe('problem details (internal model)', () => {
     assert.equal(pd.instance, '/api/service/appointments');
     assert.deepEqual(pd.errors, { field: 'concerns' });
 
-    const nf = toProblemDetails(new NotFoundError('Waitlist entry not found', { code: 'waitlist_not_found' }));
+    const nf = toProblemDetails(
+      new NotFoundError('Waitlist entry not found', { code: 'waitlist_not_found' }),
+    );
     assert.equal(nf.status, 404);
     assert.equal(nf.code, 'waitlist_not_found');
   });
@@ -155,7 +174,10 @@ describe('problem details (internal model)', () => {
     const pd = toProblemDetails(new Error(`ECONNREFUSED ${sentinel}`));
     assert.equal(pd.status, 500);
     assert.equal(pd.code, 'internal_error');
-    assert.ok(!JSON.stringify(pd).includes(sentinel), 'client-facing fields must not carry internals');
+    assert.ok(
+      !JSON.stringify(pd).includes(sentinel),
+      'client-facing fields must not carry internals',
+    );
   });
 
   test('the request id rides on the model when inside a request', () => {
@@ -191,30 +213,41 @@ describe('PII-safe structured logging', () => {
     return chunks.join('');
   }
 
-  test('sentinel secrets and PII never appear in serialized output, however nested', () => {
-    const sentinels = {
-      authorization: 'Bearer SENTINEL-AUTH-HEADER',
-      step_up_token: 'SENTINEL-STEP-UP-TOKEN',
-      password: 'SENTINEL-PASSWORD-hunter2',
+  test('sentinel secrets and PII never appear in serialized output, however nested or cased', () => {
+    const sentinels: Record<string, string> = {
+      authorization: 'Bearer SENTINEL AUTH HEADER',
+      step_up_token: 'SENTINEL STEP UP TOKEN',
+      password: 'SENTINEL PASSWORD hunter2',
       api_key: 'SENTINEL API KEY VALUE with spaces',
-      ssn: 'SENTINEL-123-45-6789',
-      driver_license: 'SENTINEL-DL-99887766',
-      dob: 'SENTINEL-1990-01-31',
-      email: 'sentinel-person@example.com',
-      phone: 'SENTINEL-555-0100',
-      street_address: 'SENTINEL-742 Evergreen Terrace',
-      card_number: 'SENTINEL-4111111111111111',
-      cvv: 'SENTINEL-987',
-      cookie: 'SENTINEL-session-cookie',
+      ssn: 'SENTINEL 123 45 6789',
+      driver_license: 'SENTINEL DL 99887766',
+      dob: 'SENTINEL 1990 01 31',
+      email: 'SENTINEL person at example dot com',
+      phone: 'SENTINEL 555 0100',
+      street_address: 'SENTINEL 742 Evergreen Terrace',
+      card_number: 'SENTINEL 4111 1111 1111 1111',
+      cvv: 'SENTINEL 987',
+      cookie: 'SENTINEL session cookie',
+    };
+    // Same fields in camelCase / other variants must redact identically (normalized
+    // key matching): api_key == apiKey == apikey, database_url == databaseUrl, etc.
+    const variants: Record<string, string> = {
+      apiKey: 'SENTINEL CAMEL API KEY',
+      clientSecret: 'SENTINEL CLIENT SECRET',
+      databaseUrl: 'postgres://sentinel:SENTINEL-DB-URL-PW@host/db',
+      connection_string: 'Server=x;Password=SENTINEL CONN PW;',
+      accessToken: 'SENTINEL ACCESS TOKEN CAMEL',
+      requestBody: 'SENTINEL RAW REQUEST BODY',
+      'set-cookie': 'SENTINEL SET COOKIE VALUE',
     };
 
     const output = captureLogs(() => {
       logger.info({ customer: { profile: { contact: sentinels } } }, 'deeply nested');
       logger.error({ ...sentinels }, 'top level');
-      logger.warn({ request: { headers: { authorization: sentinels.authorization } } }, 'headers');
+      logger.warn({ request: { headers: { ...variants } } }, 'variant keys');
     });
 
-    for (const [key, value] of Object.entries(sentinels)) {
+    for (const [key, value] of Object.entries({ ...sentinels, ...variants })) {
       assert.ok(!output.includes(value), `sentinel for "${key}" leaked into log output`);
     }
     assert.ok(output.includes('[REDACTED]'), 'redaction marker present');
@@ -228,19 +261,71 @@ describe('PII-safe structured logging', () => {
       );
       logger.info({ step: 'outside' }, 'uncorrelated line');
     });
-    const lines = output.trim().split('\n').map((l) => JSON.parse(l));
+    const lines = output
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
     assert.equal(lines[0].request_id, 'req-log-12345678');
     assert.equal(lines[0].correlation_id, 'cor-log-12345678');
     assert.equal(lines[1].request_id, undefined);
   });
 
-  test('errors are logged with name/message/stack but never widen into response-shaped leaks', () => {
-    const output = captureLogs(() => {
-      logger.error({ err: new Error('driver text row=42') }, 'failure');
+  test('Error message, stack head, cause, and driver payloads never reach serialized logs', () => {
+    const sentinel = 'SENTINEL-ERR-SECRET-abc123';
+
+    // message + stack first line
+    const err = new Error(`connect failed: ${sentinel}`);
+    // cause chain
+    const withCause = new Error('outer wrapper', { cause: new Error(`inner ${sentinel}`) });
+    // database-driver-style error: enumerable payload properties
+    const driverErr = Object.assign(new Error(`db says ${sentinel}`), {
+      code: '28P01',
+      detail: `password ${sentinel} rejected`,
+      internalQuery: `SELECT secret FROM vault WHERE k = '${sentinel}'`,
+      where: `at row containing ${sentinel}`,
     });
-    const line = JSON.parse(output.trim().split('\n')[0]!);
-    assert.equal(line.err.name, 'Error');
-    assert.match(line.err.message, /driver text/);
+
+    const output = captureLogs(() => {
+      logger.error({ err }, 'plain failure');
+      logger.error({ err: withCause }, 'cause chain');
+      logger.error({ err: driverErr }, 'driver payload');
+    });
+
+    assert.ok(!output.includes(sentinel), 'error-borne sentinel leaked into serialized logs');
+    const lines = output
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    // Bounded safe fields are present and useful for triage.
+    assert.equal(lines[0].err.name, 'Error');
+    assert.match(lines[0].err.stack_fingerprint ?? '', /^[0-9a-f]{16}$/);
+    assert.equal(lines[2].err.code, '28P01', 'a bounded SQLSTATE code survives');
+    assert.equal(lines[2].err.detail, undefined, 'driver payload fields do not survive');
+    assert.equal(lines[1].err.cause, undefined, 'cause chains do not survive');
+    assert.equal(
+      JSON.stringify(lines).includes('connect failed'),
+      false,
+      'messages do not survive',
+    );
+  });
+
+  test('identical failures share a stack fingerprint for incident grouping', () => {
+    function boom(): Error {
+      return new Error('SENTINEL-GROUPING-VALUE');
+    }
+    // Created from the SAME call site (one line, twice), so the stack frames — and
+    // therefore the fingerprint — are identical; the messages never matter.
+    const [a, b] = [0, 1].map(() => boom());
+    const output = captureLogs(() => {
+      logger.error({ err: a }, 'first');
+      logger.error({ err: b }, 'second');
+    });
+    const lines = output
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    assert.equal(lines[0].err.stack_fingerprint, lines[1].err.stack_fingerprint);
+    assert.ok(!output.includes('SENTINEL-GROUPING-VALUE'));
   });
 });
 
@@ -264,12 +349,16 @@ describe('request-context middleware over HTTP', () => {
 
   test('a valid caller id is echoed; an invalid one is replaced, never trusted', async () => {
     await withServer(async (base) => {
-      const valid = await fetch(`${base}/healthz`, { headers: { 'x-request-id': 'edge-gateway-0042' } });
+      const valid = await fetch(`${base}/healthz`, {
+        headers: { 'x-request-id': 'edge-gateway-0042' },
+      });
       assert.equal(valid.headers.get('x-request-id'), 'edge-gateway-0042');
 
       // Note: a literal \n in a header value would be rejected by fetch itself, so the
       // invalid-format case here uses spaces — same policy branch, transportable value.
-      const invalid = await fetch(`${base}/healthz`, { headers: { 'x-request-id': 'bad id with spaces' } });
+      const invalid = await fetch(`${base}/healthz`, {
+        headers: { 'x-request-id': 'bad id with spaces' },
+      });
       const echoed = invalid.headers.get('x-request-id');
       assert.ok(echoed && echoed !== 'bad id with spaces');
       assert.match(echoed, /^[0-9a-f-]{36}$/);

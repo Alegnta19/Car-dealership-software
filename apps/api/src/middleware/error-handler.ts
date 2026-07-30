@@ -19,13 +19,26 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   // The typed internal representation is canonical; what goes on the wire below is the
   // characterized compatibility envelope rendered FROM it. Status and code always come
   // from the model, so the two can never disagree.
-  const problem = toProblemDetails(err, { instance: req.originalUrl });
+  // The query string can carry credentials or PII; logs and the internal model get the
+  // query-free path only. The public response is untouched.
+  const safePath = (req.originalUrl ?? req.path ?? '').split('?')[0] ?? '';
+  const problem = toProblemDetails(err, { instance: safePath });
 
   if (err instanceof AppError) {
-    if (problem.status >= 500) logger.error({ err, path: req.originalUrl }, 'Request failed');
+    if (problem.status >= 500)
+      logger.error(
+        { component: 'api.error-handler', event: 'request_failed', err, path: safePath },
+        'Request failed',
+      );
     else
       logger.warn(
-        { code: problem.code, path: req.originalUrl, status: problem.status },
+        {
+          component: 'api.error-handler',
+          event: 'request_rejected',
+          code: problem.code,
+          path: safePath,
+          status: problem.status,
+        },
         'Request rejected',
       );
 
@@ -43,7 +56,16 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
 
   // Unexpected failures never leak driver text (which can echo row values) to the client:
   // the model's detail is a generic constant for non-AppError failures.
-  logger.error({ err, path: req.originalUrl }, 'Unhandled error');
+  logger.error(
+    {
+      component: 'api.error-handler',
+      event: 'unhandled_error',
+      code: problem.code,
+      err,
+      path: safePath,
+    },
+    'Unhandled error',
+  );
   res.status(problem.status).json({
     success: false,
     error: { code: problem.code, message: problem.detail ?? 'Internal server error' },

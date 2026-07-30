@@ -31,7 +31,7 @@
     }
   },
   "format": {
-    "total": 25,
+    "total": 23,
     "byFile": {
       "apps/api/src/app.ts": 1,
       "apps/api/src/routes/service-cockpit.ts": 1,
@@ -45,7 +45,6 @@
       "packages/fixed-ops/src/legacy/metrics-aggregator.ts": 1,
       "packages/fixed-ops/src/legacy/service-cockpit-service.ts": 1,
       "packages/fixed-ops/src/security/step-up.ts": 1,
-      "packages/platform/src/logger.ts": 1,
       "packages/test-kit/src/db.ts": 1,
       "packages/test-kit/tsconfig.json": 1,
       "README.md": 1,
@@ -54,7 +53,6 @@
       "tests/authorization.test.ts": 1,
       "tests/docs.test.ts": 1,
       "tests/integration.test.ts": 1,
-      "tests/platform.test.ts": 1,
       "tests/routes.test.ts": 1,
       "tests/state-machine.test.ts": 1,
       "tests/step-up.test.ts": 1
