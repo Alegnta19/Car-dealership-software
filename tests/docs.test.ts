@@ -24,7 +24,19 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-const SOURCE = sourceFiles(join(ROOT, 'src')).map((f) => readFileSync(f, 'utf8')).join('\n');
+const SOURCE = ['packages', 'apps']
+  .flatMap((tree) => readdirSync(join(ROOT, tree)).map((entry) => join(ROOT, tree, entry, 'src')))
+  .filter((dir) => {
+    try {
+      return statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  })
+  .flatMap((dir) => sourceFiles(dir))
+  .filter((f) => !f.includes(`${join('x', 'dist')}`.slice(1)))
+  .map((f) => readFileSync(f, 'utf8'))
+  .join('\n');
 
 /** The one appendix line that enumerates error codes. */
 const codeAppendix = DOC.split('\n').find((l) => l.startsWith('**Error codes:**'));

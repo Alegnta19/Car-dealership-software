@@ -1,9 +1,0 @@
-{
-  // Production build config. The base tsconfig includes tests/ so the editor and
-  // `npm run typecheck` cover them, but a deployable artifact must not contain
-  // compiled tests — and before this file existed, `npm run build` emitted
-  // dist/tests/ and the `start` script pointed at a dist/server.js that the
-  // rootDir "." layout never produced.
-  "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "scripts/**/*.ts"]
-}

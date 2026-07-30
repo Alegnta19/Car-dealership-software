@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { test } from 'node:test';
 
-import { ROLES, authenticate, authorize, rejectTenantOverride, requireContext } from '../src/shared/middleware/auth';
+import { ROLES } from '@dealer/contracts';
+import { authenticate, authorize, rejectTenantOverride, requireContext } from '@dealer/api';
 
 // The module reads its secret per call, so setting it here is enough.
 const SECRET = 'test-jwt-secret-that-is-definitely-long-enough';

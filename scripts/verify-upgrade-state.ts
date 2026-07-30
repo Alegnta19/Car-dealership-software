@@ -12,7 +12,7 @@
  *      immediately, the upgrade itself fails earlier; if someone VALIDATEs them in a
  *      later migration without cleaning history first, this check fails.
  */
-import { closePool, query } from '../src/shared/database/pool';
+import { closePool, query } from '@dealer/database';
 
 async function main(): Promise<void> {
   const failures: string[] = [];

@@ -7,7 +7,7 @@ import {
   isTransitionAllowed,
   transitionRequiresAuthorization,
   transitionRequiresStepUp,
-} from '../src/modules/service-cockpit/domain/state-machine';
+} from '@dealer/fixed-ops';
 
 test('every status has a transition entry and every target is a real status', () => {
   for (const status of RO_STATUSES) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { signStepUpToken, verifyStepUpToken } from '../src/shared/security/step-up';
+import { signStepUpToken, verifyStepUpToken } from '@dealer/fixed-ops';
 
 // The module reads its secret per call, so setting it here is enough.
 process.env.STEP_UP_SECRET = 'test-step-up-secret-that-is-long-enough-32';

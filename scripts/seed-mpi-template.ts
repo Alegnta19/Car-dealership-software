@@ -9,11 +9,8 @@
  * location scope) already has an active template with this name, nothing is written
  * and the existing id is reported.
  */
-import { closePool, query } from '../src/shared/database/pool';
-import {
-  STANDARD_MPI_ITEMS,
-  STANDARD_MPI_TEMPLATE_NAME,
-} from '../src/modules/service-cockpit/domain/standard-mpi-template';
+import { closePool, query } from '@dealer/database';
+import { STANDARD_MPI_ITEMS, STANDARD_MPI_TEMPLATE_NAME } from '@dealer/fixed-ops';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

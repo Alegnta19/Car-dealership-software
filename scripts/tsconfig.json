@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": true
+  },
+  "include": ["*.ts"],
+  "references": [
+    {
+      "path": "../packages/database"
+    },
+    {
+      "path": "../packages/platform"
+    },
+    {
+      "path": "../packages/fixed-ops"
+    }
+  ]
+}

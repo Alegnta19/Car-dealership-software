@@ -10,14 +10,14 @@ import {
   seedTechnician,
   skipIntegration,
   type TestWorld,
-} from './helpers/db';
+} from '@dealer/test-kit';
 import * as promClient from 'prom-client';
-import { closePool, query, withTransaction } from '../src/shared/database/pool';
-import { consumeStepUpToken, signStepUpToken } from '../src/shared/security/step-up';
-import { refreshAggregatedMetrics } from '../src/modules/service-cockpit/services/metrics-aggregator';
-import * as svc from '../src/modules/service-cockpit/services/service-cockpit-service';
+import { closePool, query, withTransaction } from '@dealer/database';
+import { consumeStepUpToken, signStepUpToken } from '@dealer/fixed-ops';
+import { refreshAggregatedMetrics } from '@dealer/fixed-ops';
+import * as svc from '@dealer/fixed-ops';
 import { seedStandardMPITemplate } from '../scripts/seed-mpi-template';
-import { STANDARD_MPI_ITEMS } from '../src/modules/service-cockpit/domain/standard-mpi-template';
+import { STANDARD_MPI_ITEMS } from '@dealer/fixed-ops';
 
 /**
  * Behaviour that only exists against a real database: transaction rollback, row locks,

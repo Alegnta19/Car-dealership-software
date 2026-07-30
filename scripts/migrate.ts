@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { closePool, getPool } from '../src/shared/database/pool';
-import { logger } from '../src/shared/utils/logger';
+import { closePool, getPool } from '@dealer/database';
+import { logger } from '@dealer/platform';
 
 /**
  * Works from both layouts this file runs in: scripts/migrate.ts under tsx (dev — the

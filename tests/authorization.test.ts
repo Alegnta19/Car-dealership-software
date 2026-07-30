@@ -5,7 +5,7 @@ import {
   deriveEstimateStatus,
   isAuthorizationMethod,
   methodRequiresStepUp,
-} from '../src/modules/service-cockpit/domain/authorization';
+} from '@dealer/fixed-ops';
 
 test('an authorization is approved only when at least one line was approved', () => {
   assert.equal(deriveAuthorizationStatus(['a'], []), 'approved');

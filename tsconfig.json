@@ -1,21 +1,20 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "lib": ["ES2022"],
-    "rootDir": ".",
-    "outDir": "dist",
-    "strict": true,
-    "noImplicitAny": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "declaration": false,
-    "sourceMap": true,
-    "types": ["node"]
+    "baseUrl": ".",
+    "paths": {
+      "@dealer/contracts": ["packages/contracts/src/index.ts"],
+      "@dealer/platform": ["packages/platform/src/index.ts"],
+      "@dealer/database": ["packages/database/src/index.ts"],
+      "@dealer/fixed-ops": ["packages/fixed-ops/src/index.ts"],
+      "@dealer/test-kit": ["packages/test-kit/src/index.ts"],
+      "@dealer/ui": ["packages/ui/src/index.ts"],
+      "@dealer/api": ["apps/api/src/index.ts"],
+      "@dealer/worker": ["apps/worker/src/index.ts"],
+      "@dealer/web": ["apps/web/src/index.ts"]
+    },
+    "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "**/dist"]
 }

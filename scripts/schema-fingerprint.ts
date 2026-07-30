@@ -12,7 +12,7 @@
  */
 import { createHash } from 'crypto';
 import { writeFileSync } from 'fs';
-import { closePool, query } from '../src/shared/database/pool';
+import { closePool, query } from '@dealer/database';
 
 async function fingerprint(): Promise<{ sha256: string; schema: Record<string, unknown> }> {
   const columns = (

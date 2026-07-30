@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import serviceCockpitRouter from '../src/modules/service-cockpit/routes';
-import { createApp } from '../src/app';
-import { errorHandler, notFoundHandler, ValidationError } from '../src/shared/middleware/error-handler';
+import { serviceCockpitRouter } from '@dealer/api';
+import { createApp } from '@dealer/api';
+import { errorHandler, notFoundHandler } from '@dealer/api';
+import { ValidationError } from '@dealer/platform';
 
 /**
  * HTTP behavior characterization (FBL-010 order, section A).
@@ -25,21 +26,37 @@ interface RouteEntry {
   roles: string[];
 }
 
-function walkRouter(router: { stack: any[] }): RouteEntry[] {
+/** The slice of Express router internals this characterization reads. */
+interface RouteHandle {
+  name?: string;
+  requiredRoles?: unknown;
+}
+interface RouteStackLayer {
+  handle?: RouteHandle;
+}
+interface RouterLayer {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+    stack: RouteStackLayer[];
+  };
+}
+interface WalkableRouter {
+  stack: RouterLayer[];
+}
+
+function walkRouter(router: WalkableRouter): RouteEntry[] {
   const entries: RouteEntry[] = [];
   for (const layer of router.stack) {
     if (!layer.route) continue; // app-level middleware, not a mounted route
-    const path = layer.route.path as string;
-    for (const routeLayer of layer.route.stack) {
-      void routeLayer;
-    }
-    const methods = Object.keys(layer.route.methods).filter((m) => m !== '_all');
-    const stack: any[] = layer.route.stack;
+    const { path, methods, stack } = layer.route;
     const authenticated = stack.some((l) => l.handle?.name === 'authenticate');
-    const roles = stack
-      .filter((l) => Array.isArray(l.handle?.requiredRoles))
-      .flatMap((l) => l.handle.requiredRoles as string[]);
-    for (const method of methods) {
+    const roles = stack.flatMap((l) =>
+      Array.isArray(l.handle?.requiredRoles)
+        ? l.handle.requiredRoles.filter((r): r is string => typeof r === 'string')
+        : [],
+    );
+    for (const method of Object.keys(methods).filter((m) => m !== '_all')) {
       entries.push({
         method: method.toUpperCase(),
         path,
@@ -52,7 +69,7 @@ function walkRouter(router: { stack: any[] }): RouteEntry[] {
 }
 
 describe('HTTP contract characterization', () => {
-  const serviceRoutes = walkRouter(serviceCockpitRouter as any);
+  const serviceRoutes = walkRouter(serviceCockpitRouter as unknown as WalkableRouter);
 
   test('the mounted /api/service surface is exactly 44 endpoints', () => {
     assert.equal(
@@ -79,7 +96,9 @@ describe('HTTP contract characterization', () => {
     try {
       recorded = readFileSync(SNAPSHOT_PATH, 'utf8');
     } catch {
-      assert.fail('http-contract-snapshot.json is missing — run with UPDATE_HTTP_CONTRACT=1 and review the result');
+      assert.fail(
+        'http-contract-snapshot.json is missing — run with UPDATE_HTTP_CONTRACT=1 and review the result',
+      );
       return;
     }
     assert.equal(
@@ -91,34 +110,46 @@ describe('HTTP contract characterization', () => {
   });
 
   test('the app exposes /healthz and /metrics without authentication, and nothing else at the top level', () => {
-    const app = createApp();
-    const appRoutes = walkRouter((app as any)._router ?? (app as any).router);
+    const app = createApp() as unknown as { _router?: WalkableRouter; router?: WalkableRouter };
+    const appRoutes = walkRouter((app._router ?? app.router)!);
     const paths = appRoutes.map((r) => `${r.method} ${r.path}`).sort();
     assert.deepEqual(paths, ['GET /healthz', 'GET /metrics']);
     for (const r of appRoutes) {
-      assert.equal(r.authenticated, false, `${r.path} must stay unauthenticated (gate at the ingress)`);
+      assert.equal(
+        r.authenticated,
+        false,
+        `${r.path} must stay unauthenticated (gate at the ingress)`,
+      );
     }
   });
 
   // ── Error envelope characterization, at the handler level ──
 
+  interface RenderedEnvelope {
+    success: boolean;
+    error: { code: string; message: string; details?: unknown };
+  }
+
   function renderThrough(handler: 'error' | 'notFound', err?: unknown) {
     let statusCode = 0;
-    let body: any = null;
-    const res: any = {
+    let body: RenderedEnvelope | null = null;
+    const res = {
       status(code: number) {
         statusCode = code;
         return this;
       },
       json(payload: unknown) {
-        body = payload;
+        body = payload as RenderedEnvelope;
         return this;
       },
     };
-    const req: any = { method: 'GET', path: '/api/service/whatever', headers: {} };
-    if (handler === 'error') errorHandler(err, req, res, () => undefined);
-    else notFoundHandler(req, res);
-    return { statusCode, body };
+    const req = { method: 'GET', path: '/api/service/whatever', headers: {} };
+    type ErrorHandlerFn = (e: unknown, rq: unknown, rs: unknown, nx: () => void) => void;
+    type NotFoundFn = (rq: unknown, rs: unknown) => void;
+    if (handler === 'error')
+      (errorHandler as unknown as ErrorHandlerFn)(err, req, res, () => undefined);
+    else (notFoundHandler as unknown as NotFoundFn)(req, res);
+    return { statusCode, body: body! };
   }
 
   test('an unexpected error renders the stable 500 envelope and leaks nothing from the error', () => {

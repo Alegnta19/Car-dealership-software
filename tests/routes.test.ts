@@ -3,12 +3,12 @@ import { createHmac, randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, seedMPITemplate, seedTechnician, skipIntegration } from './helpers/db';
-import { closePool, query } from '../src/shared/database/pool';
-import { signStepUpToken } from '../src/shared/security/step-up';
-import { ROLES } from '../src/shared/middleware/auth';
+import { resetDatabase, seedMPITemplate, seedTechnician, skipIntegration } from '@dealer/test-kit';
+import { closePool, query } from '@dealer/database';
+import { signStepUpToken } from '@dealer/fixed-ops';
+import { ROLES } from '@dealer/contracts';
 import * as promClient from 'prom-client';
-import { createApp } from '../src/app';
+import { createApp } from '@dealer/api';
 
 /**
  * Tests that go through the real HTTP stack — routing, middleware order,
@@ -611,7 +611,7 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     // ValidationError, so the current public contract is 400 body_too_large (not 413).
     // Changing that status is a deliberate contract decision for a later order.
     assert.equal(res.status, 400);
-    const body = (await res.json()) as any;
+    const body = (await res.json()) as { success: boolean; error: { code: string } };
     assert.equal(body.success, false);
     assert.equal(body.error.code, 'body_too_large');
   });

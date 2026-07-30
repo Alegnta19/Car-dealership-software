@@ -1,0 +1,20 @@
+{
+  "name": "@dealer/web",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@dealer/contracts": "0.1.0",
+    "@dealer/ui": "0.1.0"
+  }
+}
