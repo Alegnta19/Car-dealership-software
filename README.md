@@ -32,11 +32,32 @@ npm run dev
 Other scripts: `npm test` (unit tests, no database required), `npm run test:integration`
 (set `TEST_DATABASE_URL`), `npm run typecheck`, `npm run build`, `npm start`.
 
+### Docker
+
+```bash
+cp .env.example .env   # set JWT_SECRET, STEP_UP_SECRET, POSTGRES_PASSWORD
+```
+
+```bash
+docker compose up --build
+```
+
+Compose refuses to start with missing secrets (`${VAR:?}` — there are no baked defaults),
+runs migrations as a one-shot service, and only starts the API after they succeed. The
+image is a two-stage non-root build with a `/healthz` healthcheck; `/metrics` and
+`/healthz` stay unauthenticated by design, so gate them at the ingress in any deployment
+where port 3000 is reachable from outside. To seed a tenant's standard MPI checklist:
+
+```bash
+docker compose exec api node dist/scripts/seed-mpi-template.js --tenant <tenant-uuid>
+```
+
 ---
 
 ## Layout
 
 ```text
+Dockerfile / docker-compose.yml      container build + postgres/migrate/api stack
 migrations/
   000_platform_core.sql              audit_events + pgcrypto guard (prerequisite)
   049_phase248_service_cockpit.sql   20 tables, 45 index statements
@@ -44,6 +65,7 @@ migrations/
   051_phase248_metrics_support.sql   received_at, SLA defaults, corrections
   052_phase248_authorization_binding.sql  approved-price snapshot + freeze
   053_phase248_estimate_line_association.sql  which lines an estimate asked about
+  054_phase248_waitlist.sql          service waitlist + waitlist appointment source
 src/
   app.ts                             express wiring, /healthz, /metrics
   server.ts                          startup, env validation, graceful shutdown
@@ -55,22 +77,24 @@ src/
     utils/                           logger (with redaction), id helpers
   modules/service-cockpit/
     domain/                          pure rules: state machine, authorization
-    routes/index.ts                  39 endpoints
+    routes/index.ts                  44 endpoints
     services/service-cockpit-service.ts   business logic and SQL
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered, transactional migration runner
-tests/                               39 unit + 4 documentation + 61 database-backed
+scripts/seed-mpi-template.ts         per-tenant standard bilingual MPI checklist
+tests/                               39 unit + 4 documentation + 72 database-backed
 docs/
   PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
   REMEDIATION.md                     what was fixed, why, and what remains
+  PLATFORM-CONTEXT.md                origin platform, adjacent systems, integration hazards
 ```
 
 ---
 
 ## The domain in one paragraph
 
-The central aggregate is the **repair order (RO)**. An appointment is booked, confirmed, and checked
-in — which creates the RO. A technician runs a multi-point inspection (MPI); failed and attention
+The central aggregate is the **repair order (RO)**. An appointment is booked (directly, or by converting a
+waitlist entry when a slot opens), confirmed, and checked in — which creates the RO. A technician runs a multi-point inspection (MPI); failed and attention
 items automatically become bilingual customer recommendations. An advisor generates a versioned
 estimate and sends it; the customer approves or declines individual lines; that decision is recorded
 as an **authorization**, which is the evidence the RO state machine requires before work may start.
@@ -193,14 +217,16 @@ thrown, each metric's documented labels must match its declaration, and every mi
 appear. Three review rounds turned up the same drift, so it is now a failing test rather than
 something a reader has to catch by hand. They need no database either.
 
-**61 database-backed tests** need a real PostgreSQL instance. 37 exercise the service layer for
+**72 database-backed tests** need a real PostgreSQL instance. 46 exercise the service layer for
 what a mock cannot express — cross-tenant reads and writes, check-in idempotency and its
 unique-index backstop, transaction rollback, the authorization gate, step-up consumption and
-release, queue lifecycle, clock sequencing, and the populations behind the metrics and the estimate
-status. The other 24 go through the real HTTP stack via `createApp()`, which is where role
-boundaries actually live: that a technician cannot rewrite `price_ref` or `sold_hours`, cannot
-assign themselves work, and cannot touch a line they were not dispatched to; that an approved price
-is frozen; that a vehicle with a chargeable undecided line cannot be handed back.
+release, queue lifecycle, waitlist transitions and the atomic waitlist→appointment conversion,
+the seeded MPI checklist, clock sequencing, and the populations behind the metrics and the
+estimate status. The other 26 go through the real HTTP stack via `createApp()`, which is where
+role boundaries actually live: that a technician cannot rewrite `price_ref` or `sold_hours`,
+cannot assign themselves work, cannot put customers on the waitlist, and cannot touch a line they
+were not dispatched to; that an approved price is frozen; that a vehicle with a chargeable
+undecided line cannot be handed back.
 
 Point `TEST_DATABASE_URL` at a throwaway database and run:
 
