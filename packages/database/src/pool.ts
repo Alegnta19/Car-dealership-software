@@ -1,5 +1,5 @@
 import { Pool, PoolClient, QueryResult } from 'pg';
-import { logger } from '@dealer/platform';
+import { getConfig, logger } from '@dealer/platform';
 
 /**
  * Anything that can run a statement: the shared pool, or a client bound to an open
@@ -15,15 +15,15 @@ let pool: Pool | null = null;
 export function getPool(): Pool {
   if (pool) return pool;
 
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is not set');
+  const config = getConfig();
+  const connectionString = config.databaseUrl;
 
   pool = new Pool({
     connectionString,
-    max: Number(process.env.PGPOOL_MAX ?? 10),
-    idleTimeoutMillis: Number(process.env.PGPOOL_IDLE_MS ?? 30_000),
-    connectionTimeoutMillis: Number(process.env.PGPOOL_CONNECT_MS ?? 5_000),
-    ...(process.env.PGSSL === 'require' ? { ssl: { rejectUnauthorized: false } } : {}),
+    max: config.pgPoolMax,
+    idleTimeoutMillis: config.pgPoolIdleMs,
+    connectionTimeoutMillis: config.pgPoolConnectMs,
+    ...(config.pgSslRequire ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 
   pool.on('error', (err) => logger.error({ err }, 'Idle Postgres client error'));

@@ -8,6 +8,10 @@ import { authenticate, authorize, rejectTenantOverride, requireContext } from '@
 // The module reads its secret per call, so setting it here is enough.
 const SECRET = 'test-jwt-secret-that-is-definitely-long-enough';
 process.env.JWT_SECRET = SECRET;
+// The lazy config boundary validates the WHOLE configuration on first access, so a
+// portable unit test must present a complete (dummy) environment.
+process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
+process.env.STEP_UP_SECRET ??= 'auth-test-step-up-secret-32-chars!!!';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const OTHER_TENANT = '99999999-9999-4999-8999-999999999999';

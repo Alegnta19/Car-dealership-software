@@ -5,7 +5,13 @@
  */
 import { NextFunction, Request, Response } from 'express';
 import { READ_ROLES, ROLES, Role, TenantContext } from '@dealer/contracts';
-import { ForbiddenError, UnauthorizedError, isUuid, verifyJwtHs256 } from '@dealer/platform';
+import {
+  ForbiddenError,
+  UnauthorizedError,
+  bindRequestActor,
+  isUuid,
+  verifyJwtHs256,
+} from '@dealer/platform';
 
 export { READ_ROLES, ROLES };
 export type { Role, TenantContext };
@@ -35,6 +41,9 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       : [];
 
     req.tenantContext = { tenantId, userId, roles };
+    // Correlation only: logs gain tenant/user ids. Authorization decisions never read
+    // the request context store.
+    bindRequestActor({ tenantId, userId, roles });
     next();
   } catch (err) {
     next(err);

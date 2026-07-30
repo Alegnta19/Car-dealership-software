@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { Executor } from '@dealer/database';
-import { ForbiddenError } from '@dealer/platform';
+import { ForbiddenError, getConfig } from '@dealer/platform';
 
 /**
  * A step-up token proves that a *specific* actor re-authenticated to perform one
@@ -30,11 +30,7 @@ interface StepUpPayload extends StepUpBinding {
 const DEFAULT_TTL_SECONDS = 120;
 
 function secret(): string {
-  const value = process.env.STEP_UP_SECRET;
-  if (!value || value.length < 32) {
-    throw new Error('STEP_UP_SECRET must be set to at least 32 characters');
-  }
-  return value;
+  return getConfig().stepUpSecret;
 }
 
 function b64url(input: Buffer | string): string {

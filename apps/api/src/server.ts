@@ -2,33 +2,27 @@ import * as promClient from 'prom-client';
 import { createApp } from './app';
 import { startMetricsAggregation } from '@dealer/fixed-ops';
 import { closePool } from '@dealer/database';
-import { logger } from '@dealer/platform';
+import { AppConfig, initConfig, loadConfig, logger } from '@dealer/platform';
 
 /**
- * Fail fast on missing secrets rather than at the first request that needs them —
- * a process that starts without `JWT_SECRET` would accept traffic it cannot
- * authenticate.
+ * Composition root. Configuration is loaded and validated HERE, once, before the
+ * process accepts traffic — a process that cannot authenticate or reach its database
+ * must fail at startup, not at the first request. `loadConfig` names the offending
+ * variable in its error and never includes a value, so this failure path is safe to
+ * print.
  */
-function assertRequiredEnv(): void {
-  const missing = ['DATABASE_URL', 'JWT_SECRET', 'STEP_UP_SECRET'].filter((key) => !process.env[key]);
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-  }
-
-  // The verifiers enforce a 32-character minimum at call time. Checking only presence
-  // here let the service start, pass its health check, and then fail every authenticated
-  // request with a 500 — a configuration error presenting as an outage.
-  const tooShort = (['JWT_SECRET', 'STEP_UP_SECRET'] as const).filter((key) => (process.env[key] ?? '').length < 32);
-  if (tooShort.length > 0) {
-    throw new Error(`These secrets must be at least 32 characters: ${tooShort.join(', ')}`);
-  }
-}
-
-/** How long a graceful shutdown may take before the process force-exits. */
-const SHUTDOWN_GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS ?? 30_000);
-
 function main(): void {
-  assertRequiredEnv();
+  let config: AppConfig;
+  try {
+    config = loadConfig(process.env);
+  } catch (err) {
+    process.stderr.write(
+      `Invalid configuration: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+    return;
+  }
+  initConfig(config);
 
   // Node process baseline (event-loop lag, GC, heap, open handles). These series are
   // label-free and bounded, so they satisfy the /metrics invariants (no tenant labels,
@@ -36,8 +30,9 @@ function main(): void {
   // app instance does not attempt a duplicate registration.
   promClient.collectDefaultMetrics();
 
-  const port = Number(process.env.PORT ?? 3000);
-  const server = createApp().listen(port, () => logger.info({ port }, 'Service cockpit API listening'));
+  const server = createApp().listen(config.port, () =>
+    logger.info({ port: config.port }, 'Service cockpit API listening'),
+  );
 
   // Rates and ratios are computed on a schedule rather than from request traffic.
   const stopMetrics = startMetricsAggregation();
@@ -52,9 +47,12 @@ function main(): void {
     // wait ourselves and exit non-zero so the failure is visible. unref'd, so the timer
     // never keeps an otherwise-finished process alive.
     const deadline = setTimeout(() => {
-      logger.error({ graceMs: SHUTDOWN_GRACE_MS }, 'Graceful shutdown timed out; forcing exit');
+      logger.error(
+        { graceMs: config.shutdownGraceMs },
+        'Graceful shutdown timed out; forcing exit',
+      );
       process.exit(1);
-    }, SHUTDOWN_GRACE_MS);
+    }, config.shutdownGraceMs);
     deadline.unref();
 
     server.close(() => {

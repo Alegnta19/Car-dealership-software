@@ -17,6 +17,12 @@ import { ValidationError } from '@dealer/platform';
  * (UPDATE_HTTP_CONTRACT=1) and the diff reviewed. Portable — no database required.
  */
 
+// createApp() resolves configuration lazily; a portable test presents a complete
+// dummy environment (never asserted on).
+process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
+process.env.JWT_SECRET ??= 'contract-test-jwt-secret-32-chars!!!';
+process.env.STEP_UP_SECRET ??= 'contract-test-step-up-secret-32ch!!!';
+
 const SNAPSHOT_PATH = join(__dirname, 'fixtures', 'http-contract-snapshot.json');
 
 interface RouteEntry {

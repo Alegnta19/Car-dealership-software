@@ -1,14 +1,18 @@
 import express, { Express, NextFunction, Request, Response } from 'express';
 import * as promClient from 'prom-client';
 import serviceCockpitRouter from './routes/service-cockpit';
-import { ValidationError } from '@dealer/platform';
+import { ValidationError, getConfig } from '@dealer/platform';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
+import { requestContext } from './middleware/request-context';
 
 export function createApp(): Express {
   const app = express();
 
   app.disable('x-powered-by');
-  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT ?? '1mb' }));
+  // Outermost: every subsequent middleware, handler and log line runs inside the
+  // request context established here.
+  app.use(requestContext);
+  app.use(express.json({ limit: getConfig().jsonBodyLimit }));
 
   // A malformed or oversized body is a client error, not a server fault. Without this
   // the body parser's SyntaxError reached the generic handler, which answered 500 and

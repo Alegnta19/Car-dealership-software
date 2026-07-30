@@ -1,16 +1,29 @@
-type Level = 'debug' | 'info' | 'warn' | 'error';
+import { getConfig, LogLevel } from './config';
+import { getRequestContext } from './request-context';
 
-const LEVEL_ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-const MIN_LEVEL: Level = (process.env.LOG_LEVEL as Level) || 'info';
+const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 /**
  * Keys whose values are redacted before a log line is written. Service code passes
  * error objects and request-shaped payloads straight through, so anything that could
- * carry a credential is masked here rather than at every call site.
+ * carry a credential or personal data is masked here rather than at every call site.
+ *
+ * The full field policy — what every request log must carry and what may never be
+ * logged — is documented in docs/architecture/LOGGING-POLICY.md and enforced by the
+ * sentinel tests in tests/logging.test.ts.
  */
 const REDACTED_KEYS = new Set([
+  // credentials and tokens
   'password', 'token', 'step_up_token', 'authorization', 'secret',
   'api_key', 'apikey', 'access_token', 'refresh_token', 'jwt',
+  'cookie', 'cookies', 'set-cookie', 'set_cookie',
+  // payment data
+  'card', 'card_number', 'pan', 'cvv', 'cvc', 'payment_credential',
+  // government identifiers
+  'ssn', 'social_security_number', 'driver_license', 'drivers_license', 'license_number',
+  // customer PII
+  'email', 'email_address', 'phone', 'phone_number', 'street', 'street_address', 'address',
+  'dob', 'date_of_birth', 'birth_date',
 ]);
 
 function redact(value: unknown, depth = 0): unknown {
@@ -27,14 +40,41 @@ function redact(value: unknown, depth = 0): unknown {
   return out;
 }
 
-function emit(level: Level, a?: unknown, b?: string): void {
-  if (LEVEL_ORDER[level] < LEVEL_ORDER[MIN_LEVEL]) return;
+function minLevel(): LogLevel {
+  try {
+    return getConfig().logLevel;
+  } catch {
+    // Config invalid or unavailable (e.g. during startup failure reporting): log
+    // everything rather than lose the failure.
+    return 'debug';
+  }
+}
+
+function emit(level: LogLevel, a?: unknown, b?: string): void {
+  if (LEVEL_ORDER[level] < LEVEL_ORDER[minLevel()]) return;
 
   const hasContext = typeof a === 'object' && a !== null;
   const context = hasContext ? (redact(a) as Record<string, unknown>) : {};
   const msg = hasContext ? b : (a as string | undefined);
 
-  const line = JSON.stringify({ level, time: new Date().toISOString(), msg, ...context });
+  // Request correlation rides on every line automatically; ids only, never bodies.
+  const rc = getRequestContext();
+  const correlation = rc
+    ? {
+        request_id: rc.requestId,
+        correlation_id: rc.correlationId,
+        ...(rc.tenantId !== undefined ? { tenant_id: rc.tenantId } : {}),
+        ...(rc.userId !== undefined ? { user_id: rc.userId } : {}),
+      }
+    : {};
+
+  const line = JSON.stringify({
+    level,
+    time: new Date().toISOString(),
+    msg,
+    ...correlation,
+    ...context,
+  });
   if (level === 'error') process.stderr.write(line + '\n');
   else process.stdout.write(line + '\n');
 }

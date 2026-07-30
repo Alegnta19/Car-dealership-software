@@ -4,6 +4,8 @@ import { signStepUpToken, verifyStepUpToken } from '@dealer/fixed-ops';
 
 // The module reads its secret per call, so setting it here is enough.
 process.env.STEP_UP_SECRET = 'test-step-up-secret-that-is-long-enough-32';
+process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
+process.env.JWT_SECRET ??= 'step-up-test-jwt-secret-32-chars!!!!';
 
 const binding = {
   tenantId: '11111111-1111-4111-8111-111111111111',

@@ -1,5 +1,6 @@
 import * as promClient from 'prom-client';
 import { query } from '@dealer/database';
+import { getConfig } from '@dealer/platform';
 import { pruneConsumedStepUpTokens } from '../security/step-up';
 import { logger } from '@dealer/platform';
 import { aggregatedMetrics, COMEBACK_ROOT_CAUSES, QUEUE_TYPES } from './service-cockpit-service';
@@ -34,7 +35,7 @@ const {
 type Publish = () => void;
 
 /** How far back rate calculations look. */
-const WINDOW_DAYS = Number(process.env.METRICS_WINDOW_DAYS ?? 30);
+const WINDOW_DAYS = () => getConfig().metricsWindowDays;
 
 /*
  * Label values that come from a database column are bounded here before they reach the
@@ -82,7 +83,7 @@ async function refreshPartsMetrics(): Promise<Publish> {
          JOIN repair_orders ro ON rpl.ro_id = ro.ro_id AND ro.tenant_id = rpl.tenant_id
         WHERE rpl.created_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     )
   ).rows;
 
@@ -150,7 +151,7 @@ async function refreshQualityMetrics(): Promise<Publish> {
         WHERE e.event_type = 'status_changed'
           AND e.occurred_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     )
   ).rows;
 
@@ -175,7 +176,7 @@ async function refreshQualityMetrics(): Promise<Publish> {
           AND e.payload_ref->>'to' = 'closed'
           AND e.occurred_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     ),
     // Same cohort as the denominator: comebacks against repair orders that CLOSED in the
     // window, not comebacks RAISED in it. Counting by raise date mixed in returns against
@@ -189,7 +190,7 @@ async function refreshQualityMetrics(): Promise<Publish> {
           AND e.payload_ref->>'to' = 'closed'
           AND e.occurred_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id, cc.root_cause_category`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     ),
   ]);
 
@@ -265,7 +266,7 @@ async function refreshTechnicianMetrics(): Promise<Publish> {
          JOIN ro_line_items li ON li.line_item_id = c.line_item_id AND li.tenant_id = c.tenant_id
          JOIN repair_orders ro ON ro.ro_id = li.ro_id AND ro.tenant_id = li.tenant_id
         GROUP BY ro.location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     ),
     query(
       `SELECT location_id,
@@ -273,7 +274,7 @@ async function refreshTechnicianMetrics(): Promise<Publish> {
          FROM tech_profiles
         WHERE status = 'active'
         GROUP BY location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     ),
   ]);
 
@@ -326,7 +327,7 @@ async function refreshQueueMetrics(): Promise<Publish> {
               AND created_at > NOW() - ($1 || ' days')::interval
          ) q
         GROUP BY location_id, queue_type`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     )
   ).rows;
 
@@ -379,7 +380,7 @@ async function refreshConversionMetrics(): Promise<Publish> {
          JOIN repair_orders ro ON ro.ro_id = sr.ro_id AND ro.tenant_id = sr.tenant_id
         WHERE sr.created_at > NOW() - ($1 || ' days')::interval
         GROUP BY ro.location_id, sr.priority`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     )
   ).rows;
 
@@ -392,7 +393,7 @@ async function refreshConversionMetrics(): Promise<Publish> {
          FROM first_service_offers
         WHERE offered_at > NOW() - ($1 || ' days')::interval
         GROUP BY location_id`,
-      [WINDOW_DAYS],
+      [WINDOW_DAYS()],
     )
   ).rows;
 
@@ -453,7 +454,8 @@ export async function refreshAggregatedMetrics(): Promise<void> {
  * Starts the periodic refresh. Returns a stop function. The timer is unref'd so it
  * never holds the process open during shutdown.
  */
-export function startMetricsAggregation(intervalMs = Number(process.env.METRICS_INTERVAL_MS ?? 60_000)): () => void {
+export function startMetricsAggregation(intervalMs?: number): () => void {
+  const effectiveIntervalMs = intervalMs ?? getConfig().metricsIntervalMs;
   let running = false;
 
   const tick = async () => {
@@ -467,7 +469,7 @@ export function startMetricsAggregation(intervalMs = Number(process.env.METRICS_
   };
 
   void tick();
-  const timer = setInterval(tick, intervalMs);
+  const timer = setInterval(tick, effectiveIntervalMs);
   timer.unref?.();
 
   return () => clearInterval(timer);

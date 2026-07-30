@@ -6,6 +6,7 @@
  * touches it.
  */
 import { createHmac, timingSafeEqual } from 'crypto';
+import { getConfig } from './config';
 import { UnauthorizedError } from './errors';
 
 function b64urlJson(segment: string): any {
@@ -17,11 +18,7 @@ function isObject(value: unknown): value is Record<string, any> {
 }
 
 function jwtSecret(): string {
-  const value = process.env.JWT_SECRET;
-  if (!value || value.length < 32) {
-    throw new Error('JWT_SECRET must be set to at least 32 characters');
-  }
-  return value;
+  return getConfig().jwtSecret;
 }
 
 /**

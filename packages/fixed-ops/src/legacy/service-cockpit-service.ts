@@ -1,6 +1,6 @@
 import * as promClient from 'prom-client';
 import { Executor, query, withTransaction } from '@dealer/database';
-import { distinct, generateId, isUuid } from '@dealer/platform';
+import { distinct, generateId, getConfig, isUuid } from '@dealer/platform';
 import { logger } from '@dealer/platform';
 import {
   ConflictError,
@@ -435,7 +435,7 @@ async function assertLineItemsOnRO(
 function resolveTimezone(supplied?: unknown): string {
   const candidate = typeof supplied === 'string' && supplied.trim() !== ''
     ? supplied
-    : process.env.SERVICE_DEFAULT_TIMEZONE ?? 'UTC';
+    : getConfig().serviceDefaultTimezone;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: candidate });
   } catch {
