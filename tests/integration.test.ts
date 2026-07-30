@@ -16,6 +16,8 @@ import { closePool, query, withTransaction } from '../src/shared/database/pool';
 import { consumeStepUpToken, signStepUpToken } from '../src/shared/security/step-up';
 import { refreshAggregatedMetrics } from '../src/modules/service-cockpit/services/metrics-aggregator';
 import * as svc from '../src/modules/service-cockpit/services/service-cockpit-service';
+import { seedStandardMPITemplate } from '../scripts/seed-mpi-template';
+import { STANDARD_MPI_ITEMS } from '../src/modules/service-cockpit/domain/standard-mpi-template';
 
 /**
  * Behaviour that only exists against a real database: transaction rollback, row locks,
@@ -765,6 +767,240 @@ describe('service cockpit integration', { skip: skipIntegration ? 'set TEST_DATA
     assert.equal(estimate.totals_ref.currency, 'USD');
     assert.equal(estimate.totals_ref.priced_line_count, 1);
     assert.equal(estimate.totals_ref.unpriced_line_count, 1);
+  });
+
+
+
+  // -- Standard MPI template seed ------------------------------
+
+  test('the standard MPI template seeds once, per tenant, and is genuinely usable', async () => {
+    const first = await seedStandardMPITemplate(w.tenantA.tenantId);
+    const second = await seedStandardMPITemplate(w.tenantA.tenantId);
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.equal(second.template_id, first.template_id, 'idempotent: same row, nothing new written');
+
+    // A different tenant gets its own template — the content is shared, the row is not.
+    const other = await seedStandardMPITemplate(w.tenantB.tenantId);
+    assert.equal(other.created, true);
+    assert.notEqual(other.template_id, first.template_id);
+
+    const stored = await query(`SELECT items, tenant_id FROM mpi_templates WHERE template_id=$1`, [first.template_id]);
+    assert.equal(stored.rows[0].tenant_id, w.tenantA.tenantId);
+    assert.equal(stored.rows[0].items.length, 18);
+    const keys = new Set(stored.rows[0].items.map((i: any) => i.item_key));
+    assert.equal(keys.size, 18, 'item keys are unique');
+    for (const item of stored.rows[0].items) {
+      assert.ok(['info', 'maintenance', 'safety'].includes(item.default_severity),
+        `${item.item_key} severity must be from the repo vocabulary`);
+      assert.ok(item.title_i18n.en && item.title_i18n.es, `${item.item_key} is bilingual`);
+      if (item.severity_rubric) {
+        assert.deepEqual(Object.keys(item.severity_rubric).sort(), ['attention', 'fail', 'pass'],
+          'rubric keys use the MPI result vocabulary the API accepts');
+      }
+    }
+
+    // Usable end to end: start a session against it, record a failing item from the
+    // template, and the submit turns it into a customer recommendation.
+    const appt = await newAppointment();
+    const ro = await svc.checkIn(w.tenantA, appt.appointment_id, {});
+    const seededTech = randomUUID();
+    await seedTechnician(w.tenantA, w.locationA, seededTech);
+    const session = await svc.startMPISession(w.tenantA, ro.ro_id, { template_id: first.template_id, tech_user_id: seededTech });
+    const brakeItem = STANDARD_MPI_ITEMS.find((i) => i.item_key === 'brake_pads_front')!;
+    await svc.recordMPIResult(w.tenantA, session.mpi_session_id, {
+      item_key: brakeItem.item_key, status: 'fail', severity: brakeItem.default_severity,
+    });
+    await svc.submitMPISession(w.tenantA, session.mpi_session_id);
+
+    const recs = await query(
+      `SELECT priority FROM service_recommendations WHERE ro_id=$1 AND tenant_id=$2`,
+      [ro.ro_id, w.tenantA.tenantId],
+    );
+    assert.equal(recs.rows.length, 1);
+    assert.equal(recs.rows[0].priority, 'p0', 'a failed safety item becomes a p0 recommendation');
+  });
+
+  // -- Waitlist ------------------------------------------------
+
+  async function newWaitlistEntry(overrides: Record<string, unknown> = {}) {
+    return svc.createWaitlistEntry(w.tenantA, {
+      location_id: w.locationA,
+      mdm_customer_id: w.customer,
+      mdm_vehicle_id: w.vehicle,
+      requested_start: futureISO(2),
+      concerns: [{ category: 'brakes', description: 'squeal at low speed' }],
+      ...overrides,
+    } as any);
+  }
+
+  test('a vehicle joins the waitlist once per location, and cancelling frees the spot', async () => {
+    const entry = await newWaitlistEntry();
+    assert.equal(entry.status, 'waiting');
+
+    await assert.rejects(
+      () => newWaitlistEntry(),
+      (err: any) => err.code === 'waitlist_entry_exists' && err.statusCode === 409,
+      'a second open entry for the same vehicle at the same location is refused',
+    );
+
+    // A different location is a different queue.
+    const otherLocation = await newWaitlistEntry({ location_id: randomUUID() });
+    assert.equal(otherLocation.status, 'waiting');
+
+    await svc.cancelWaitlistEntry(w.tenantA, entry.waitlist_entry_id);
+    const again = await newWaitlistEntry();
+    assert.equal(again.status, 'waiting', 'a cancelled entry no longer blocks the vehicle');
+  });
+
+  test('the unique index is a real backstop, not just an application check', async () => {
+    await newWaitlistEntry();
+    // Straight to the table, skipping the service-layer check entirely.
+    await assert.rejects(
+      () => query(
+        `INSERT INTO service_waitlist_entries (waitlist_entry_id,tenant_id,location_id,mdm_customer_id,mdm_vehicle_id,requested_start,created_by_user_id)
+         VALUES ($1,$2,$3,$4,$5,NOW() + INTERVAL '1 day',$6)`,
+        [randomUUID(), w.tenantA.tenantId, w.locationA, w.customer, w.vehicle, w.tenantA.userId],
+      ),
+      (err: any) => err.code === '23505',
+    );
+  });
+
+  test('converting a waitlist entry books the appointment atomically and carries the context', async () => {
+    const entry = await newWaitlistEntry({ preferred_contact_channel: 'email', language_preference: 'es' });
+    await svc.offerWaitlistSlot(w.tenantA, entry.waitlist_entry_id, {});
+
+    const start = futureISO(1);
+    const outcome = await svc.convertWaitlistEntry(w.tenantA, entry.waitlist_entry_id, { scheduled_start: start });
+
+    assert.equal(outcome.entry.status, 'scheduled');
+    assert.equal(outcome.entry.appointment_id, outcome.appointment.appointment_id,
+      'the entry points at the appointment it created');
+    assert.equal(outcome.appointment.source, 'waitlist', 'provenance is recorded, not inferred');
+    assert.equal(outcome.appointment.preferred_contact_channel, 'email');
+    assert.equal(outcome.appointment.language_preference, 'es');
+    assert.deepEqual(outcome.appointment.concerns, [{ category: 'brakes', description: 'squeal at low speed' }],
+      'the concerns the customer gave the waitlist ride into the appointment');
+
+    const events = await query(
+      `SELECT event_type FROM service_appointment_events WHERE appointment_id=$1 AND tenant_id=$2`,
+      [outcome.appointment.appointment_id, w.tenantA.tenantId],
+    );
+    assert.ok(events.rows.some((r: any) => r.event_type === 'scheduled_from_waitlist'));
+
+    // The appointment is real, not a shadow row: it checks in like any other.
+    const ro = await svc.checkIn(w.tenantA, outcome.appointment.appointment_id, { odometer: 500 });
+    assert.equal(ro.status, 'checked_in');
+
+    // And the entry is now terminal.
+    await assert.rejects(
+      () => svc.convertWaitlistEntry(w.tenantA, entry.waitlist_entry_id, { scheduled_start: start }),
+      (err: any) => err.code === 'waitlist_entry_closed',
+    );
+  });
+
+  test('an expired offer fails closed at conversion', async () => {
+    const entry = await newWaitlistEntry();
+    await svc.offerWaitlistSlot(w.tenantA, entry.waitlist_entry_id, {});
+    // Lapse the hold from the database side — offer_expires_at is data, not clock magic.
+    await query(
+      `UPDATE service_waitlist_entries SET offer_expires_at = NOW() - INTERVAL '1 minute' WHERE waitlist_entry_id=$1`,
+      [entry.waitlist_entry_id],
+    );
+
+    await assert.rejects(
+      () => svc.convertWaitlistEntry(w.tenantA, entry.waitlist_entry_id, { scheduled_start: futureISO(1) }),
+      (err: any) => err.code === 'waitlist_offer_expired' && err.statusCode === 409,
+    );
+
+    const after = await query(
+      `SELECT status FROM service_waitlist_entries WHERE waitlist_entry_id=$1`,
+      [entry.waitlist_entry_id],
+    );
+    assert.equal(after.rows[0].status, 'expired',
+      'the refusal is also recorded: the entry is expired, not silently still offered');
+
+    const appts = await query(
+      `SELECT COUNT(*)::int AS n FROM service_appointments WHERE mdm_vehicle_id=$1 AND tenant_id=$2`,
+      [w.vehicle, w.tenantA.tenantId],
+    );
+    assert.equal(appts.rows[0].n, 0, 'no appointment was created on the refused path');
+  });
+
+  test('another tenant cannot see or move a waitlist entry', async () => {
+    const entry = await newWaitlistEntry();
+    await assert.rejects(
+      () => svc.convertWaitlistEntry(w.tenantB, entry.waitlist_entry_id, { scheduled_start: futureISO(1) }),
+      (err: any) => err.code === 'waitlist_not_found' && err.statusCode === 404,
+    );
+    await assert.rejects(
+      () => svc.cancelWaitlistEntry(w.tenantB, entry.waitlist_entry_id),
+      (err: any) => err.code === 'waitlist_not_found',
+    );
+    const mine = await svc.listWaitlistEntries(w.tenantA, {});
+    const theirs = await svc.listWaitlistEntries(w.tenantB, {});
+    assert.equal(mine.length, 1);
+    assert.equal(theirs.length, 0);
+  });
+
+  test('waitlist actions leave audit rows under their documented names', async () => {
+    const entry = await newWaitlistEntry();
+    await svc.offerWaitlistSlot(w.tenantA, entry.waitlist_entry_id, {});
+    await svc.convertWaitlistEntry(w.tenantA, entry.waitlist_entry_id, { scheduled_start: futureISO(1) });
+
+    // The documented action names (§14) are what a compliance export filters on. An
+    // earlier draft passed pre-prefixed names into emitAudit, which prefixes 'service.'
+    // itself — every row landed as 'service.service.waitlist.*' and the documented
+    // names never appeared in the database.
+    const events = await query(
+      `SELECT event_type FROM audit_events WHERE tenant_id=$1 AND event_type LIKE '%waitlist%' ORDER BY created_at`,
+      [w.tenantA.tenantId],
+    );
+    assert.deepEqual(
+      events.rows.map((r: any) => r.event_type),
+      ['service.waitlist.created', 'service.waitlist.offered', 'service.waitlist.converted'],
+    );
+  });
+
+  test("an appointment cannot claim waitlist provenance it does not have", async () => {
+    // 'waitlist' is in the source CHECK so conversion can write it, but it asserts that
+    // a waitlist entry was converted — the create endpoint must refuse to take the
+    // caller's word for it.
+    await assert.rejects(
+      () => svc.createAppointment(w.tenantA, {
+        location_id: w.locationA,
+        mdm_customer_id: w.customer,
+        mdm_vehicle_id: w.vehicle,
+        scheduled_start: futureISO(),
+        source: 'waitlist',
+      } as any),
+      (err: any) => err.statusCode === 400 && /waitlist conversion/.test(err.message),
+    );
+  });
+
+  test('waitlist input is validated at the boundary', async () => {
+    await assert.rejects(
+      () => newWaitlistEntry({ requested_end: new Date(Date.now() + 1000).toISOString() }),
+      (err: any) => err.statusCode === 400 && /requested_end/.test(err.message),
+      'a window that ends before it starts is refused',
+    );
+    await assert.rejects(
+      () => newWaitlistEntry({ priority: 'urgent' }),
+      (err: any) => err.statusCode === 400,
+      'priority is a closed set',
+    );
+    await assert.rejects(
+      () => newWaitlistEntry({ concerns: 'squeaky brakes' }),
+      (err: any) => err.statusCode === 400 && /concerns must be an array/.test(err.message),
+    );
+    const entry = await newWaitlistEntry();
+    await assert.rejects(
+      () => svc.offerWaitlistSlot(w.tenantA, entry.waitlist_entry_id, {
+        offer_expires_at: new Date(Date.now() - 1000).toISOString(),
+      }),
+      (err: any) => err.statusCode === 400 && /future/.test(err.message),
+      'an offer that is already expired cannot be made',
+    );
   });
 
   // -- Round five: populations, boundaries and label bounds ----

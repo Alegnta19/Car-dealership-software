@@ -600,7 +600,7 @@ export async function queryServiceCockpitView(
 // 2) SSIS2 — Service Scheduling & Intake
 // ============================================================
 
-const APPOINTMENT_SOURCES = ['walk_in', 'phone', 'web', 'sales_handoff'] as const;
+const APPOINTMENT_SOURCES = ['walk_in', 'phone', 'web', 'sales_handoff', 'waitlist'] as const;
 const LANGUAGE_PREFERENCES = ['en', 'es', 'auto'] as const;
 const CONTACT_CHANNELS = ['sms', 'email', 'phone', 'portal'] as const;
 
@@ -627,6 +627,12 @@ export async function createAppointment(
   }
 
   const source = params.source ? requireOneOf(params.source, APPOINTMENT_SOURCES, 'source') : 'phone';
+  // 'waitlist' is provenance, not a channel: it asserts "a waitlist entry was converted",
+  // and only convertWaitlistEntry may assert it — same discipline as the authorization
+  // fields, which are never caller-supplied either.
+  if (source === 'waitlist') {
+    throw new ValidationError("source 'waitlist' is set by waitlist conversion, not directly");
+  }
   const language = params.language_preference
     ? requireOneOf(params.language_preference, LANGUAGE_PREFERENCES, 'language_preference')
     : 'en';
@@ -956,6 +962,289 @@ export async function quickStartIntake(
       : null,
     vehicle_history: history,
   };
+}
+
+
+// ────────────────────────────────────────────────────────────
+// SSIS2 — Waitlist
+//
+// Customers waiting for a slot the schedule cannot give them yet. Lifecycle:
+// waiting → offered → scheduled, with canceled and expired terminal. `scheduled`
+// is only ever set by `convertWaitlistEntry`, in the same transaction that creates
+// the appointment — an entry never claims an appointment that was not created.
+// ────────────────────────────────────────────────────────────
+
+const WAITLIST_STATUSES = ['waiting', 'offered', 'scheduled', 'canceled', 'expired'] as const;
+const WAITLIST_PRIORITIES = ['p0', 'p1', 'p2'] as const;
+const WAITLIST_OPEN = ['waiting', 'offered'];
+const DEFAULT_OFFER_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function assertWaitlistEntry(
+  ex: Executor,
+  ctx: AuthContext,
+  waitlistEntryId: string,
+  opts: { lock?: boolean } = {},
+): Promise<any> {
+  requireUuid(waitlistEntryId, 'waitlist_entry_id');
+  const entry = (
+    await ex.query(
+      `SELECT * FROM service_waitlist_entries WHERE waitlist_entry_id=$1 AND tenant_id=$2${opts.lock ? ' FOR UPDATE' : ''}`,
+      [waitlistEntryId, ctx.tenantId],
+    )
+  ).rows[0];
+  if (!entry) throw new NotFoundError('Waitlist entry not found', { code: 'waitlist_not_found' });
+  return entry;
+}
+
+/** Open entries can move; the three terminal states cannot. */
+function assertWaitlistOpen(entry: any): void {
+  if (!WAITLIST_OPEN.includes(entry.status)) {
+    throw new ConflictError(`Waitlist entry is '${entry.status}' and can no longer change`, {
+      code: 'waitlist_entry_closed',
+      details: { status: entry.status },
+    });
+  }
+}
+
+export async function createWaitlistEntry(
+  ctx: AuthContext,
+  params: {
+    location_id: string;
+    mdm_customer_id: string;
+    mdm_vehicle_id: string;
+    requested_start: string;
+    requested_end?: string;
+    concerns?: unknown;
+    priority?: string;
+    preferred_contact_channel?: string;
+    language_preference?: string;
+    notes?: string;
+  },
+): Promise<any> {
+  requireUuid(params.location_id, 'location_id');
+  requireUuid(params.mdm_customer_id, 'mdm_customer_id');
+  requireUuid(params.mdm_vehicle_id, 'mdm_vehicle_id');
+  requireTimestamp(params.requested_start, 'requested_start');
+  if (params.requested_end !== undefined && params.requested_end !== null) {
+    requireTimestamp(params.requested_end, 'requested_end');
+    if (new Date(params.requested_end) <= new Date(params.requested_start)) {
+      throw new ValidationError('requested_end must be after requested_start');
+    }
+  }
+  const concerns = requireConcerns(params.concerns);
+  const priority = params.priority ? requireOneOf(params.priority, WAITLIST_PRIORITIES, 'priority') : 'p1';
+  const channel = params.preferred_contact_channel
+    ? requireOneOf(params.preferred_contact_channel, CONTACT_CHANNELS, 'preferred_contact_channel')
+    : 'sms';
+  const language = params.language_preference
+    ? requireOneOf(params.language_preference, LANGUAGE_PREFERENCES, 'language_preference')
+    : 'en';
+  if (params.notes !== undefined && params.notes !== null && typeof params.notes !== 'string') {
+    throw new ValidationError('notes must be a string');
+  }
+
+  const entry = await withTransaction(async (tx) => {
+    // One open entry per vehicle per location. Checked here so the common case gets a
+    // clear 409 naming the existing entry; the partial unique index uq_swe_open_vehicle
+    // is the backstop for two concurrent creates.
+    const existing = (
+      await tx.query(
+        `SELECT waitlist_entry_id FROM service_waitlist_entries
+          WHERE tenant_id=$1 AND location_id=$2 AND mdm_vehicle_id=$3 AND status IN ('waiting','offered')`,
+        [ctx.tenantId, params.location_id, params.mdm_vehicle_id],
+      )
+    ).rows[0];
+    if (existing) {
+      throw new ConflictError('This vehicle is already on the waitlist at this location', {
+        code: 'waitlist_entry_exists',
+        details: { waitlist_entry_id: existing.waitlist_entry_id },
+      });
+    }
+
+    try {
+      return (
+        await tx.query(
+          `INSERT INTO service_waitlist_entries (waitlist_entry_id,tenant_id,location_id,mdm_customer_id,mdm_vehicle_id,
+             requested_start,requested_end,concerns,priority,preferred_contact_channel,language_preference,notes,created_by_user_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+          [
+            generateId(), ctx.tenantId, params.location_id, params.mdm_customer_id, params.mdm_vehicle_id,
+            params.requested_start, params.requested_end ?? null, JSON.stringify(concerns),
+            priority, channel, language, params.notes ?? null, ctx.userId,
+          ],
+        )
+      ).rows[0];
+    } catch (err: any) {
+      // The backstop fired: another create won the race between our check and insert.
+      if (err?.code === '23505') {
+        throw new ConflictError('This vehicle is already on the waitlist at this location', {
+          code: 'waitlist_entry_exists',
+        });
+      }
+      throw err;
+    }
+  });
+
+  await emitAudit(ctx, 'waitlist.created', 'service_waitlist_entry', entry.waitlist_entry_id, {
+    location_id: params.location_id,
+    priority,
+  });
+  return entry;
+}
+
+export async function listWaitlistEntries(
+  ctx: AuthContext,
+  filters: { status?: string; location_id?: string; limit?: unknown; offset?: unknown },
+): Promise<any[]> {
+  const conds = ['tenant_id=$1'];
+  const vals: unknown[] = [ctx.tenantId];
+  if (filters.status !== undefined) {
+    conds.push(`status=$${vals.length + 1}`);
+    vals.push(requireOneOf(filters.status, WAITLIST_STATUSES, 'status'));
+  }
+  if (filters.location_id !== undefined) {
+    requireUuid(filters.location_id, 'location_id');
+    conds.push(`location_id=$${vals.length + 1}`);
+    vals.push(filters.location_id);
+  }
+  const page = pagination(filters, 50, 200);
+  vals.push(page.limit, page.offset);
+  return (
+    await query(
+      `SELECT * FROM service_waitlist_entries WHERE ${conds.join(' AND ')}
+        ORDER BY priority, requested_start, waitlist_entry_id
+        LIMIT $${vals.length - 1} OFFSET $${vals.length}`,
+      vals,
+    )
+  ).rows;
+}
+
+/**
+ * A slot opened and the customer is being contacted. Re-offering an already-offered
+ * entry is allowed and extends the expiry — the shop called twice; that is not a new
+ * state. `offer_expires_at` is when the hold lapses, checked at conversion.
+ */
+export async function offerWaitlistSlot(
+  ctx: AuthContext,
+  waitlistEntryId: string,
+  params: { offer_expires_at?: string },
+): Promise<any> {
+  let expiresAt: string;
+  if (params.offer_expires_at !== undefined && params.offer_expires_at !== null) {
+    requireTimestamp(params.offer_expires_at, 'offer_expires_at');
+    if (new Date(params.offer_expires_at) <= new Date()) {
+      throw new ValidationError('offer_expires_at must be in the future');
+    }
+    expiresAt = params.offer_expires_at;
+  } else {
+    expiresAt = new Date(Date.now() + DEFAULT_OFFER_TTL_MS).toISOString();
+  }
+
+  const entry = await withTransaction(async (tx) => {
+    const row = await assertWaitlistEntry(tx, ctx, waitlistEntryId, { lock: true });
+    assertWaitlistOpen(row);
+    return (
+      await tx.query(
+        `UPDATE service_waitlist_entries SET status='offered', offer_expires_at=$3
+          WHERE waitlist_entry_id=$1 AND tenant_id=$2 RETURNING *`,
+        [waitlistEntryId, ctx.tenantId, expiresAt],
+      )
+    ).rows[0];
+  });
+
+  await emitAudit(ctx, 'waitlist.offered', 'service_waitlist_entry', waitlistEntryId, {
+    offer_expires_at: expiresAt,
+  });
+  return entry;
+}
+
+/**
+ * Books the appointment the entry was waiting for. The INSERT and the entry update
+ * commit together: an entry marked `scheduled` always points at a real appointment.
+ *
+ * An expired offer fails CLOSED — the entry flips to `expired` (committed even though
+ * the request is refused) and the advisor creates a fresh entry if the customer still
+ * wants in. Deciding that a lapsed hold is still good is a person's call, not a
+ * silent side effect of a late click.
+ */
+export async function convertWaitlistEntry(
+  ctx: AuthContext,
+  waitlistEntryId: string,
+  params: { scheduled_start: string; scheduled_end?: string },
+): Promise<any> {
+  requireTimestamp(params.scheduled_start, 'scheduled_start');
+  if (params.scheduled_end !== undefined && params.scheduled_end !== null) {
+    requireTimestamp(params.scheduled_end, 'scheduled_end');
+  }
+
+  let expiredInstead = false;
+  const outcome = await withTransaction(async (tx) => {
+    const entry = await assertWaitlistEntry(tx, ctx, waitlistEntryId, { lock: true });
+    assertWaitlistOpen(entry);
+
+    if (entry.status === 'offered' && entry.offer_expires_at && new Date(entry.offer_expires_at) < new Date()) {
+      await tx.query(
+        `UPDATE service_waitlist_entries SET status='expired' WHERE waitlist_entry_id=$1 AND tenant_id=$2`,
+        [waitlistEntryId, ctx.tenantId],
+      );
+      expiredInstead = true;
+      return null;
+    }
+
+    const appointmentId = generateId();
+    const appointment = (
+      await tx.query(
+        `INSERT INTO service_appointments (appointment_id,tenant_id,location_id,mdm_customer_id,mdm_vehicle_id,
+           scheduled_start,scheduled_end,concerns,preferred_contact_channel,language_preference,source,created_by_user_id,status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'waitlist',$11,'scheduled') RETURNING *`,
+        [
+          appointmentId, ctx.tenantId, entry.location_id, entry.mdm_customer_id, entry.mdm_vehicle_id,
+          params.scheduled_start, params.scheduled_end ?? null, JSON.stringify(entry.concerns ?? []),
+          entry.preferred_contact_channel, entry.language_preference, ctx.userId,
+        ],
+      )
+    ).rows[0];
+
+    const updated = (
+      await tx.query(
+        `UPDATE service_waitlist_entries SET status='scheduled', appointment_id=$3
+          WHERE waitlist_entry_id=$1 AND tenant_id=$2 RETURNING *`,
+        [waitlistEntryId, ctx.tenantId, appointmentId],
+      )
+    ).rows[0];
+
+    await recordAppointmentEvent(tx, ctx, appointmentId, 'scheduled_from_waitlist', { user_id: ctx.userId });
+    return { entry: updated, appointment };
+  });
+
+  if (expiredInstead) {
+    throw new ConflictError('The offered slot has expired; create a new waitlist entry if the customer still wants in', {
+      code: 'waitlist_offer_expired',
+    });
+  }
+
+  svcAppointmentsTotal.inc({ status: 'scheduled', location: outcome!.appointment.location_id });
+  await emitAudit(ctx, 'waitlist.converted', 'service_waitlist_entry', waitlistEntryId, {
+    appointment_id: outcome!.appointment.appointment_id,
+  });
+  return outcome;
+}
+
+export async function cancelWaitlistEntry(ctx: AuthContext, waitlistEntryId: string): Promise<any> {
+  const entry = await withTransaction(async (tx) => {
+    const row = await assertWaitlistEntry(tx, ctx, waitlistEntryId, { lock: true });
+    assertWaitlistOpen(row);
+    return (
+      await tx.query(
+        `UPDATE service_waitlist_entries SET status='canceled', offer_expires_at=NULL
+          WHERE waitlist_entry_id=$1 AND tenant_id=$2 RETURNING *`,
+        [waitlistEntryId, ctx.tenantId],
+      )
+    ).rows[0];
+  });
+
+  await emitAudit(ctx, 'waitlist.canceled', 'service_waitlist_entry', waitlistEntryId, {});
+  return entry;
 }
 
 // ============================================================

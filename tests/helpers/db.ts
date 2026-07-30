@@ -53,6 +53,7 @@ process.env.STEP_UP_SECRET ??= 'integration-test-step-up-secret-long-enough';
 
 /** Every table the service writes, ordered so truncation is safe. */
 const TABLES = [
+  'service_waitlist_entries',
   'step_up_token_uses', 'service_sla_defaults', 'first_service_offers', 'service_portal_tasks',
   'service_queue_items', 'comeback_cases', 'warranty_claims', 'tech_time_entries', 'tech_work_tickets',
   'tech_profiles', 'ro_sublet_jobs', 'ro_parts_lines', 'ro_authorizations', 'ro_estimates',

@@ -7,7 +7,7 @@
 | **Origin** | `phase-248-service-cockpit-v2` bundle (3 files, 1,523 lines) |
 | **Status** | Hardened and expanded into a runnable service — see [REMEDIATION.md](REMEDIATION.md) |
 | **Stack** | Node.js / TypeScript · Express · PostgreSQL · prom-client (Prometheus) |
-| **Surface** | 23 tables · 39 endpoints · 13 subdomains · 15 metrics |
+| **Surface** | 24 tables · 44 endpoints · 13 subdomains · 15 metrics |
 
 ---
 
@@ -17,9 +17,9 @@
 2. [Repository Layout](#2-repository-layout)
 3. [System Context & External Identifiers](#3-system-context--external-identifiers)
 4. [Domain Architecture — 13 Subdomain Cluster Map](#4-domain-architecture--13-subdomain-cluster-map)
-5. [Data Model — 23 Tables](#5-data-model--23-tables)
+5. [Data Model — 24 Tables](#5-data-model--24-tables)
 6. [Repair Order State Machine](#6-repair-order-state-machine)
-7. [API Surface — 39 Endpoints](#7-api-surface--39-endpoints)
+7. [API Surface — 44 Endpoints](#7-api-surface--44-endpoints)
 8. [Service Layer Reference](#8-service-layer-reference)
 9. [Observability — 15 Prometheus Metrics](#9-observability--15-prometheus-metrics)
 10. [Cross-Cutting Concerns](#10-cross-cutting-concerns)
@@ -65,7 +65,7 @@ src/
   modules/service-cockpit/
     domain/state-machine.ts          RO statuses, transitions, gate flags
     domain/authorization.ts          authorization/estimate status derivation
-    routes/index.ts                  39 endpoints, role-gated
+    routes/index.ts                  44 endpoints, role-gated
     services/service-cockpit-service.ts   business logic, SQL, metrics
     services/metrics-aggregator.ts        scheduled rate/ratio computation
 scripts/migrate.ts                   ordered transactional migration runner
@@ -107,7 +107,7 @@ Single source of truth for what each subdomain owns.
 | # | Code | Subdomain | Tables owned | Service functions | HTTP endpoints |
 |---|---|---|---|---|---|
 | 1 | **SCM2** | Service Cockpit Module v2 (dashboards) | — (reads across all) | `getServiceCockpitHome`, `queryServiceCockpitView` | `GET /home`, `POST /query/view` |
-| 2 | **SSIS2** | Service Scheduling & Intake | `service_appointments`, `service_appointment_events` | `createAppointment`, `updateAppointment`, `confirmAppointment`, `checkIn`, `markAppointmentNoShow`, `quickStartIntake` | 6 |
+| 2 | **SSIS2** | Service Scheduling & Intake | `service_appointments`, `service_appointment_events`, `service_waitlist_entries` | `createAppointment`, `updateAppointment`, `confirmAppointment`, `checkIn`, `markAppointmentNoShow`, `quickStartIntake`, `createWaitlistEntry`, `listWaitlistEntries`, `offerWaitlistSlot`, `convertWaitlistEntry`, `cancelWaitlistEntry` | 11 |
 | 3 | **ROLS2** | Repair Order Lifecycle | `repair_orders`, `ro_events`, `ro_line_items` | `createRO`, `getRO`, `transitionRO`, `addLineItem`, `updateLineItem` | 5 |
 | 4 | **DMRS2** | Digital MPI & Recommendations | `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations` | `listMPITemplates`, `startMPISession`, `recordMPIResult`, `submitMPISession`, `sendRecommendationsToCustomer` | 5 |
 | 5 | **EAS2** | Estimate & Authorization | `ro_estimates`, `ro_authorizations` | `generateEstimate`, `sendEstimate`, `listAuthorizations`, `recordAuthorization` | 4 |
@@ -120,7 +120,7 @@ Single source of truth for what each subdomain owns.
 | 12 | **CSPP2** | Customer Service Portal Packager | `service_portal_tasks` | `listPortalTasks`, `updatePortalTaskStatus` | 2 |
 | 13 | **PSFSRB2** | Post-Sale First Service Retention Bridge | `first_service_offers` | `createFirstServiceOffer` | 1 |
 
-The subdomain endpoint counts sum to 39. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the step-up ledger, migration 050).
+The subdomain endpoint counts sum to 44. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the step-up ledger, migration 050).
 
 Notable structural facts:
 
@@ -132,7 +132,7 @@ Notable structural facts:
 
 ```mermaid
 flowchart LR
-  subgraph HTTP["routes/index.ts (39 endpoints)"]
+  subgraph HTTP["routes/index.ts (44 endpoints)"]
     R[Express Router]
   end
   subgraph SVC["services/service-cockpit-service.ts"]
@@ -144,7 +144,7 @@ flowchart LR
     AZ[authorization.ts]
   end
   subgraph DB["PostgreSQL"]
-    T23[(23 Phase-248 tables)]
+    T23[(24 Phase-248 tables)]
     AUD[(audit_events)]
   end
   AUTH[shared/middleware/auth] --> R
@@ -161,20 +161,24 @@ flowchart LR
 
 ---
 
-## 5. Data Model — 23 Tables
+## 5. Data Model — 24 Tables
 
 Conventions shared by every table: UUID surrogate PK defaulting to `gen_random_uuid()`; `tenant_id UUID NOT NULL` (no FK, no row-level security — isolation is enforced in the query layer, see [§10](#10-cross-cutting-concerns)); `created_at TIMESTAMPTZ DEFAULT NOW()` plus `updated_at` on all mutable tables (the three append-only event tables — `service_appointment_events`, `ro_events`, `tech_time_entries` — carry `occurred_at` instead of `updated_at`); `updated_at` maintained by a `BEFORE UPDATE` trigger (migration 050) on every mutable table; status columns are `TEXT` with `CHECK (status IN (...))` enums; money/pricing/vendor/supplier details are held as `*_ref` JSONB blobs rather than typed columns; all FKs are default `NO ACTION` (no `ON DELETE` behavior defined).
 
-Totals across migrations 049–052: **23 Phase-248 domain tables** (25 with `audit_events` and `schema_migrations`), and 20 triggers.
+Totals across migrations 049–054: **24 Phase-248 domain tables** (26 with `audit_events` and `schema_migrations`), and 21 triggers.
 
 ### 5.1 SSIS2 — Scheduling & Intake
 
 **`service_appointments`** — customer service appointments.
-Columns: `appointment_id` PK · `tenant_id` · `location_id` · `mdm_customer_id` · `mdm_vehicle_id` · `scheduled_start` (NOT NULL) · `scheduled_end` · `status` · `concerns` JSONB `[]` · `preferred_contact_channel` (default `sms`) · `language_preference` CHECK `en|es|auto` · `created_by_user_id` · `source` CHECK `walk_in|phone|web|sales_handoff` · timestamps.
+Columns: `appointment_id` PK · `tenant_id` · `location_id` · `mdm_customer_id` · `mdm_vehicle_id` · `scheduled_start` (NOT NULL) · `scheduled_end` · `status` · `concerns` JSONB `[]` · `preferred_contact_channel` (default `sms`) · `language_preference` CHECK `en|es|auto` · `created_by_user_id` · `source` CHECK `walk_in|phone|web|sales_handoff|waitlist` (054, NOT VALID; `waitlist` is written only by waitlist conversion — the create endpoint refuses it) · timestamps.
 Status enum: `requested → scheduled → confirmed → checked_in | no_show | canceled | completed | converted_to_ro`.
 Indexes: `(tenant_id, location_id, status)`, `(tenant_id, location_id, scheduled_start)`, `(mdm_customer_id)`, `(mdm_vehicle_id)`.
 
 **`service_appointment_events`** — append-only appointment audit trail. `event_id` PK · `appointment_id` FK → `service_appointments` · `tenant_id` · `event_type` · `actor_ref` JSONB · `occurred_at`. Index `(appointment_id, occurred_at DESC)`.
+
+**`service_waitlist_entries`** (migration 054) — customers waiting for a slot the schedule cannot give them yet.
+Columns: `waitlist_entry_id` PK · `tenant_id` · `location_id` · `mdm_customer_id` · `mdm_vehicle_id` · `requested_start` (NOT NULL) / `requested_end` · `concerns` JSONB `[]` · `priority` CHECK `p0|p1|p2` (default `p1`) · `preferred_contact_channel` / `language_preference` (same enums as appointments) · `status` CHECK `waiting|offered|scheduled|canceled|expired` · `offer_expires_at` · `appointment_id` FK → `service_appointments` (set only by conversion) · `notes` · `created_by_user_id` · timestamps (with the standard `updated_at` trigger).
+Indexes: `(tenant_id, status, priority, requested_start)`, `(tenant_id, location_id, status)`, and **UNIQUE** partial `uq_swe_open_vehicle (tenant_id, location_id, mdm_vehicle_id) WHERE status IN ('waiting','offered')` — one open entry per vehicle per location, the database backstop behind the service-layer 409.
 
 ### 5.2 ROLS2 — Repair Orders
 
@@ -241,6 +245,7 @@ Owned by this domain and keyed on `ro_id`; the original bundle wrote these into 
 
 ```mermaid
 erDiagram
+  service_waitlist_entries |o--o| service_appointments : "converted to"
   service_appointments ||--o{ service_appointment_events : logs
   service_appointments ||--o{ repair_orders : "converted to"
   repair_orders ||--o{ ro_events : logs
@@ -328,9 +333,9 @@ The appointment lifecycle has no equivalent map: `confirmAppointment` and `check
 
 ---
 
-## 7. API Surface — 39 Endpoints
+## 7. API Surface — 44 Endpoints
 
-Mounted at `/api/service`. All 39 endpoints run `authenticate` then `authorize(...roles)`, and rejects a request whose body or query `tenant_id` disagrees with the token.
+Mounted at `/api/service`. All 44 endpoints run `authenticate` then `authorize(...roles)`, and rejects a request whose body or query `tenant_id` disagrees with the token.
 
 Success responses are `{ success: true, data }`; mutations return the full row. All errors use the central envelope `{ success: false, error: { code, message, details? } }` — see [§10](#10-cross-cutting-concerns) for codes. There are no DELETE endpoints. List endpoints accept validated, capped `limit`/`offset`.
 
@@ -346,6 +351,11 @@ Success responses are `{ success: true, data }`; mutations return the full row. 
 | 6 | `POST /appointments/:appointmentId/check-in` | W | `checkIn` | `odometer?` | 200 (creates RO + queue item; idempotent) |
 | 7 | `POST /appointments/:appointmentId/no-show` | W | `markAppointmentNoShow` | — (source must be `requested`/`scheduled`/`confirmed`) | 200 (queues `no_show_followup`) / 409 |
 | 8 | `POST /intake/quick-start` | W | `quickStartIntake` | `location_id`, `scan_vin?`, `mdm_vehicle_id?` | 200 (preview + vehicle history; `persisted: false`) |
+| 8a | `POST /waitlist` | W | `createWaitlistEntry` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`, `requested_start` | 201 / 409 `waitlist_entry_exists` |
+| 8b | `GET /waitlist` | R | `listWaitlistEntries` | `status?`, `location_id?` (query) | 200 |
+| 8c | `POST /waitlist/:waitlistEntryId/offer` | W | `offerWaitlistSlot` | `offer_expires_at?` (future timestamp; default +24h) | 200 |
+| 8d | `POST /waitlist/:waitlistEntryId/convert` | W | `convertWaitlistEntry` | `scheduled_start`, `scheduled_end?` | 201 (books the appointment atomically) / 409 |
+| 8e | `POST /waitlist/:waitlistEntryId/cancel` | W | `cancelWaitlistEntry` | — | 200 |
 | 9 | `POST /ros` | W | `createRO` | `location_id`, `mdm_customer_id`, `mdm_vehicle_id`; an `appointment_id` may convert only once | 201 / 409 `appointment_already_converted` |
 | 10 | `GET /ros/:roId` | R | `getRO` | — | 200 (full aggregate: lines, events, estimates, auths, parts, sublets, tickets) |
 | 11 | `POST /ros/:roId/transition` | W | `transitionRO` | `to_status`; `step_up_token` for `authorized`/`canceled` | 200 / 403 `step_up_required` / 404 `ro_not_found` / 409 `concurrent_modification` / 422 `invalid_transition`·`authorization_required` |
@@ -395,11 +405,16 @@ All SQL is parameterized. The dynamic `UPDATE` builders whitelist column names b
 ### SSIS2 — Scheduling & intake
 | Function | Behavior |
 |---|---|
-| `createAppointment(ctx, params)` | Inserts at `scheduled`. Counter metric; audit `service.appointment.created`. |
+| `createAppointment(ctx, params)` | Inserts at `scheduled`. `source` accepts the caller channels only — `waitlist` is refused here and written only by `convertWaitlistEntry`. Counter metric; audit `service.appointment.created`. |
 | `updateAppointment(ctx, id, updates)` | Whitelisted reschedule/detail edits. `status` is refused — use confirm/check-in. |
 | `confirmAppointment(ctx, id)` **[tx]** | `requested\|scheduled → confirmed` under a row lock; appends a `confirmed` appointment event. Any other source status is a 409. |
 | `checkIn(ctx, id, {odometer})` **[tx]** | Locks the appointment; returns the existing RO (`idempotent_replay: true`) if one exists; otherwise requires `requested\|scheduled\|confirmed`, creates the RO at `checked_in`, converts the appointment, writes both events and the `waiting_checkin` queue item as one unit. RO counter and audit after commit. |
 | `quickStartIntake(ctx, params)` | Pre-intake lookup. Given an `mdm_vehicle_id` it returns this tenant's service history for the vehicle (recent repair orders, any open one, previously declined recommendations). Persists nothing and says so (`persisted: false`); VIN resolution stays with MDM. |
+| `createWaitlistEntry(ctx, params)` **[tx]** | Validates ids, window (`requested_end` after `requested_start`), closed vocabularies and `concerns`; refuses a second open entry for the same vehicle at the same location (409 `waitlist_entry_exists`, with the partial unique index `uq_swe_open_vehicle` as the concurrent-create backstop). Audit after commit. |
+| `listWaitlistEntries(ctx, filters)` | Tenant-scoped list; `status` and `location_id` filters validated against closed sets; capped pagination. Ordered by priority, then requested time. |
+| `offerWaitlistSlot(ctx, id, params)` **[tx]** | `waiting`/`offered` → `offered` under a row lock (re-offering extends the hold). `offer_expires_at` must be in the future; defaults to +24h. |
+| `convertWaitlistEntry(ctx, id, params)` **[tx]** | Books the appointment the entry was waiting for: inserts the `service_appointments` row (`source='waitlist'`, carrying the entry's concerns, contact channel and language), marks the entry `scheduled` with `appointment_id`, and writes a `scheduled_from_waitlist` appointment event — one transaction, so an entry never claims an appointment that was not created. A lapsed offer fails closed: the entry flips to `expired` (committed) and the request is refused with 409 `waitlist_offer_expired`. Appointment counter and audit after commit. |
+| `cancelWaitlistEntry(ctx, id)` **[tx]** | `waiting`/`offered` → `canceled` under a row lock; terminal states refuse with `waitlist_entry_closed`. |
 
 ### ROLS2 — Repair order lifecycle
 | Function | Behavior |
@@ -642,9 +657,9 @@ Three invariants a new endpoint must preserve:
 
 ## 14. Appendix — Quick Reference
 
-**Migrations:** `000_platform_core`, `049_phase248_service_cockpit`, `050_phase248_hardening`, `051_phase248_metrics_support`, `052_phase248_authorization_binding`, `053_phase248_estimate_line_association`
+**Migrations:** `000_platform_core`, `049_phase248_service_cockpit`, `050_phase248_hardening`, `051_phase248_metrics_support`, `052_phase248_authorization_binding`, `053_phase248_estimate_line_association`, `054_phase248_waitlist`
 
-**Tables (23 domain):** `service_appointments`, `service_appointment_events`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `service_sla_defaults`, `step_up_token_uses` — plus `audit_events` and `schema_migrations`, giving 25 in the database.
+**Tables (24 domain):** `service_appointments`, `service_appointment_events`, `service_waitlist_entries`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `service_sla_defaults`, `step_up_token_uses` — plus `audit_events` and `schema_migrations`, giving 26 in the database.
 
 **RO statuses (14):** `draft`, `checked_in`, `inspection_in_progress`, `estimate_pending`, `awaiting_authorization`, `authorized`, `in_repair`, `waiting_parts`, `sublet_in_progress`, `qc`, `ready_for_pickup`, `closed`, `canceled`, `comeback`
 
@@ -652,9 +667,13 @@ Three invariants a new endpoint must preserve:
 
 **RO event types:** `created`, `created_from_appointment`, `status_changed`, `mpi_started`, `mpi_submitted`, `recommendations_sent`, `estimate_generated`, `estimate_sent`, `authorization_received`, `comeback_opened`, `comeback_linked`
 
-**Appointment event types:** `confirmed`, `checked_in`, `no_show`
+**Appointment event types:** `confirmed`, `checked_in`, `no_show`, `scheduled_from_waitlist`
 
-**Audit actions:** `service.appointment.created`, `service.ro.created`, `service.ro.created_from_appointment`, `service.ro.transitioned`, `service.authorization.recorded`, `service.comeback.created`, `service.queue_item.escalated`, `service.retention.first_service_offered`
+**Waitlist statuses:** `waiting`, `offered`, `scheduled`, `canceled`, `expired` — `scheduled` is only ever set by the conversion that creates the appointment; an entry never claims an appointment that does not exist.
+
+**Appointment sources:** `walk_in`, `phone`, `web`, `sales_handoff`, `waitlist`
+
+**Audit actions:** `service.appointment.created`, `service.ro.created`, `service.ro.created_from_appointment`, `service.ro.transitioned`, `service.authorization.recorded`, `service.comeback.created`, `service.queue_item.escalated`, `service.retention.first_service_offered`, `service.waitlist.created`, `service.waitlist.offered`, `service.waitlist.converted`, `service.waitlist.canceled`
 
 **Roles:** `platform_admin`, `service_manager`, `service_advisor`, `service_technician`, `parts_clerk`, `warranty_admin`, `service_viewer`
 
@@ -664,6 +683,6 @@ Three invariants a new endpoint must preserve:
 
 **Authorization methods:** `portal`, `signature`, `staff_attestation`, `recorded_call_ref` · **Priorities:** `p0` (safety) > `p1` (maintenance) > `p2` · **Comeback severities:** `sev0`–`sev3`
 
-**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `estimate_superseded`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_inspection_owner`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `pending_terms_frozen`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `ticket_closed`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `work_incomplete`
+**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `estimate_superseded`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_inspection_owner`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `pending_terms_frozen`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `ticket_closed`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `waitlist_entry_closed`, `waitlist_entry_exists`, `waitlist_not_found`, `waitlist_offer_expired`, `work_incomplete`
 
 **Queue types (closed set, DB-enforced):** `appointments_today`, `waiting_checkin`, `waiting_authorization`, `waiting_parts`, `in_repair`, `qc`, `ready_pickup`, `comeback_review`, `no_show_followup`

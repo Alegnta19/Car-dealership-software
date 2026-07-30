@@ -7,6 +7,7 @@ import { resetDatabase, seedMPITemplate, seedTechnician, skipIntegration } from 
 import { closePool, query } from '../src/shared/database/pool';
 import { signStepUpToken } from '../src/shared/security/step-up';
 import { ROLES } from '../src/shared/middleware/auth';
+import * as promClient from 'prom-client';
 import { createApp } from '../src/app';
 
 /**
@@ -545,5 +546,50 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     });
     assert.equal(bad.status, 400);
     assert.equal(bad.body.error.code, 'severity_required');
+  });
+
+  test('default process metrics are label-free and the exposition never mentions a tenant', async () => {
+    // server.ts registers these at boot; tests build the app directly, so register here
+    // (once per process — the suites run one file per process).
+    promClient.collectDefaultMetrics();
+
+    const res = await fetch(`${base}/metrics`);
+    assert.equal(res.status, 200);
+    const exposition = await res.text();
+
+    assert.ok(exposition.includes('process_cpu_user_seconds_total'), 'process baseline present');
+    assert.ok(exposition.includes('nodejs_eventloop_lag_seconds'), 'event-loop lag present');
+
+    // The repo-wide /metrics invariant, asserted at the whole-surface level: the endpoint
+    // is unauthenticated, so nothing on it may name a tenant — not a label, not a value.
+    assert.ok(!/tenant/i.test(exposition), 'no series, label or value on /metrics may mention a tenant');
+  });
+
+  test('the waitlist is advisor-writable, technician-readable only', async () => {
+    const vehicle = randomUUID();
+    const entryBody = {
+      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: vehicle,
+      requested_start: new Date(Date.now() + 86_400_000).toISOString(),
+    };
+
+    const denied = await call(technician, 'POST', '/waitlist', entryBody);
+    assert.equal(denied.status, 403, 'a technician cannot put customers on the waitlist');
+
+    const created = await call(advisor, 'POST', '/waitlist', entryBody);
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const id = created.body.data.waitlist_entry_id;
+
+    const listed = await call(technician, 'GET', '/waitlist?status=waiting');
+    assert.equal(listed.status, 200, 'shop floor can see the queue');
+    assert.equal(listed.body.data.length, 1);
+
+    const techConvert = await call(technician, 'POST', `/waitlist/${id}/convert`,
+      { scheduled_start: new Date(Date.now() + 86_400_000).toISOString() });
+    assert.equal(techConvert.status, 403, 'booking the slot is a commercial action');
+
+    const converted = await call(advisor, 'POST', `/waitlist/${id}/convert`,
+      { scheduled_start: new Date(Date.now() + 86_400_000).toISOString() });
+    assert.equal(converted.status, 201, JSON.stringify(converted.body));
+    assert.equal(converted.body.data.appointment.source, 'waitlist');
   });
 });

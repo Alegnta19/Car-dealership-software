@@ -111,6 +111,53 @@ router.post('/intake/quick-start', authenticate, authorize(...WRITE_SERVICE), ha
   res.json({ success: true, data });
 }));
 
+
+// Waitlist: customers waiting for a slot the schedule cannot give them yet.
+// waiting → offered → scheduled | canceled | expired; conversion books the
+// appointment in the same transaction.
+
+router.post('/waitlist', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  requireFields(req.body, ['location_id', 'mdm_customer_id', 'mdm_vehicle_id', 'requested_start']);
+  const { location_id, mdm_customer_id, mdm_vehicle_id, requested_start, requested_end,
+    concerns, priority, preferred_contact_channel, language_preference, notes } = req.body;
+  const data = await svc.createWaitlistEntry(requireContext(req), {
+    location_id, mdm_customer_id, mdm_vehicle_id, requested_start, requested_end,
+    concerns, priority, preferred_contact_channel, language_preference, notes,
+  });
+  res.status(201).json({ success: true, data });
+}));
+
+router.get('/waitlist', authenticate, authorize(...READ_ROLES), handler(async (req, res) => {
+  const data = await svc.listWaitlistEntries(requireContext(req), {
+    status: req.query.status as string | undefined,
+    location_id: req.query.location_id as string | undefined,
+    limit: req.query.limit,
+    offset: req.query.offset,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/waitlist/:waitlistEntryId/offer', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  const data = await svc.offerWaitlistSlot(requireContext(req), req.params.waitlistEntryId, {
+    offer_expires_at: req.body?.offer_expires_at,
+  });
+  res.json({ success: true, data });
+}));
+
+router.post('/waitlist/:waitlistEntryId/convert', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  requireFields(req.body, ['scheduled_start']);
+  const data = await svc.convertWaitlistEntry(requireContext(req), req.params.waitlistEntryId, {
+    scheduled_start: req.body.scheduled_start,
+    scheduled_end: req.body.scheduled_end,
+  });
+  res.status(201).json({ success: true, data });
+}));
+
+router.post('/waitlist/:waitlistEntryId/cancel', authenticate, authorize(...WRITE_SERVICE), handler(async (req, res) => {
+  const data = await svc.cancelWaitlistEntry(requireContext(req), req.params.waitlistEntryId);
+  res.json({ success: true, data });
+}));
+
 // ────────────────────────────────────────────────────────────
 // 3) Repair Orders (ROLS2)
 // ────────────────────────────────────────────────────────────
