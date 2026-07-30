@@ -1,5 +1,5 @@
 import { Pool, PoolClient, QueryResult } from 'pg';
-import { getConfig, logger } from '@dealer/platform';
+import { getDatabaseConfig, logger } from '@dealer/platform';
 
 /**
  * Anything that can run a statement: the shared pool, or a client bound to an open
@@ -15,7 +15,7 @@ let pool: Pool | null = null;
 export function getPool(): Pool {
   if (pool) return pool;
 
-  const config = getConfig();
+  const config = getDatabaseConfig();
   const connectionString = config.databaseUrl;
 
   pool = new Pool({

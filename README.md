@@ -5,7 +5,9 @@ inspections, estimates and customer authorizations, parts, sublets, technician d
 warranty claims, comeback/quality cases, SLA work queues, and a post-sale first-service retention
 bridge.
 
-Node.js · TypeScript · Express · PostgreSQL · Prometheus.
+Node.js · TypeScript · Express · PostgreSQL · Prometheus — an npm-workspaces modular
+monolith (FBL-010): enforced module boundaries, one root lockfile, ADR-governed
+architecture. See [docs/architecture/MODULE-OWNERSHIP.md](docs/architecture/MODULE-OWNERSHIP.md).
 
 ---
 
@@ -57,6 +59,26 @@ docker compose exec api node dist/scripts/seed-mpi-template.js --tenant <tenant-
 ## Layout
 
 ```text
+apps/
+  api/                               @dealer/api — HTTP composition root (server, routes,
+                                     middleware, envelopes); the deployable service
+  worker/                            @dealer/worker — buildable shell; no jobs until FBL-040
+  web/                               @dealer/web — buildable shell; no product UI yet
+packages/
+  contracts/                         @dealer/contracts — roles, tenant context, envelopes,
+                                     internal Problem Details model
+  platform/                          @dealer/platform — config boundary, request context,
+                                     logging, error primitives, JWT verification
+  database/                          @dealer/database — pool, query, transactions
+  fixed-ops/                         @dealer/fixed-ops — the service-cockpit domain +
+                                     legacy service (unsplit until FBL-060)
+  test-kit/                          @dealer/test-kit — test guards and builders (test-only)
+  ui/                                @dealer/ui — UI primitives shell
+architecture/
+  modules.json                       machine-read ownership/dependency map (checker input)
+docs/
+  adr/                               ADR-001..005
+  architecture/                      MODULE-OWNERSHIP.md, LOGGING-POLICY.md
 Dockerfile / docker-compose.yml      container build + postgres/migrate/api stack
 migrations/
   000_platform_core.sql              audit_events + pgcrypto guard (prerequisite)
@@ -66,32 +88,10 @@ migrations/
   052_phase248_authorization_binding.sql  approved-price snapshot + freeze
   053_phase248_estimate_line_association.sql  which lines an estimate asked about
   054_phase248_waitlist.sql          service waitlist + waitlist appointment source
-src/
-  app.ts                             express wiring, /healthz, /metrics
-  server.ts                          startup, env validation, graceful shutdown
-  shared/
-    database/pool.ts                 query() + withTransaction()
-    middleware/auth.ts               authenticate, authorize, tenant context
-    middleware/error-handler.ts      typed errors + JSON error envelope
-    security/step-up.ts              bound, short-lived re-auth tokens
-    utils/                           logger (with redaction), id helpers
-  modules/service-cockpit/
-    domain/                          pure rules: state machine, authorization
-    routes/index.ts                  44 endpoints
-    services/service-cockpit-service.ts   business logic and SQL
-    services/metrics-aggregator.ts        scheduled rate/ratio computation
-scripts/migrate.ts                   ordered, transactional migration runner
-scripts/seed-mpi-template.ts         per-tenant standard bilingual MPI checklist
-scripts/quality-ratchet.ts           strictness + lint debt ratchet (blocks new debt)
-scripts/schema-fingerprint.ts        deterministic schema-shape SHA-256
-.github/workflows/ci.yml             FBL-000 baseline CI (4 jobs, pinned)
-tests/                               39 unit + 4 documentation + 72 database-backed
-docs/
-  PHASE-248-SERVICE-COCKPIT-V2.md    full architecture and API reference
-  REMEDIATION.md                     what was fixed, why, and what remains
-  PLATFORM-CONTEXT.md                origin platform, adjacent systems, integration hazards
-  DEVELOPMENT.md                     one-command setup, test, migrate, seed, teardown
-  FBL-000-BASELINE-REPORT.md         reproducible-baseline evidence and recorded debt
+scripts/                             migrate runner, quality ratchet, schema fingerprint,
+                                     architecture checkers, MPI seed
+tests/                              cross-package suites: unit, docs, HTTP contract,
+                                     platform, architecture, integration, routes
 ```
 
 ---
@@ -119,7 +119,7 @@ rules exists because its absence was an exploitable defect.
 
 **Tenant identity comes from the token, never the request.** `authenticate` sets `req.tenantContext`
 from the verified bearer token. Handlers call `requireContext(req)`; they never read `tenant_id` from
-a body or query string. A request that supplies a *different* `tenant_id` is rejected with 403 rather
+a body or query string. A request that supplies a _different_ `tenant_id` is rejected with 403 rather
 than silently ignored.
 
 **Every statement is tenant-scoped.** Every read and write against a tenant-owned table carries
@@ -140,7 +140,7 @@ estimate belongs to the RO, was actually sent, and is still the version in front
 rejects any line-item id that is not on that RO or is not awaiting a decision, snapshots the approved
 terms before anything can move, and derives the record's status from the decision — an all-declined
 outcome is stored as `declined` and does not satisfy the state machine's authorization gate, which
-additionally requires the approval to reference the *current* estimate version. Methods that claim a
+additionally requires the approval to reference the _current_ estimate version. Methods that claim a
 customer-produced artifact must carry `evidence_refs`; the one that does not (`staff_attestation`)
 requires step-up instead, so neither path is a way around the other.
 

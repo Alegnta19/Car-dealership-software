@@ -93,9 +93,17 @@ npm run format:check
 The ratchet compares strict-mode (`tsconfig.strict.json`), ESLint, and Prettier
 formatting findings against `quality-baselines.json` per file: existing debt is
 recorded, new debt fails (`format:check` runs the formatting dimension alone). If your
-change *reduces* debt, run `npm run ratchet:update` and commit the lower baseline.
+change _reduces_ debt, run `npm run ratchet:update` and commit the lower baseline.
 Never raise the baseline to admit new findings. New files must be clean in all three
 dimensions — `npm run format` formats what you're working on.
+
+```bash
+npm run architecture:check
+```
+
+Dependency rules, the ownership manifest (architecture/modules.json), and process.env
+confinement — the same three checks CI runs; tests/architecture.test.ts additionally
+proves the checker rejects a forbidden persistence deep-import.
 
 ```bash
 npm run schema:fingerprint

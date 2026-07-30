@@ -102,7 +102,32 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   return Object.freeze(config);
 }
 
+/**
+ * The database slice of the configuration — everything @dealer/database needs and
+ * nothing more. The migration runner and the compose one-shot migrate service run with
+ * ONLY these variables; requiring the full application config there (JWT/step-up
+ * secrets) would make a schema migration depend on credentials it never uses.
+ */
+export interface DatabaseConfig {
+  readonly databaseUrl: string;
+  readonly pgPoolMax: number;
+  readonly pgPoolIdleMs: number;
+  readonly pgPoolConnectMs: number;
+  readonly pgSslRequire: boolean;
+}
+
+export function loadDatabaseConfig(env: Record<string, string | undefined>): DatabaseConfig {
+  return Object.freeze({
+    databaseUrl: requireVar(env, 'DATABASE_URL'),
+    pgPoolMax: integer(env, 'PGPOOL_MAX', 10, { min: 1, max: 100 }),
+    pgPoolIdleMs: integer(env, 'PGPOOL_IDLE_MS', 30_000, { min: 0, max: 600_000 }),
+    pgPoolConnectMs: integer(env, 'PGPOOL_CONNECT_MS', 5_000, { min: 100, max: 60_000 }),
+    pgSslRequire: env.PGSSL === 'require',
+  });
+}
+
 let current: AppConfig | undefined;
+let currentDatabase: DatabaseConfig | undefined;
 
 /** Composition roots call this exactly once, before accepting traffic. */
 export function initConfig(config: AppConfig): void {
@@ -117,9 +142,23 @@ export function getConfig(): AppConfig {
 }
 
 /**
+ * The database configuration: the full application config when one is initialized
+ * (single runtime source of truth), otherwise a lazy database-only load — so the
+ * migration runner works with nothing but DATABASE_URL.
+ */
+export function getDatabaseConfig(): DatabaseConfig {
+  if (current !== undefined) return current;
+  if (currentDatabase === undefined) {
+    currentDatabase = loadDatabaseConfig(process.env);
+  }
+  return currentDatabase;
+}
+
+/**
  * Test-only: clears the cached configuration so a test can exercise loading with a
  * different environment. Production code has no reason to call this.
  */
 export function resetConfigForTests(): void {
   current = undefined;
+  currentDatabase = undefined;
 }

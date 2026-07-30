@@ -29,7 +29,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: cockpit_ci_test
-        ports: ["5432:5432"]
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -38,7 +38,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
-      REQUIRE_DB_TESTS: "1"
+      REQUIRE_DB_TESTS: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -78,8 +78,16 @@ jobs:
       - name: Format check (ratcheted formatting baseline)
         run: npm run format:check
 
-      - name: Build
+      - name: Architecture check (dependency rules, ownership manifest, env confinement)
+        run: npm run architecture:check
+
+      - name: 'Build (workspace builds: api, worker, web, scripts)'
         run: npm run build
+
+      - name: Worker shell smoke test
+        run: |
+          node apps/worker/dist/main.js | tee artifacts/worker-smoke.txt
+          grep -q 'no jobs registered' artifacts/worker-smoke.txt
 
       - name: Migrations apply from an empty database
         run: npm run migrate
@@ -95,7 +103,7 @@ jobs:
 
       - name: Application starts and readiness succeeds (compiled output)
         run: |
-          node dist/src/server.js & echo $! > server.pid
+          node apps/api/dist/server.js & echo $! > server.pid
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/healthz > artifacts/healthz.json 2>/dev/null; then break; fi
             sleep 1
@@ -129,6 +137,7 @@ jobs:
       - name: Evidence completeness (every required artifact exists and is non-empty)
         run: |
           for f in tool-versions.txt migrate-second-run.log migration-manifest.json healthz.json \
+                   worker-smoke.txt \
                    test-output.log test-summary.json schema-fingerprint.json schema-fingerprint.txt \
                    npm-audit.json sbom.cdx.json; do
             test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }
@@ -151,7 +160,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: cockpit_upgrade_test
-        ports: ["5432:5432"]
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -230,8 +239,8 @@ jobs:
 
       - name: Application starts against the upgraded database
         run: |
-          npm run build
-          node dist/src/server.js & echo $! > server.pid
+          npx tsc -b apps/api
+          node apps/api/dist/server.js & echo $! > server.pid
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/healthz > artifacts/upgraded-healthz.json 2>/dev/null; then break; fi
             sleep 1

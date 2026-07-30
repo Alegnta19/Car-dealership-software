@@ -74,6 +74,16 @@ describe('configuration boundary', () => {
   });
 });
 
+describe('configuration boundary — database slice', () => {
+  test('the migration path needs only DATABASE_URL — never auth secrets', async () => {
+    const { loadDatabaseConfig } = await import('@dealer/platform');
+    const db = loadDatabaseConfig({ DATABASE_URL: 'postgres://user@localhost:5432/db' });
+    assert.equal(db.databaseUrl, 'postgres://user@localhost:5432/db');
+    assert.equal(db.pgPoolMax, 10);
+    assert.throws(() => loadDatabaseConfig({}), /DATABASE_URL is required/);
+  });
+});
+
 describe('request context', () => {
   test('caller-provided ids are accepted only in the bounded safe format', () => {
     assert.equal(acceptOrGenerateId('gateway-req-0001'), 'gateway-req-0001');

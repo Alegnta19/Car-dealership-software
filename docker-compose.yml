@@ -23,7 +23,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cockpit -d cockpit"]
+      test: ['CMD-SHELL', 'pg_isready -U cockpit -d cockpit']
       interval: 5s
       timeout: 3s
       retries: 5
@@ -35,18 +35,18 @@ services:
   # the production image has no tsx.
   migrate:
     build: .
-    command: ["node", "dist/scripts/migrate.js"]
+    command: ['node', 'scripts/dist/migrate.js']
     environment:
       DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
+    restart: 'no'
 
   api:
     build: .
     ports:
-      - "3000:3000"
+      - '3000:3000'
     environment:
       NODE_ENV: production
       PORT: 3000

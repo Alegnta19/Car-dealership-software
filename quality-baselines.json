@@ -31,15 +31,11 @@
     }
   },
   "format": {
-    "total": 29,
+    "total": 24,
     "byFile": {
-      ".github/workflows/ci.yml": 1,
       "apps/api/src/app.ts": 1,
       "apps/api/src/routes/service-cockpit.ts": 1,
-      "docker-compose.yml": 1,
-      "docs/DEVELOPMENT.md": 1,
       "docs/FBL-000-BASELINE-REPORT.md": 1,
-      "docs/PHASE-248-SERVICE-COCKPIT-V2.md": 1,
       "docs/PLATFORM-CONTEXT.md": 1,
       "docs/REMEDIATION.md": 1,
       "eslint.config.mjs": 1,
@@ -52,7 +48,6 @@
       "packages/platform/src/logger.ts": 1,
       "packages/test-kit/src/db.ts": 1,
       "packages/test-kit/tsconfig.json": 1,
-      "README.md": 1,
       "scripts/migrate.ts": 1,
       "tests/auth.test.ts": 1,
       "tests/authorization.test.ts": 1,
