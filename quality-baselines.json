@@ -31,7 +31,7 @@
     }
   },
   "format": {
-    "total": 24,
+    "total": 25,
     "byFile": {
       "apps/api/src/app.ts": 1,
       "apps/api/src/routes/service-cockpit.ts": 1,
@@ -48,6 +48,7 @@
       "packages/platform/src/logger.ts": 1,
       "packages/test-kit/src/db.ts": 1,
       "packages/test-kit/tsconfig.json": 1,
+      "README.md": 1,
       "scripts/migrate.ts": 1,
       "tests/auth.test.ts": 1,
       "tests/authorization.test.ts": 1,

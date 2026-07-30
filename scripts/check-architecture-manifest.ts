@@ -7,7 +7,7 @@
  * generated from the manifest, so an undeclared edge would otherwise be enforced
  * against silently stale data.
  */
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 
 const ROOT = join(__dirname, '..');
@@ -78,6 +78,36 @@ function main(): void {
           failures.push(
             `${pkg.name}: modules.json allows ${dep} but package.json does not declare it (stale headroom)`,
           );
+        }
+      }
+    }
+  }
+
+  // Package TypeScript lives under src/ — anywhere else sits outside every dependency
+  // rule scope, which is exactly how boundaries erode (found by adversarial review).
+  const strayRoots = ['apps', 'packages'];
+  for (const tree of strayRoots) {
+    for (const entry of readdirSync(join(ROOT, tree))) {
+      const pkgDir = join(ROOT, tree, entry);
+      if (!existsSync(join(pkgDir, 'package.json'))) continue;
+      const stack = [pkgDir];
+      while (stack.length > 0) {
+        const dir = stack.pop()!;
+        for (const item of readdirSync(dir)) {
+          const full = join(dir, item);
+          const rel = full
+            .slice(ROOT.length + 1)
+            .split('\\')
+            .join('/');
+          const stat = statSync(full);
+          if (stat.isDirectory()) {
+            if (item === 'node_modules' || item === 'dist' || item === 'src') continue;
+            stack.push(full);
+          } else if (item.endsWith('.ts') && !rel.includes('/src/')) {
+            failures.push(
+              `${rel}: package TypeScript must live under src/ (dependency rules do not govern stray locations)`,
+            );
+          }
         }
       }
     }

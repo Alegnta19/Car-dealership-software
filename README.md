@@ -51,7 +51,7 @@ image is a two-stage non-root build with a `/healthz` healthcheck; `/metrics` an
 where port 3000 is reachable from outside. To seed a tenant's standard MPI checklist:
 
 ```bash
-docker compose exec api node dist/scripts/seed-mpi-template.js --tenant <tenant-uuid>
+docker compose exec api node scripts/dist/seed-mpi-template.js --tenant <tenant-uuid>
 ```
 
 ---

@@ -34,10 +34,12 @@ module.exports = {
     {
       name: 'no-outside-deep-import-into-packages',
       comment:
-        'Nothing OUTSIDE the workspace trees may reach into package src internals ' +
-        'either — the negative fixture (architecture/fixtures) is rejected by exactly this rule.',
+        'Any file that is not itself package src code — fixtures, tests, scripts, stray ' +
+        'in-package tooling — may not reach into package src internals. The negative ' +
+        'fixture (architecture/fixtures) is rejected by exactly this rule; src-to-src ' +
+        'traffic is governed by no-cross-package-deep-import above.',
       severity: 'error',
-      from: { pathNot: '^(apps|packages)/' },
+      from: { pathNot: '^(apps|packages)/[^/]+/src/' },
       to: { path: '^packages/[^/]+/src/(?!index[.]ts$).+' },
     },
     {

@@ -1,6 +1,9 @@
 # Keep the build context to what the Dockerfile actually copies.
 node_modules
 dist
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
 .git
 .env
 .env.*
