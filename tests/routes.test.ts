@@ -592,4 +592,27 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     assert.equal(converted.status, 201, JSON.stringify(converted.body));
     assert.equal(converted.body.data.appointment.source, 'waitlist');
   });
+
+  test('the liveness probe answers without authentication', async () => {
+    const res = await fetch(`${base}/healthz`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { status: 'ok' });
+  });
+
+  test('an oversized body is refused with the stable envelope (400 body_too_large today), not a stack trace', async () => {
+    // JSON_BODY_LIMIT defaults to 1mb; send ~1.5mb of valid JSON.
+    const big = JSON.stringify({ notes: 'x'.repeat(1_500_000) });
+    const res = await fetch(`${base}/api/service/appointments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${advisor.jwt}` },
+      body: big,
+    });
+    // Characterization records ACTUAL behavior: the body-size branch maps to a
+    // ValidationError, so the current public contract is 400 body_too_large (not 413).
+    // Changing that status is a deliberate contract decision for a later order.
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as any;
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, 'body_too_large');
+  });
 });

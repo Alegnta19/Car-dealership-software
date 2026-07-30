@@ -135,7 +135,7 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
  * mounted after `authenticate`.
  */
 export function authorize(...allowed: Role[]) {
-  return (req: Request, _res: Response, next: NextFunction): void => {
+  const middleware = (req: Request, _res: Response, next: NextFunction): void => {
     const ctx = req.tenantContext;
     if (!ctx) {
       next(new UnauthorizedError('Authentication required'));
@@ -151,6 +151,10 @@ export function authorize(...allowed: Role[]) {
     }
     next();
   };
+  // Introspection metadata for the HTTP contract characterization (FBL-010): the route
+  // inventory reads which roles gate each endpoint without changing how the gate works.
+  middleware.requiredRoles = [...allowed];
+  return middleware;
 }
 
 /**
