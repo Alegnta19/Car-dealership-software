@@ -31,7 +31,7 @@
     }
   },
   "format": {
-    "total": 31,
+    "total": 29,
     "byFile": {
       ".github/workflows/ci.yml": 1,
       "docker-compose.yml": 1,
@@ -40,10 +40,8 @@
       "docs/PHASE-248-SERVICE-COCKPIT-V2.md": 1,
       "docs/PLATFORM-CONTEXT.md": 1,
       "docs/REMEDIATION.md": 1,
-      "package.json": 1,
       "README.md": 1,
       "scripts/migrate.ts": 1,
-      "scripts/parse-test-summary.ts": 1,
       "src/app.ts": 1,
       "src/modules/service-cockpit/domain/authorization.ts": 1,
       "src/modules/service-cockpit/domain/standard-mpi-template.ts": 1,

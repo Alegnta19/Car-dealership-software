@@ -14,15 +14,7 @@
  */
 import { readFileSync, writeFileSync } from 'fs';
 
-type Key =
-  | 'tests'
-  | 'suites'
-  | 'pass'
-  | 'fail'
-  | 'cancelled'
-  | 'skipped'
-  | 'todo'
-  | 'duration_ms';
+type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'todo' | 'duration_ms';
 
 function main(): void {
   const [logPath, outPath] = [process.argv[2], process.argv[3]];

@@ -1,9 +1,9 @@
-# FBL-000 Baseline Report (as corrected by FBL-000-R1)
+# FBL-000 Baseline Report (as corrected by FBL-000-R1 and FBL-000-R2)
 
 Deliverable required by Work Order FBL-000 ("Fable returns a baseline report of
 warnings, flaky tests, typing debt, package findings, and unresolved environment
-assumptions"), corrected under order FBL-000-R1. State as of 2026-07-30 at the
-FBL-000-R1 correction head.
+assumptions"), corrected under orders FBL-000-R1 and FBL-000-R2. State as of
+2026-07-30 at the FBL-000-R2 correction head.
 
 ## CI run history — the corrected record
 
@@ -14,6 +14,7 @@ truth:
 |---|---|---|---|
 | [30569703792](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30569703792) | `de0f47f` | **failure** | *verify*: the workflow grepped for the spec reporter's `ℹ` glyph, but Node 20.20.2 on a non-TTY chose the TAP reporter, whose summary lines use `#`; `test-counts.txt` came out empty and the job exited 1 — even though all 115 tests passed with 0 failed and 0 skipped. Because the job stopped there, the fresh schema fingerprint, `npm audit`, and SBOM steps never ran. *secret-scan*: gitleaks found the three synthetic JWT-secret literals committed inside the workflow file itself. *migration-upgrade* and *container* succeeded. |
 | [30569865886](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30569865886) | `59515e4` | **failure** | Same two causes (the docs-only commit changed neither). Its secret-scan job "passing" proved nothing: the action ran `--log-opts=-1`, scanning only the latest commit, not history. |
+| [30572719113](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30572719113) | `6127dca` | **success** | The FBL-000-R1 correction run: all four jobs green; tests 115 passed / 0 failed / 0 skipped (normalized `test-summary.json`); gitleaks scanned 19 commits via `--log-opts=--all` with zero unsuppressed findings; all four evidence bundles non-empty. |
 
 **How the false claim happened.** Completion was "verified" with a poller that queried
 `GET /actions/runs?head_sha=…` and took the first result **across all workflows**. That
@@ -22,6 +23,31 @@ workflow. The report then recorded `de0f47f` as confirmed green. Verification no
 queries the specific workflow (`GET /actions/workflows/ci.yml/runs?head_sha=…`) and
 reads per-job conclusions; and the report never claims a run is green before that
 run's own conclusion says so.
+
+## What FBL-000-R2 corrected
+
+1. **The authoritative schema fingerprint is the CI-published value.** Run
+   30572719113's artifacts record fresh = upgraded =
+   `40420288bb49782b4b519adc93e0961657cc0dd8a1a2a3927c46cac0165710b3` (`equal=true`).
+   The R1 return packet instead reported `28c60b89…`, which is the fingerprint the same
+   script produces on the development machine's PostgreSQL 16 (Windows build). The two
+   values differ because catalog-rendered definition text (`pg_get_functiondef`,
+   `pg_get_constraintdef`, `indexdef`) is not byte-identical across PostgreSQL
+   builds/platforms — which is precisely why the equality check runs INSIDE one CI job
+   against one PostgreSQL build, and why a locally computed value must never be
+   presented as the authoritative one. Local fingerprints remain useful only for
+   local-vs-local comparison.
+2. **The formatting baseline is now exact.** R1 recorded `format=31`, which was stale
+   against its own commit: `package.json` was recorded as debt but was already
+   formatter-clean (unused ratchet headroom that could have hidden a future
+   regression), and R1's own `scripts/parse-test-summary.ts` was NOT formatter-clean —
+   a post-format edit reintroduced an unformatted type declaration — contradicting the
+   report's "new scripts are debt-free" claim. R2 formatted that one file (the `Key`
+   union declaration only; no behavior change — the parser's real-log, empty-log, and
+   doctored-skipped proofs were re-run and hold) and regenerated the baseline under a
+   locked install: **tsc-strict = 59, eslint = 136, format = 29**, with
+   `parse-test-summary.ts` and `package.json` verifiably absent from the format debt.
+   All 29 remaining formatting-debt files are inherited application/test files.
 
 ## What FBL-000-R1 corrected
 
@@ -46,9 +72,9 @@ run's own conclusion says so.
    suppressions file.
 4. **Formatting gate** — Prettier is configured (`.prettierrc`, `.prettierignore` —
    which excludes the byte-identical f76a27a fixtures) and `npm run format:check` runs
-   in CI as a third ratchet dimension: **31 files** are recorded formatting debt; any
-   growth fails. The application was not mass-formatted; only FBL-000-R1's own new
-   files were formatted before recording the baseline.
+   in CI as a third ratchet dimension; any growth fails. The application was not
+   mass-formatted. (R1 recorded 31 files of debt; that count was stale against its own
+   commit — corrected to 29 by R2, see above.)
 5. **Fingerprint equality enforced in CI, not asserted locally** — the
    migration-upgrade job now builds the current schema twice (fresh chain in a second
    database; fixture + legacy seed + upgrade in the first), fingerprints both with the
@@ -100,11 +126,14 @@ ESLint (typescript-eslint recommended): **136 findings** — 2 errors
 (`preserve-caught-error`, `no-useless-assignment`) and 134 warnings, of which 133 are
 `@typescript-eslint/no-explicit-any`.
 
-Formatting (Prettier): **31 files** not formatter-clean.
+Formatting (Prettier): **29 files** not formatter-clean — all inherited; neither
+`package.json` nor any FBL-000/R1/R2 script is among them.
 
 All three dimensions are recorded per file in `quality-baselines.json`;
-`scripts/quality-ratchet.ts` fails CI on any growth. FBL-000/R1's own new scripts carry
-zero debt in all three dimensions. Pay-down belongs to the FBL-010+ module moves.
+`scripts/quality-ratchet.ts` fails CI on any growth. Every script added by
+FBL-000/R1/R2 carries zero debt in all three dimensions (true after R2; R1's version of
+this claim was inaccurate for `parse-test-summary.ts`). Pay-down belongs to the
+FBL-010+ module moves.
 
 ## Package findings
 
@@ -136,7 +165,13 @@ zero debt in all three dimensions. Pay-down belongs to the FBL-010+ module moves
 
 ## Acceptance gate status
 
-Assessed by the architect against the actual `ci` workflow run for the FBL-000-R1
-correction head — per-job conclusions, artifact inventory, and the normalized test
-summary. This report makes no claim about that run's outcome; the completion response
-carries the run URL and evidence after the run concludes.
+FBL-000-R1's run ([30572719113](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30572719113),
+head `6127dca`) concluded **success** across all four jobs, with tests
+115 passed / 0 failed / 0 skipped and fingerprint equality at
+`40420288bb49782b4b519adc93e0961657cc0dd8a1a2a3927c46cac0165710b3`. The architect
+withheld acceptance over the two evidence inaccuracies corrected by R2 above.
+
+FBL-000-R2 is assessed against the actual `ci` workflow run for its own correction
+head. This report makes no claim about that run's outcome; the completion response
+carries the run URL and evidence after the run concludes. Since R2 changes no schema,
+the expected fingerprint remains `40420288…`.
