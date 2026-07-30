@@ -15,10 +15,12 @@ import { describe, test } from 'node:test';
 const ROOT = join(__dirname, '..');
 
 function depcruise(target: string): { code: number; output: string } {
+  // Through the same wrapper the CI gate uses: dependency-cruiser's own exit code
+  // proved platform-dependent, so the wrapper owns the verdict from parsed JSON.
   try {
     const output = execFileSync(
       'npx',
-      ['depcruise', ...target.split(' '), '--config', '.dependency-cruiser.cjs'],
+      ['tsx', 'scripts/check-dependencies.ts', ...target.split(' ')],
       {
         cwd: ROOT,
         encoding: 'utf8',
@@ -63,7 +65,7 @@ describe('architecture enforcement', () => {
     );
     assert.match(
       output,
-      /no-outside-deep-import-into-packages.*reaches-into-persistence/s,
+      /no-outside-deep-import-into-packages[\s\S]*reaches-into-persistence/,
       'the rejection must come from the deep-import rule, on the fixture file',
     );
   });

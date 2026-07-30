@@ -2,7 +2,7 @@
   "name": "car-dealership-software",
   "version": "0.1.0",
   "private": true,
-  "description": "Dealer management platform — Phase 248 Service Cockpit v2 & Fixed Ops operations",
+  "description": "Dealer management platform \u2014 Phase 248 Service Cockpit v2 & Fixed Ops operations",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20.0.0 <25.0.0"
@@ -22,7 +22,7 @@
     "seed:mpi": "tsx scripts/seed-mpi-template.ts",
     "format": "prettier --write .",
     "format:check": "tsx scripts/quality-ratchet.ts check format",
-    "architecture:check": "depcruise apps packages --config .dependency-cruiser.cjs && tsx scripts/check-architecture-manifest.ts && tsx scripts/check-env-access.ts"
+    "architecture:check": "tsx scripts/check-dependencies.ts apps packages && tsx scripts/check-architecture-manifest.ts && tsx scripts/check-env-access.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
