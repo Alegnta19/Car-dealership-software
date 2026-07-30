@@ -27,7 +27,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^4.17.21",
-    "@types/node": "^20.17.10",
+    "@types/node": "^26.1.2",
     "@types/pg": "^8.11.10",
     "dependency-cruiser": "^17.4.3",
     "eslint": "^10.8.0",
