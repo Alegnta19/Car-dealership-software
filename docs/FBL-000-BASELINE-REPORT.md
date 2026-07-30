@@ -120,7 +120,7 @@ shell), not to a mass edit here. FBL-000's own new scripts were held to zero deb
 
 | Gate condition | Status |
 |---|---|
-| CI passes from a clean clone with zero skipped required tests | Workflow pushed; verified by local simulation of every step; awaiting first green run on GitHub |
+| CI passes from a clean clone with zero skipped required tests | **CONFIRMED** — the first run on `de0f47f` completed `success` on GitHub-hosted runners (clean clones by construction), all four jobs |
 | All migrations apply to an empty database; app starts and readiness succeeds | Proven locally and encoded as CI steps (empty-DB apply + idempotent re-run + compiled-app `/healthz`) |
 | Second CI job exercises an upgrade from the earliest retained schema fixture | `migration-upgrade` job; fixture = `f76a27a` migrations byte-for-byte + legacy free-text seed; fingerprint equality with the fresh chain proven locally |
 | Artifacts include test results, SBOM, container digest, migration/schema fingerprints | `baseline-evidence`, `upgrade-evidence`, `container-evidence` artifact bundles |
