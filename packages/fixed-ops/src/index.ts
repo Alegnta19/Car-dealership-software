@@ -11,3 +11,5 @@ export * from './domain/standard-mpi-template';
 export * from './security/step-up';
 export * from './legacy/service-cockpit-service';
 export { refreshAggregatedMetrics, startMetricsAggregation } from './legacy/metrics-aggregator';
+export * from './domain/action-catalog';
+export * from './security/scope-resolver';

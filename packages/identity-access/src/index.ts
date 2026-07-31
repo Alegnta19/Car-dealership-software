@@ -12,3 +12,5 @@ export * from './oidc/token-verifier';
 export { createWorkosProvider, type WorkosAdapterOptions } from './provider/workos/adapter';
 export * from './user-link';
 export * from './session';
+export * from './policy';
+export * from './actions';
