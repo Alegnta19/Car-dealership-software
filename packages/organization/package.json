@@ -16,7 +16,6 @@
   "dependencies": {
     "@dealer/contracts": "0.1.0",
     "@dealer/platform": "0.1.0",
-    "@dealer/database": "0.1.0",
-    "pg": "^8.13.1"
+    "@dealer/database": "0.1.0"
   }
 }

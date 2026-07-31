@@ -64,12 +64,46 @@ process.env.STEP_UP_SECRET ??= 'integration-test-step-up-secret-long-enough';
 
 /** Every table the service writes, ordered so truncation is safe. */
 const TABLES = [
+  // FBL-020 identity/organization (children before parents)
+  'policy_decisions',
+  'support_access_sessions',
+  'support_access_requests',
+  'reauthentication_grants',
+  'reauthentication_transactions',
+  'role_bindings',
+  'identity_sessions',
+  'user_links',
+  'identity_provider_connections',
+  'departments',
+  'rooftops',
+  'legal_entities',
+  'dealer_groups',
+  'tenants',
   'service_waitlist_entries',
-  'step_up_token_uses', 'service_sla_defaults', 'first_service_offers', 'service_portal_tasks',
-  'service_queue_items', 'comeback_cases', 'warranty_claims', 'tech_time_entries', 'tech_work_tickets',
-  'tech_profiles', 'ro_sublet_jobs', 'ro_parts_lines', 'ro_authorizations', 'ro_estimates',
-  'service_recommendations', 'mpi_results', 'mpi_sessions', 'mpi_templates', 'ro_line_items',
-  'ro_events', 'repair_orders', 'service_appointment_events', 'service_appointments', 'audit_events',
+  'step_up_token_uses',
+  'service_sla_defaults',
+  'first_service_offers',
+  'service_portal_tasks',
+  'service_queue_items',
+  'comeback_cases',
+  'warranty_claims',
+  'tech_time_entries',
+  'tech_work_tickets',
+  'tech_profiles',
+  'ro_sublet_jobs',
+  'ro_parts_lines',
+  'ro_authorizations',
+  'ro_estimates',
+  'service_recommendations',
+  'mpi_results',
+  'mpi_sessions',
+  'mpi_templates',
+  'ro_line_items',
+  'ro_events',
+  'repair_orders',
+  'service_appointment_events',
+  'service_appointments',
+  'audit_events',
 ];
 
 export async function resetDatabase(): Promise<void> {
@@ -101,7 +135,11 @@ export function makeWorld(): TestWorld {
 }
 
 /** Registers a technician so dispatch has someone to assign work to. */
-export async function seedTechnician(ctx: AuthContext, locationId: string, techUserId: string): Promise<void> {
+export async function seedTechnician(
+  ctx: AuthContext,
+  locationId: string,
+  techUserId: string,
+): Promise<void> {
   await query(
     `INSERT INTO tech_profiles (tech_profile_id,tenant_id,tech_user_id,location_id,status)
      VALUES ($1,$2,$3,$4,'active')`,

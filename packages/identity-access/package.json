@@ -19,7 +19,6 @@
     "@dealer/organization": "0.1.0",
     "@dealer/platform": "0.1.0",
     "@workos-inc/node": "^8.13.0",
-    "jose": "^6.2.5",
-    "pg": "^8.13.1"
+    "jose": "^6.2.5"
   }
 }

@@ -60,6 +60,104 @@ async function main(): Promise<void> {
     else console.log(`seed-survived=${JSON.stringify(label)} rows=${n}`);
   }
 
+  // ── FBL-020 (migration 055): backfill reconciliation ─────────────────
+  // Every legacy tenant_id must have become a pending-configuration tenant;
+  // every legacy (tenant, location) pair must resolve to a rooftop whose id
+  // IS the location_id, with an intact chain up to its tenant; and no user,
+  // role binding, session, provider connection or policy decision may have
+  // been invented by the migration.
+  const orphanTenants = Number(
+    (
+      await query(
+        `SELECT COUNT(*)::int AS n FROM (
+           SELECT tenant_id FROM service_appointments UNION
+           SELECT tenant_id FROM repair_orders UNION
+           SELECT tenant_id FROM mpi_templates UNION
+           SELECT tenant_id FROM service_queue_items UNION
+           SELECT tenant_id FROM comeback_cases UNION
+           SELECT tenant_id FROM service_waitlist_entries UNION
+           SELECT tenant_id FROM first_service_offers UNION
+           SELECT tenant_id FROM audit_events
+         ) legacy WHERE tenant_id NOT IN (SELECT tenant_id FROM tenants)`,
+      )
+    ).rows[0]?.n ?? -1,
+  );
+  if (orphanTenants !== 0)
+    failures.push(`backfill: ${orphanTenants} legacy tenant_id(s) missing from tenants`);
+  else console.log('backfill-tenants=complete');
+
+  const nonPending = Number(
+    (await query(`SELECT COUNT(*)::int AS n FROM tenants WHERE status <> 'pending_configuration'`))
+      .rows[0]?.n ?? -1,
+  );
+  if (nonPending !== 0)
+    failures.push(
+      `backfill: ${nonPending} tenant(s) not pending_configuration — 055 must not activate anything`,
+    );
+  else console.log('backfill-tenants-status=pending_configuration');
+
+  const orphanRooftops = Number(
+    (
+      await query(
+        `SELECT COUNT(*)::int AS n FROM (
+           SELECT tenant_id, location_id FROM service_appointments WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM repair_orders WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM mpi_templates WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM tech_profiles WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM service_queue_items WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM first_service_offers WHERE location_id IS NOT NULL UNION
+           SELECT tenant_id, location_id FROM service_waitlist_entries WHERE location_id IS NOT NULL
+         ) legacy
+         WHERE NOT EXISTS (
+           SELECT 1 FROM rooftops r
+            WHERE r.rooftop_id = legacy.location_id AND r.tenant_id = legacy.tenant_id
+         )`,
+      )
+    ).rows[0]?.n ?? -1,
+  );
+  if (orphanRooftops !== 0)
+    failures.push(
+      `backfill: ${orphanRooftops} legacy (tenant, location) pair(s) without a matching rooftop`,
+    );
+  else console.log('backfill-rooftops=complete (rooftop_id = legacy location_id)');
+
+  const brokenChains = Number(
+    (
+      await query(
+        `SELECT COUNT(*)::int AS n FROM rooftops r
+          WHERE NOT EXISTS (
+            SELECT 1 FROM legal_entities le
+            JOIN dealer_groups g
+              ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
+            JOIN tenants t ON t.tenant_id = le.tenant_id
+            WHERE le.tenant_id = r.tenant_id AND le.legal_entity_id = r.legal_entity_id
+          )`,
+      )
+    ).rows[0]?.n ?? -1,
+  );
+  if (brokenChains !== 0)
+    failures.push(`backfill: ${brokenChains} rooftop(s) with a broken ancestor chain`);
+  else console.log('backfill-ancestry=intact');
+
+  for (const table of [
+    'user_links',
+    'identity_sessions',
+    'role_bindings',
+    'identity_provider_connections',
+    'policy_decisions',
+    'reauthentication_transactions',
+    'reauthentication_grants',
+    'support_access_requests',
+    'support_access_sessions',
+  ]) {
+    const n = Number((await query(`SELECT COUNT(*)::int AS n FROM ${table}`)).rows[0]?.n ?? -1);
+    if (n !== 0)
+      failures.push(
+        `backfill: ${table} has ${n} row(s) — 055 must invent no identities or evidence`,
+      );
+    else console.log(`backfill-empty=${table}`);
+  }
+
   if (failures.length > 0) {
     for (const f of failures) console.error('FAIL: ' + f);
     process.exitCode = 1;
