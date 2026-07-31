@@ -17,6 +17,7 @@
     "@dealer/database": "0.1.0",
     "@dealer/platform": "0.1.0",
     "@dealer/contracts": "0.1.0",
-    "@dealer/fixed-ops": "0.1.0"
+    "@dealer/fixed-ops": "0.1.0",
+    "jose": "^6.2.5"
   }
 }

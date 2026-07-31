@@ -18,6 +18,31 @@
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/**
+ * Identity provider configuration (FBL-020). Two shapes only:
+ *   - disabled: no provider configured. The /auth surface refuses to serve and
+ *     nothing else changes — CI and local development need NO WorkOS credential.
+ *   - workos: every field is required and validated at startup, so a
+ *     misconfigured production process dies before accepting a single login.
+ * URLs must be HTTPS in production; plain http is tolerated outside production
+ * so the deterministic local issuer harness can stand in for the provider.
+ */
+export interface WorkosIdentitySettings {
+  readonly clientId: string;
+  readonly apiKey: string;
+  readonly issuer: string;
+  readonly jwksUri: string;
+  readonly redirectUri: string;
+  readonly logoutRedirectUri: string;
+  readonly cookiePassword: string;
+  readonly oidcAudience: string;
+  readonly oidcClockSkewSeconds: number;
+}
+
+export type IdentityConfig =
+  | { readonly provider: 'disabled' }
+  | { readonly provider: 'workos'; readonly workos: WorkosIdentitySettings };
+
 export interface AppConfig {
   readonly databaseUrl: string;
   readonly jwtSecret: string;
@@ -33,6 +58,7 @@ export interface AppConfig {
   readonly pgPoolIdleMs: number;
   readonly pgPoolConnectMs: number;
   readonly pgSslRequire: boolean;
+  readonly identity: IdentityConfig;
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -72,6 +98,51 @@ function integer(
   return value;
 }
 
+function url(
+  env: Record<string, string | undefined>,
+  name: string,
+  { httpsRequired }: { httpsRequired: boolean },
+): string {
+  const raw = requireVar(env, name);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    // The variable is named; its value is not echoed back.
+    throw new ConfigError(`${name} must be an absolute URL`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new ConfigError(`${name} must use http or https`);
+  }
+  if (httpsRequired && parsed.protocol !== 'https:') {
+    throw new ConfigError(`${name} must use https in production`);
+  }
+  return raw;
+}
+
+function loadIdentityConfig(env: Record<string, string | undefined>): IdentityConfig {
+  const provider = env.IDENTITY_PROVIDER ?? 'disabled';
+  if (provider === 'disabled') return Object.freeze({ provider: 'disabled' as const });
+  if (provider !== 'workos') {
+    throw new ConfigError(`IDENTITY_PROVIDER must be "workos" or "disabled"`);
+  }
+  const httpsRequired = env.NODE_ENV === 'production';
+  return Object.freeze({
+    provider: 'workos' as const,
+    workos: Object.freeze({
+      clientId: requireVar(env, 'WORKOS_CLIENT_ID'),
+      apiKey: secret(env, 'WORKOS_API_KEY'),
+      issuer: url(env, 'WORKOS_ISSUER', { httpsRequired }),
+      jwksUri: url(env, 'WORKOS_JWKS_URI', { httpsRequired }),
+      redirectUri: url(env, 'WORKOS_REDIRECT_URI', { httpsRequired }),
+      logoutRedirectUri: url(env, 'WORKOS_LOGOUT_REDIRECT_URI', { httpsRequired }),
+      cookiePassword: secret(env, 'WORKOS_COOKIE_PASSWORD'),
+      oidcAudience: requireVar(env, 'OIDC_AUDIENCE'),
+      oidcClockSkewSeconds: integer(env, 'OIDC_CLOCK_SKEW_SECONDS', 60, { min: 0, max: 300 }),
+    }),
+  });
+}
+
 export function loadConfig(env: Record<string, string | undefined>): AppConfig {
   const logLevelRaw = env.LOG_LEVEL ?? 'info';
   if (!LOG_LEVELS.includes(logLevelRaw as LogLevel)) {
@@ -98,6 +169,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     pgPoolIdleMs: integer(env, 'PGPOOL_IDLE_MS', 30_000, { min: 0, max: 600_000 }),
     pgPoolConnectMs: integer(env, 'PGPOOL_CONNECT_MS', 5_000, { min: 100, max: 60_000 }),
     pgSslRequire: env.PGSSL === 'require',
+    identity: loadIdentityConfig(env),
   };
   return Object.freeze(config);
 }

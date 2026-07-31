@@ -125,7 +125,10 @@ module.exports = {
       conditionNames: ['import', 'require', 'node', 'default', 'types'],
       mainFields: ['main', 'types'],
     },
-    exclude: { path: '\\.d\\.ts$' },
+    // Compiled dist/ output mirrors source edges and is not the SOURCE adapter
+    // directory the workos-sdk confinement rule names — the cruiser judges
+    // source truth only.
+    exclude: { path: '(^|/)dist/|\\.d\\.ts$' },
     reporterOptions: { text: { highlightFocused: true } },
   },
 };

@@ -170,7 +170,8 @@ CREATE TABLE user_links (
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK ((actor_scope = 'dealership') = (tenant_id IS NOT NULL)),
-  CHECK ((status = 'activated') = (activated_at IS NOT NULL)),
+  -- one-way: activation stamps a time; later deactivation keeps the history
+  CHECK (status <> 'activated' OR activated_at IS NOT NULL),
   -- one link per provider identity per tenant (platform identities
   -- occupy the NULL-tenant slot exactly once, NULLS NOT DISTINCT)
   UNIQUE NULLS NOT DISTINCT (tenant_id, provider, provider_user_id),

@@ -16,6 +16,12 @@
     },
     {
       "path": "../packages/fixed-ops"
+    },
+    {
+      "path": "../packages/organization"
+    },
+    {
+      "path": "../packages/identity-access"
     }
   ]
 }

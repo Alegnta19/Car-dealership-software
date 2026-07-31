@@ -3,3 +3,4 @@
  * this package (enforced by the architecture checker).
  */
 export * from './db';
+export * from './local-issuer';
