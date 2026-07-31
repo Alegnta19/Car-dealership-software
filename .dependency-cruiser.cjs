@@ -43,6 +43,16 @@ module.exports = {
       to: { path: '^packages/[^/]+/src/(?!index[.]ts$).+' },
     },
     {
+      name: 'workos-sdk-confined-to-adapter',
+      comment:
+        'The WorkOS SDK is a provider detail: only the adapter directory ' +
+        '(packages/identity-access/src/provider/workos) may import @workos-inc/node. ' +
+        'Everything else — including the rest of identity-access — stays provider-neutral.',
+      severity: 'error',
+      from: { pathNot: '^packages/identity-access/src/provider/workos/' },
+      to: { path: '^node_modules/@workos-inc/node' },
+    },
+    {
       name: 'no-circular',
       comment: 'No circular dependencies anywhere in the workspace.',
       severity: 'error',

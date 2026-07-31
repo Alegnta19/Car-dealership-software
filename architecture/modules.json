@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable module ownership and dependency map (FBL-010). The dependency-cruiser config derives its allowed-dependency rules FROM this file and scripts/check-architecture-manifest.ts keeps it honest against the real workspace manifests — one source of truth, no silent drift. Human-readable companion: docs/architecture/MODULE-OWNERSHIP.md.",
+  "$comment": "Machine-readable module ownership and dependency map (FBL-010). The dependency-cruiser config derives its allowed-dependency rules FROM this file and scripts/check-architecture-manifest.ts keeps it honest against the real workspace manifests \u2014 one source of truth, no silent drift. Human-readable companion: docs/architecture/MODULE-OWNERSHIP.md.",
   "modules": {
     "@dealer/contracts": {
       "path": "packages/contracts",
@@ -42,10 +42,15 @@
       "owner": "fixed-operations",
       "purpose": "Sole owner of the service-cockpit domain and application behavior: RO state machine, authorization rules, step-up security, the legacy service implementation and metrics aggregation.",
       "publicEntry": "packages/fixed-ops/src/index.ts",
-      "allowedDealerDeps": ["@dealer/contracts", "@dealer/platform", "@dealer/database"],
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/identity-access"
+      ],
       "prohibited": ["express", "another module's persistence internals"],
       "database": "owns the phase-248 tables (migrations 000, 049-054)",
-      "status": "active — legacy/ is an explicitly mixed application/persistence component until FBL-060"
+      "status": "active \u2014 legacy/ is an explicitly mixed application/persistence component until FBL-060"
     },
     "@dealer/test-kit": {
       "path": "packages/test-kit",
@@ -81,11 +86,13 @@
         "@dealer/contracts",
         "@dealer/platform",
         "@dealer/database",
-        "@dealer/fixed-ops"
+        "@dealer/fixed-ops",
+        "@dealer/organization",
+        "@dealer/identity-access"
       ],
       "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
-      "status": "active — deployable"
+      "status": "active \u2014 deployable"
     },
     "@dealer/worker": {
       "path": "apps/worker",
@@ -96,11 +103,13 @@
         "@dealer/contracts",
         "@dealer/platform",
         "@dealer/database",
-        "@dealer/fixed-ops"
+        "@dealer/fixed-ops",
+        "@dealer/organization",
+        "@dealer/identity-access"
       ],
       "prohibited": ["business workflows in FBL-010", "SQL", "direct pg usage"],
       "database": "none",
-      "status": "shell — not deployed"
+      "status": "shell \u2014 not deployed"
     },
     "@dealer/web": {
       "path": "apps/web",
@@ -114,7 +123,36 @@
         "product journeys in FBL-010"
       ],
       "database": "none",
-      "status": "shell — not deployed"
+      "status": "shell \u2014 not deployed"
+    },
+    "@dealer/organization": {
+      "path": "packages/organization",
+      "owner": "platform-architecture",
+      "purpose": "Canonical internal organization hierarchy: Tenant, DealerGroup, LegalEntity, Rooftop, Department; hierarchy validation, effective-status resolution, organization repositories and ports.",
+      "publicEntry": "packages/organization/src/index.ts",
+      "allowedDealerDeps": ["@dealer/contracts", "@dealer/platform", "@dealer/database"],
+      "prohibited": ["express", "provider SDKs", "fixed-ops business rules"],
+      "database": "owns the FBL-020 organization tables (migration 055)",
+      "status": "active"
+    },
+    "@dealer/identity-access": {
+      "path": "packages/identity-access",
+      "owner": "platform-architecture",
+      "purpose": "Provider-neutral identity contracts, the WorkOS adapter (SDK confined to src/provider/workos), UserLink, sessions, RoleBinding, policy evaluation and PolicyDecision evidence, reauthentication transactions/grants, support-access requests and sessions.",
+      "publicEntry": "packages/identity-access/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/organization"
+      ],
+      "prohibited": [
+        "express",
+        "dependence on @dealer/fixed-ops (no reverse edge)",
+        "WorkOS SDK types in the public API"
+      ],
+      "database": "owns the FBL-020 identity/policy tables (migration 055)",
+      "status": "active"
     }
   }
 }

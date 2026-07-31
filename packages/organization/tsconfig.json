@@ -17,9 +17,6 @@
     },
     {
       "path": "../database"
-    },
-    {
-      "path": "../identity-access"
     }
   ]
 }

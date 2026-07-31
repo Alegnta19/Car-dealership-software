@@ -19,7 +19,7 @@
       "path": "../database"
     },
     {
-      "path": "../identity-access"
+      "path": "../organization"
     }
   ]
 }

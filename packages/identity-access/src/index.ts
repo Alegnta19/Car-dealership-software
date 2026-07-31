@@ -1,0 +1,10 @@
+/**
+ * @dealer/identity-access — managed identity, sessions, policy, reauthentication and
+ * support access (FBL-020).
+ *
+ * The WorkOS SDK lives ONLY inside ./provider/workos/ (architecture-enforced); every
+ * export here is provider-neutral. WorkOS role/permission claims are display hints —
+ * authorization is decided from database-authoritative RoleBindings by the policy
+ * engine, never from token content.
+ */
+export * from './contracts';
