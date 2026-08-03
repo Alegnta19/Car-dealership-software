@@ -39,6 +39,30 @@ Stated plainly so the next order starts from facts.
 - **`platform_admin` no longer implies dealership access.** Any operational
   procedure that relied on that must go through support access.
 
+## Corrected in FBL-020-R0 — worth knowing the shape of
+
+The first pass of FBL-020 shipped CI-green and was then put through an
+adversarial self-review that confirmed 13 distinct defects (full list in
+`docs/FBL-020-DELIVERY-REPORT.md` §5). Three are worth carrying forward as
+lessons rather than history:
+
+- **Scope was ignored for actions that name no resource.** Roughly a quarter
+  of the catalog acts without naming a row, and the engine treated "no node
+  named" as "any binding covers it". A rooftop-scoped advisor had tenant-wide
+  reach. The rule now: a named location is resolved and must be covered; with
+  no location the action is tenant-wide and needs a tenant-scope binding. **Any
+  new resource-less action inherits this — supply `location_id` when the action
+  lands somewhere specific.**
+- **A flow can be perfectly implemented at both ends and still be unreachable
+  in the middle.** Reauthentication had a correct start route, correct callback
+  and correct grant service, but the authorization URL carried the login
+  redirect, so the callback had no caller. Nothing in the type system or the
+  test suite noticed. Registered redirect URIs are per-flow.
+- **Status columns that nothing reads are decoration.** `isEffectiveAt()`
+  existed, was unit-tested, and had zero production callers; archiving a
+  rooftop revoked nothing. If a lifecycle column is meant to gate access, the
+  gate must be in the query the authorization path actually runs.
+
 ## Sharp edges for the next implementer
 
 - The policy engine writes an evidence row for **every** decision. High-volume
