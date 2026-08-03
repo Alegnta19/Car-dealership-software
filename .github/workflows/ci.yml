@@ -135,7 +135,7 @@ jobs:
           done
           echo "all baseline-evidence artifacts present and non-empty"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: baseline-evidence
@@ -239,7 +239,7 @@ jobs:
           done
           echo "all upgrade-evidence artifacts present and non-empty"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: upgrade-evidence
@@ -264,7 +264,7 @@ jobs:
           test -s artifacts/image-digest.txt
           grep -q 'runtime_user=cockpit' artifacts/container-config.txt
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: container-evidence
@@ -299,7 +299,7 @@ jobs:
           test -s artifacts/gitleaks.sarif
           cp .gitleaksignore artifacts/suppressions.txt
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: secret-scan-evidence
