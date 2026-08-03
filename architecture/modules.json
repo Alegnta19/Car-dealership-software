@@ -61,7 +61,9 @@
         "@dealer/contracts",
         "@dealer/platform",
         "@dealer/database",
-        "@dealer/fixed-ops"
+        "@dealer/fixed-ops",
+        "@dealer/organization",
+        "@dealer/identity-access"
       ],
       "prohibited": ["being imported by any production package or app"],
       "database": "none",

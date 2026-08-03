@@ -1,8 +1,8 @@
 import * as promClient from 'prom-client';
 import { query } from '@dealer/database';
 import { getConfig } from '@dealer/platform';
-import { pruneConsumedStepUpTokens } from '../security/step-up';
 import { logger } from '@dealer/platform';
+import { expireStaleReauthenticationTransactions } from '@dealer/identity-access';
 import { aggregatedMetrics, COMEBACK_ROOT_CAUSES, QUEUE_TYPES } from './service-cockpit-service';
 
 // ============================================================
@@ -204,7 +204,10 @@ async function refreshQualityMetrics(): Promise<Publish> {
       const rate = ratio(row.comebacks, closedByLocation.get(row.location_id));
       if (rate !== null) {
         svcComebackRate.set(
-          { location: row.location_id, category: boundedLabel(row.category, KNOWN_ROOT_CAUSES, 'root_cause_category') },
+          {
+            location: row.location_id,
+            category: boundedLabel(row.category, KNOWN_ROOT_CAUSES, 'root_cause_category'),
+          },
           rate,
         );
       }
@@ -304,7 +307,6 @@ async function refreshQueueMetrics(): Promise<Publish> {
     )
   ).rows;
 
-
   // A breach counts whether or not the item is still open. Filtering the numerator to
   // 'queued'/'in_progress' meant an item that blew its SLA and was then completed left
   // the numerator while staying in the denominator — so the worse a shop performed at
@@ -384,7 +386,6 @@ async function refreshConversionMetrics(): Promise<Publish> {
     )
   ).rows;
 
-
   const retention = (
     await query(
       `SELECT location_id,
@@ -401,7 +402,10 @@ async function refreshConversionMetrics(): Promise<Publish> {
     for (const row of rows) {
       const rate = ratio(row.accepted, row.presented);
       if (rate !== null) {
-        svcMPIConversionRate.set({ recommendation_type: row.recommendation_type, location: row.location_id }, rate);
+        svcMPIConversionRate.set(
+          { recommendation_type: row.recommendation_type, location: row.location_id },
+          rate,
+        );
       }
     }
     for (const row of retention) {
@@ -411,9 +415,9 @@ async function refreshConversionMetrics(): Promise<Publish> {
   };
 }
 
-async function pruneExpiredStepUpTokens(): Promise<Publish> {
-  const removed = await pruneConsumedStepUpTokens({ query });
-  if (removed > 0) logger.debug({ removed }, 'Pruned consumed step-up tokens');
+async function expireStaleReauthentication(): Promise<Publish> {
+  const expired = await expireStaleReauthenticationTransactions();
+  if (expired > 0) logger.debug({ expired }, 'Expired stale reauthentication transactions');
   return () => undefined;
 }
 
@@ -430,10 +434,14 @@ export async function refreshAggregatedMetrics(): Promise<void> {
   const groups: Array<[string, () => Promise<Publish>, promClient.Gauge<string>[]]> = [
     ['parts', refreshPartsMetrics, [svcPartsBackorderRate]],
     ['quality', refreshQualityMetrics, [svcQCFailRate, svcComebackRate]],
-    ['technicians', refreshTechnicianMetrics, [svcTechUtilization, svcTechEfficiency, svcTechProficiency]],
+    [
+      'technicians',
+      refreshTechnicianMetrics,
+      [svcTechUtilization, svcTechEfficiency, svcTechProficiency],
+    ],
     ['queues', refreshQueueMetrics, [svcQueueDepth, svcSLABreachRate]],
     ['conversion', refreshConversionMetrics, [svcMPIConversionRate, svcFirstServiceCaptureRate]],
-    ['step_up_ledger', pruneExpiredStepUpTokens, []],
+    ['reauth_ledger', expireStaleReauthentication, []],
   ];
 
   for (const [name, run, owned] of groups) {

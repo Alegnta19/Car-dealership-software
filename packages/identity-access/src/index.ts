@@ -16,3 +16,6 @@ export * from './policy';
 export * from './actions';
 export * from './reauthentication';
 export * from './support-access';
+export * from './actor';
+export * from './sealed-cookie';
+export * from './federation';

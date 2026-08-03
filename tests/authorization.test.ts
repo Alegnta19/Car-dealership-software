@@ -34,7 +34,11 @@ test('an estimate with lines still undecided is never marked approved', () => {
   // estimate read "approved" while lines it covers were still awaiting a decision.
   assert.equal(deriveEstimateStatus(1, 0, 2), 'partially_approved');
   assert.equal(deriveEstimateStatus(3, 0, 1), 'partially_approved');
-  assert.equal(deriveEstimateStatus(0, 1, 2), 'partially_approved', 'declines alone do not close it');
+  assert.equal(
+    deriveEstimateStatus(0, 1, 2),
+    'partially_approved',
+    'declines alone do not close it',
+  );
 });
 
 test('authorization methods are a closed set', () => {

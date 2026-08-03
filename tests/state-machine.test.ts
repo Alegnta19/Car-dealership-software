@@ -28,11 +28,22 @@ test('canceled is terminal and every other non-final state can still move', () =
 
 test('the happy path is walkable end to end', () => {
   const path = [
-    'draft', 'checked_in', 'inspection_in_progress', 'estimate_pending',
-    'awaiting_authorization', 'authorized', 'in_repair', 'qc', 'ready_for_pickup', 'closed',
+    'draft',
+    'checked_in',
+    'inspection_in_progress',
+    'estimate_pending',
+    'awaiting_authorization',
+    'authorized',
+    'in_repair',
+    'qc',
+    'ready_for_pickup',
+    'closed',
   ];
   for (let i = 0; i < path.length - 1; i += 1) {
-    assert.ok(isTransitionAllowed(path[i], path[i + 1]), `${path[i]} -> ${path[i + 1]} should be allowed`);
+    assert.ok(
+      isTransitionAllowed(path[i], path[i + 1]),
+      `${path[i]} -> ${path[i + 1]} should be allowed`,
+    );
   }
 });
 

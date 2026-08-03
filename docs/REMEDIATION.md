@@ -53,14 +53,14 @@ queues, or file warranty claims.
 **Now.** Every route is `authenticate` + `authorize(...roles)`. `platform_admin` implicitly passes
 all checks; a principal with no roles passes nothing.
 
-| Capability | Roles |
-|---|---|
-| Read dashboards, ROs, queues, templates | all service roles incl. `service_viewer` |
-| Appointments, ROs, estimates, authorizations, comebacks, retention | `service_advisor`, `service_manager` |
-| MPI, line-item progress, work tickets, time, queue assignment | `service_technician`, `service_advisor`, `service_manager` |
-| Parts and sublet | `parts_clerk`, `service_advisor`, `service_manager` |
-| Warranty claims | `warranty_admin`, `service_advisor`, `service_manager` |
-| Queue escalation | `service_manager` |
+| Capability                                                         | Roles                                                      |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Read dashboards, ROs, queues, templates                            | all service roles incl. `service_viewer`                   |
+| Appointments, ROs, estimates, authorizations, comebacks, retention | `service_advisor`, `service_manager`                       |
+| MPI, line-item progress, work tickets, time, queue assignment      | `service_technician`, `service_advisor`, `service_manager` |
+| Parts and sublet                                                   | `parts_clerk`, `service_advisor`, `service_manager`        |
+| Warranty claims                                                    | `warranty_admin`, `service_advisor`, `service_manager`     |
+| Queue escalation                                                   | `service_manager`                                          |
 
 Work tickets add a second check beyond the role: `assertOwnTicket` lets a technician act only on
 tickets assigned to them, while advisors and managers may act on any.
@@ -102,7 +102,7 @@ inside `BEGIN`/`COMMIT`, rolling back on any throw. Every multi-write operation 
 Two rules follow from Postgres semantics and are load-bearing:
 
 - **Domain events commit with their change.** `recordROEvent` and `recordAppointmentEvent` run on the
-  transaction executor and are *not* wrapped in try/catch. An RO cannot move without its event.
+  transaction executor and are _not_ wrapped in try/catch. An RO cannot move without its event.
 - **Best-effort work happens after the commit.** `emitAudit` and all metric updates run on the pool
   once the transaction has committed. A failed statement aborts the whole Postgres transaction, so a
   swallowed error inside one would have poisoned the very commit it was meant to describe.
@@ -138,7 +138,7 @@ it with `converted_to_ro`) is gone; the `checked_in` fact is recorded as an appo
 `status='approved'` — even when `approved_items` was empty and the customer declined everything — and
 its line-item updates ran `WHERE line_item_id = ANY($1)` with **no `ro_id` and no `tenant_id`
 filter**, so caller-supplied UUIDs flipped authorization status on line items belonging to any repair
-order in any tenant. Because `transitionRO`'s gate only checked that *some* approved authorization
+order in any tenant. Because `transitionRO`'s gate only checked that _some_ approved authorization
 row existed, any authenticated caller could manufacture the approval that unlocks paid work, and the
 unvalidated `step_up_token` (H3) provided no backstop.
 
@@ -168,20 +168,20 @@ all-declined decision derives `declined`.
 
 Changes the six fixes could not be made without, or that were one line inside code being rewritten.
 
-| Fix | Why it came along |
-|---|---|
-| **Index-name collision.** `idx_roe_ro` was declared on both `ro_events` and `ro_estimates`; under `CREATE INDEX IF NOT EXISTS` the second was a silent no-op, leaving `ro_estimates` with no secondary index. Renamed to `idx_roest_ro`. | The migration had to be correct for the repo to run. |
-| **`transitionRO` race.** Read-validate-write with no lock and no status guard in the UPDATE. Now runs under `FOR UPDATE` with the source status re-asserted in the `WHERE`; a lost update surfaces as 409 `concurrent_modification`. | Same transaction work as H4; leaving the race after adding the lock would be perverse. |
-| **Estimate version race.** `MAX(version)+1` with no constraint. Now serialized by the RO row lock, with `UNIQUE (ro_id, version)` as the backstop. | Same. |
-| **`sendEstimate` ownership.** It matched on `estimate_id` alone, so a mismatched pair marked estimate X sent while advancing unrelated RO Y. Now scoped by `ro_id`. | One clause in the tenant-scoping sweep. |
-| **Queue items with empty `location_id`.** `sendEstimate` passed `location_id: ''` into a `UUID NOT NULL` column. Now carries the RO's real location. | The statement was being rewritten regardless, and `''` is not a valid UUID. |
-| **Portal task identity.** `sendRecommendationsToCustomer` wrote into the sales domain's `deal_portal_tasks`, putting the repair-order id in the `deal_id` column. Now writes `service_portal_tasks`, owned by this domain and keyed on `ro_id`. | The external table does not exist in this repository; something had to be chosen. |
-| **Blind overwrites.** Any status change nulled `pause_reason` / `block_reason_codes`. They are now written only when supplied, or cleared when the row leaves the state they describe. | Both statements were being rewritten for tenant scoping. |
-| **Comeback-case guards.** Now requires the original RO to be `closed`, rejects `original_ro_id == new_ro_id` (also a DB `CHECK`), and writes an event on both repair orders. | The function was being wrapped in a transaction. |
-| **Honest failures instead of false success.** `escalateServiceQueueItem` returned `runbook_created: true` without creating one, and `queryServiceCockpitView` silently ignored `overrides`. Both now reject the unsupported input. | Reporting work that did not happen is worse than an error. |
-| **Metric truthfulness.** `service_comeback_rate` was set to the constant `1` and `service_retention_first_service_capture_rate` to the constant `0`; queue depth was set to a `LIMIT 200`-capped row count. The two false constants are removed and queue depth is now a real `COUNT`. | A wrong metric misleads an operator more than a missing one. |
-| **Input validation.** UUID and enum validation on ids, statuses, methods, severities and timestamps; `occurred_at` on time entries may back-date but not post-date. | Needed so scoping predicates cannot be fed non-UUID or unexpected values. |
-| **Schema integrity.** FK added on `service_recommendations.ro_id` (the only unconstrained `ro_id`); indexes added for six previously unindexed FK columns; range `CHECK`s on `quantity` and hours; `customer_language_used` constrained. | Free while the migration was open, and all pure additions. |
+| Fix                                                                                                                                                                                                                                                                                    | Why it came along                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Index-name collision.** `idx_roe_ro` was declared on both `ro_events` and `ro_estimates`; under `CREATE INDEX IF NOT EXISTS` the second was a silent no-op, leaving `ro_estimates` with no secondary index. Renamed to `idx_roest_ro`.                                               | The migration had to be correct for the repo to run.                                   |
+| **`transitionRO` race.** Read-validate-write with no lock and no status guard in the UPDATE. Now runs under `FOR UPDATE` with the source status re-asserted in the `WHERE`; a lost update surfaces as 409 `concurrent_modification`.                                                   | Same transaction work as H4; leaving the race after adding the lock would be perverse. |
+| **Estimate version race.** `MAX(version)+1` with no constraint. Now serialized by the RO row lock, with `UNIQUE (ro_id, version)` as the backstop.                                                                                                                                     | Same.                                                                                  |
+| **`sendEstimate` ownership.** It matched on `estimate_id` alone, so a mismatched pair marked estimate X sent while advancing unrelated RO Y. Now scoped by `ro_id`.                                                                                                                    | One clause in the tenant-scoping sweep.                                                |
+| **Queue items with empty `location_id`.** `sendEstimate` passed `location_id: ''` into a `UUID NOT NULL` column. Now carries the RO's real location.                                                                                                                                   | The statement was being rewritten regardless, and `''` is not a valid UUID.            |
+| **Portal task identity.** `sendRecommendationsToCustomer` wrote into the sales domain's `deal_portal_tasks`, putting the repair-order id in the `deal_id` column. Now writes `service_portal_tasks`, owned by this domain and keyed on `ro_id`.                                        | The external table does not exist in this repository; something had to be chosen.      |
+| **Blind overwrites.** Any status change nulled `pause_reason` / `block_reason_codes`. They are now written only when supplied, or cleared when the row leaves the state they describe.                                                                                                 | Both statements were being rewritten for tenant scoping.                               |
+| **Comeback-case guards.** Now requires the original RO to be `closed`, rejects `original_ro_id == new_ro_id` (also a DB `CHECK`), and writes an event on both repair orders.                                                                                                           | The function was being wrapped in a transaction.                                       |
+| **Honest failures instead of false success.** `escalateServiceQueueItem` returned `runbook_created: true` without creating one, and `queryServiceCockpitView` silently ignored `overrides`. Both now reject the unsupported input.                                                     | Reporting work that did not happen is worse than an error.                             |
+| **Metric truthfulness.** `service_comeback_rate` was set to the constant `1` and `service_retention_first_service_capture_rate` to the constant `0`; queue depth was set to a `LIMIT 200`-capped row count. The two false constants are removed and queue depth is now a real `COUNT`. | A wrong metric misleads an operator more than a missing one.                           |
+| **Input validation.** UUID and enum validation on ids, statuses, methods, severities and timestamps; `occurred_at` on time entries may back-date but not post-date.                                                                                                                    | Needed so scoping predicates cannot be fed non-UUID or unexpected values.              |
+| **Schema integrity.** FK added on `service_recommendations.ro_id` (the only unconstrained `ro_id`); indexes added for six previously unindexed FK columns; range `CHECK`s on `quantity` and hours; `customer_language_used` constrained.                                               | Free while the migration was open, and all pure additions.                             |
 
 ---
 
@@ -221,7 +221,7 @@ because a fix that introduces its own holes is not a fix.
 
 - **Estimate status was derived from the wrong denominator.** It used a whole-repair-order pending
   count, so an estimate could be stored `approved` while lines it covered were still undecided. The
-  count is now taken *after* the decision is applied, and `deriveEstimateStatus` takes
+  count is now taken _after_ the decision is applied, and `deriveEstimateStatus` takes
   "lines still undecided" explicitly. Decided lines must also be `pending` when the decision arrives.
 - **Three conditional status writes could silently no-op.** `generateEstimate`, `sendEstimate` and
   `startMPISession` guarded their `UPDATE` with a source-status predicate but never checked whether
@@ -250,7 +250,7 @@ because a fix that introduces its own holes is not a fix.
 
 **Documentation:** the README claimed seven wired metrics; the code wired five.
 
-Findings that were *not* acted on: the review flagged that migration 049 differs from the version in
+Findings that were _not_ acted on: the review flagged that migration 049 differs from the version in
 the source bundle, which would matter to an environment that had already applied the bundle's copy.
 This repository's 049 has a single revision and has never been applied anywhere, so it stands as the
 authoritative schema for a fresh install — but see the note under Outstanding work.
@@ -344,10 +344,10 @@ this file, the README and the architecture reference. Schema support is in `051_
 
 **Two were real metric bugs of my own making:**
 
-- **The comeback-rate denominator excluded its own numerator.** It counted repair orders *currently*
+- **The comeback-rate denominator excluded its own numerator.** It counted repair orders _currently_
   `closed`, but opening a comeback flips the original out of `closed` — so the denominator dropped
   exactly the orders the numerator counted, reporting `k/(N−k)` and vanishing entirely when every
-  closed order came back. It now counts orders that *closed in the window* from the event log, which
+  closed order came back. It now counts orders that _closed in the window_ from the event log, which
   a later status change cannot alter.
 - **Parts wait time re-measured the same part on every status change.** It measured to `updated_at`,
   which the new trigger bumps on each progression from received to picked to installed. A dedicated
@@ -446,7 +446,7 @@ each aggregation pass; and `markAppointmentNoShow` finally makes the `no_show` s
 
 **A follow-up review of this round found the price snapshot itself was unsound.** Nothing expired a
 superseded estimate, so two versions could be `sent` at once; a customer following the older portal
-link had their decision accepted, and `approved_snapshot` recorded the line's *current* price rather
+link had their decision accepted, and `approved_snapshot` recorded the line's _current_ price rather
 than the price the estimate they answered had shown — a customer who approved a $100.00 estimate was
 recorded as agreeing to $999.99. The stale approval also consumed the lines, so the current estimate
 could never be decided and the repair order could not reach `authorized` without adding new work.
@@ -479,7 +479,7 @@ more specific, and it is worth naming because it is now the fifth and sixth time
 numerators, wrong row sets, each computed correctly over a population that did not answer the
 question being asked.
 
-*Technician efficiency counted work that had not finished.* Efficiency and proficiency divide a
+_Technician efficiency counted work that had not finished._ Efficiency and proficiency divide a
 whole-line figure (sold hours, estimated hours) by hours clocked so far, so a job still on the bench
 looked more efficient the longer it stayed open. Restricting the query to completed lines fixed that
 and immediately broke utilization, which is `clocked ÷ scheduled` and has no whole-line numerator:
@@ -488,7 +488,7 @@ now computed as two, in one pass, with `FILTER`. The test pins both directions �
 open contributes to utilization and must stay out of efficiency, where its eight sold hours against
 one clocked hour would otherwise drag the ratio to 10/3.
 
-*An estimate was scored against the whole repair order.* `recordAuthorization` derives the estimate's
+_An estimate was scored against the whole repair order._ `recordAuthorization` derives the estimate's
 status from a cumulative count of line items rather than from the decision being recorded, because
 reading the decision alone erased an earlier approval — that was round three's fix. But the count had
 nothing to scope it to: `ro_estimates` recorded a version, a status and a totals summary, never which
@@ -601,9 +601,9 @@ a busy queue; a keyset cursor would be stable.
 5. **Neither creating nor updating a line item accepts `authorization_status` or
    `authorization_ref`.** They are written only by `generateEstimate` and `recordAuthorization`. A
    line the customer declined also refuses further status changes.
-5a. **`recordAuthorization` requires `evidence_refs`** for `portal`, `signature` and
+   5a. **`recordAuthorization` requires `evidence_refs`** for `portal`, `signature` and
    `recorded_call_ref`, and every decided line must currently be awaiting a decision.
-5b. **Bearer tokens must carry `exp`.** A token without one is now rejected.
+   5b. **Bearer tokens must carry `exp`.** A token without one is now rejected.
 6. **`POST /ros/:roId/transition` to `authorized` or `canceled` requires `step_up_token`**, as does
    recording a `staff_attestation` authorization.
 7. **Check-in is idempotent.** A repeat call returns the existing repair order with

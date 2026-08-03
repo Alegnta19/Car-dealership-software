@@ -59,8 +59,6 @@ export const skipIntegration = !INTEGRATION_DATABASE_URL;
 if (INTEGRATION_DATABASE_URL) {
   process.env.DATABASE_URL = INTEGRATION_DATABASE_URL;
 }
-process.env.JWT_SECRET ??= 'integration-test-jwt-secret-long-enough-value';
-process.env.STEP_UP_SECRET ??= 'integration-test-step-up-secret-long-enough';
 
 /** Every table the service writes, ordered so truncation is safe. */
 const TABLES = [

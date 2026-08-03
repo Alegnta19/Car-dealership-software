@@ -49,12 +49,6 @@ jobs:
 
       - name: Generate test-only secrets (runtime, masked — never tracked text)
         run: |
-          JWT_SECRET="$(openssl rand -hex 32)"
-          STEP_UP_SECRET="$(openssl rand -hex 32)"
-          echo "::add-mask::$JWT_SECRET"
-          echo "::add-mask::$STEP_UP_SECRET"
-          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
-          echo "STEP_UP_SECRET=$STEP_UP_SECRET" >> "$GITHUB_ENV"
 
       - name: Locked install
         run: npm ci
@@ -179,12 +173,6 @@ jobs:
 
       - name: Generate test-only secrets (runtime, masked — never tracked text)
         run: |
-          JWT_SECRET="$(openssl rand -hex 32)"
-          STEP_UP_SECRET="$(openssl rand -hex 32)"
-          echo "::add-mask::$JWT_SECRET"
-          echo "::add-mask::$STEP_UP_SECRET"
-          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
-          echo "STEP_UP_SECRET=$STEP_UP_SECRET" >> "$GITHUB_ENV"
 
       - name: Locked install
         run: npm ci

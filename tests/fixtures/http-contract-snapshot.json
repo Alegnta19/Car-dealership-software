@@ -4,441 +4,303 @@
       "method": "POST",
       "path": "/appointments",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.appointment.create"
     },
     {
       "method": "PATCH",
       "path": "/appointments/:appointmentId",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.appointment.update"
     },
     {
       "method": "POST",
       "path": "/appointments/:appointmentId/check-in",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.appointment.check_in"
     },
     {
       "method": "POST",
       "path": "/appointments/:appointmentId/confirm",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.appointment.confirm"
     },
     {
       "method": "POST",
       "path": "/appointments/:appointmentId/no-show",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.appointment.no_show"
     },
     {
       "method": "POST",
       "path": "/comebacks",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.comeback.create"
     },
     {
       "method": "PATCH",
       "path": "/comebacks/:comebackId",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.comeback.update"
     },
     {
       "method": "POST",
       "path": "/dispatch/assign",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.dispatch.assign"
     },
     {
       "method": "GET",
       "path": "/home",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.cockpit.view"
     },
     {
       "method": "POST",
       "path": "/intake/quick-start",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.intake.quick_start"
     },
     {
       "method": "POST",
       "path": "/mpi/:mpiSessionId/results",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.mpi.record_results"
     },
     {
       "method": "POST",
       "path": "/mpi/:mpiSessionId/submit",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.mpi.submit"
     },
     {
       "method": "GET",
       "path": "/mpi/templates",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.mpi.view_templates"
     },
     {
       "method": "PATCH",
       "path": "/parts/:partLineId",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.parts.update"
     },
     {
       "method": "PATCH",
       "path": "/portal-tasks/:portalTaskId",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.portal_task.update"
     },
     {
       "method": "POST",
       "path": "/query/view",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.cockpit.query"
     },
     {
       "method": "GET",
       "path": "/queues",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.queue.view"
     },
     {
       "method": "POST",
       "path": "/queues/:queueItemId/assign",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.queue.assign"
     },
     {
       "method": "POST",
       "path": "/queues/:queueItemId/escalate",
       "authenticated": true,
-      "roles": [
-        "service_manager"
-      ]
+      "action": "service.queue.escalate"
     },
     {
       "method": "POST",
       "path": "/queues/:queueItemId/update-status",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.queue.update_status"
     },
     {
       "method": "POST",
       "path": "/retention/first-service",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.retention.record_first_service"
     },
     {
       "method": "POST",
       "path": "/ros",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.create"
     },
     {
       "method": "GET",
       "path": "/ros/:roId",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.ro.view"
     },
     {
       "method": "GET",
       "path": "/ros/:roId/authorizations",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.ro.authorization.view"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/authorizations/record",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.authorization.record"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/estimates/:estimateId/send",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.estimate.send"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/estimates/generate",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.estimate.generate"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/line-items",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.line_item.create"
     },
     {
       "method": "PATCH",
       "path": "/ros/:roId/line-items/:lineItemId",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.ro.line_item.update"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/mpi/start",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.mpi.start"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/parts/request",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.parts.request"
     },
     {
       "method": "GET",
       "path": "/ros/:roId/portal-tasks",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.portal_task.view"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/recommendations/send-to-customer",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.recommendation.send"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/sublet/create",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.sublet.create"
     },
     {
       "method": "POST",
       "path": "/ros/:roId/transition",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.ro.transition"
     },
     {
       "method": "PATCH",
       "path": "/sublet/:subletJobId",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.sublet.update"
     },
     {
       "method": "POST",
       "path": "/tech/tickets/:ticketId/status",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.tech.ticket_status"
     },
     {
       "method": "POST",
       "path": "/tech/tickets/:ticketId/time",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "service_technician"
-      ]
+      "action": "service.tech.ticket_time"
     },
     {
       "method": "GET",
       "path": "/waitlist",
       "authenticated": true,
-      "roles": [
-        "parts_clerk",
-        "service_advisor",
-        "service_manager",
-        "service_technician",
-        "service_viewer",
-        "warranty_admin"
-      ]
+      "action": "service.waitlist.view"
     },
     {
       "method": "POST",
       "path": "/waitlist",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.waitlist.create"
     },
     {
       "method": "POST",
       "path": "/waitlist/:waitlistEntryId/cancel",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.waitlist.cancel"
     },
     {
       "method": "POST",
       "path": "/waitlist/:waitlistEntryId/convert",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.waitlist.convert"
     },
     {
       "method": "POST",
       "path": "/waitlist/:waitlistEntryId/offer",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager"
-      ]
+      "action": "service.waitlist.offer"
     },
     {
       "method": "POST",
       "path": "/warranty/claims",
       "authenticated": true,
-      "roles": [
-        "service_advisor",
-        "service_manager",
-        "warranty_admin"
-      ]
+      "action": "service.warranty.claim_create"
+    }
+  ],
+  "auth": [
+    {
+      "method": "GET",
+      "path": "/callback",
+      "authenticated": false,
+      "action": null
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "authenticated": false,
+      "action": null
+    },
+    {
+      "method": "POST",
+      "path": "/logout",
+      "authenticated": true,
+      "action": null
+    },
+    {
+      "method": "GET",
+      "path": "/reauth/callback",
+      "authenticated": false,
+      "action": null
+    },
+    {
+      "method": "POST",
+      "path": "/reauth/start",
+      "authenticated": true,
+      "action": null
+    },
+    {
+      "method": "GET",
+      "path": "/session",
+      "authenticated": true,
+      "action": null
     }
   ]
 }

@@ -1,14 +1,24 @@
 import assert from 'node:assert/strict';
-import { createHmac, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, seedMPITemplate, seedTechnician, skipIntegration } from '@dealer/test-kit';
+import {
+  mintReauthGrant,
+  resetDatabase,
+  seedActor,
+  seedMPITemplate,
+  seedRooftopIdentity,
+  seedTechnician,
+  seedTenantIdentity,
+  skipIntegration,
+  startIdentityTestEnv,
+  type IdentityTestEnv,
+} from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
-import { signStepUpToken } from '@dealer/fixed-ops';
 import { ROLES } from '@dealer/contracts';
 import * as promClient from 'prom-client';
-import { createApp } from '@dealer/api';
+import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } from '@dealer/api';
 
 /**
  * Tests that go through the real HTTP stack — routing, middleware order,
@@ -22,21 +32,24 @@ import { createApp } from '@dealer/api';
 describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run' : false }, () => {
   let server: Server;
   let base: string;
+  let env: IdentityTestEnv;
 
-  const SECRET = process.env.JWT_SECRET as string;
-
-  function token(roles: string[], tenantId: string, userId: string): string {
-    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
-    const header = b64({ alg: 'HS256', typ: 'JWT' });
-    const payload = b64({ sub: userId, tid: tenantId, roles, exp: Math.floor(Date.now() / 1000) + 3600 });
-    const sig = createHmac('sha256', SECRET).update(`${header}.${payload}`).digest('base64url');
-    return `${header}.${payload}.${sig}`;
+  interface Actor {
+    jwt: string;
+    tenantId: string;
+    userId: string;
   }
 
-  interface Actor { jwt: string; tenantId: string; userId: string }
-
-  function actor(roles: string[], tenantId = tenant, userId = randomUUID()): Actor {
-    return { jwt: token(roles, tenantId, userId), tenantId, userId };
+  /**
+   * The FBL-020 replacement for the retired HS256 test JWT: a real activated
+   * user link with the roles bound at tenant scope, and a LOCAL-ISSUER access
+   * token for it. Actor.userId is the user_link_id — the actor id every
+   * created_by/audit column now records.
+   */
+  async function actor(roles: string[], tenantId = tenant): Promise<Actor> {
+    await seedTenantIdentity(tenantId);
+    const seeded = await seedActor(env.issuer, { tenantId, roles });
+    return { jwt: seeded.token, tenantId, userId: seeded.userLinkId };
   }
 
   async function call(
@@ -56,7 +69,11 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     });
     const text = await res.text();
     let parsed: any = null;
-    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = { raw: text }; }
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = { raw: text };
+    }
     return { status: res.status, body: parsed };
   }
 
@@ -66,6 +83,9 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
   let technician: Actor;
 
   before(async () => {
+    env = await startIdentityTestEnv();
+    resetIdentityCompositionForTests();
+    resetAuthRoutesForTests();
     server = createApp().listen(0);
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -73,6 +93,7 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await env.stop();
     await closePool();
   });
 
@@ -80,26 +101,40 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     await resetDatabase();
     tenant = randomUUID();
     location = randomUUID();
-    advisor = actor([ROLES.SERVICE_ADVISOR]);
-    technician = actor([ROLES.TECHNICIAN]);
+    await seedTenantIdentity(tenant);
+    await seedRooftopIdentity(tenant, location);
+    advisor = await actor([ROLES.SERVICE_ADVISOR]);
+    technician = await actor([ROLES.TECHNICIAN]);
   });
 
   /** Drives a repair order to "line item priced and awaiting a decision". */
   async function pricedRO() {
     const appt = await call(advisor, 'POST', '/appointments', {
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: randomUUID(),
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: randomUUID(),
       scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
     });
     assert.equal(appt.status, 201);
-    const ro = await call(advisor, 'POST', `/appointments/${appt.body.data.appointment_id}/check-in`, {});
+    const ro = await call(
+      advisor,
+      'POST',
+      `/appointments/${appt.body.data.appointment_id}/check-in`,
+      {},
+    );
     assert.equal(ro.status, 200);
     const line = await call(advisor, 'POST', `/ros/${ro.body.data.ro_id}/line-items`, {
-      line_type: 'labor', description: 'Front brakes', estimated_hours: 2,
+      line_type: 'labor',
+      description: 'Front brakes',
+      estimated_hours: 2,
     });
     assert.equal(line.status, 201);
-    const priced = await call(advisor, 'PATCH',
+    const priced = await call(
+      advisor,
+      'PATCH',
       `/ros/${ro.body.data.ro_id}/line-items/${line.body.data.line_item_id}`,
-      { price_ref: { amount_cents: 90_000, currency: 'USD' } });
+      { price_ref: { amount_cents: 90_000, currency: 'USD' } },
+    );
     assert.equal(priced.status, 200);
     return { roId: ro.body.data.ro_id as string, lineId: line.body.data.line_item_id as string };
   }
@@ -113,9 +148,11 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
   });
 
   test('a viewer cannot write anything', async () => {
-    const viewer = actor([ROLES.VIEWER]);
+    const viewer = await actor([ROLES.VIEWER]);
     const res = await call(viewer, 'POST', '/ros', {
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: randomUUID(),
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: randomUUID(),
     });
     assert.equal(res.status, 403);
     assert.equal(res.body.error.code, 'forbidden');
@@ -124,7 +161,9 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
   test('a body tenant_id that disagrees with the token is refused', async () => {
     const res = await call(advisor, 'POST', '/ros', {
       tenant_id: randomUUID(),
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: randomUUID(),
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: randomUUID(),
     });
     assert.equal(res.status, 403);
     assert.equal(res.body.error.code, 'tenant_mismatch');
@@ -141,11 +180,20 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     assert.equal(attempt.status, 403);
     assert.equal(attempt.body.error.code, 'commercial_fields_restricted');
 
-    const soldHours = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { sold_hours: 99 });
+    const soldHours = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, {
+      sold_hours: 99,
+    });
     assert.equal(soldHours.status, 403);
 
-    const row = await query('SELECT price_ref, sold_hours FROM ro_line_items WHERE line_item_id=$1', [lineId]);
-    assert.equal(Number(row.rows[0].price_ref.amount_cents), 90_000, 'the advisor’s price is intact');
+    const row = await query(
+      'SELECT price_ref, sold_hours FROM ro_line_items WHERE line_item_id=$1',
+      [lineId],
+    );
+    assert.equal(
+      Number(row.rows[0].price_ref.amount_cents),
+      90_000,
+      'the advisor’s price is intact',
+    );
     assert.equal(row.rows[0].sold_hours, null);
   });
 
@@ -160,21 +208,31 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
   test('a technician cannot move work they were never dispatched to', async () => {
     const { roId, lineId } = await pricedRO();
-    const res = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'in_progress' });
+    const res = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, {
+      status: 'in_progress',
+    });
     assert.equal(res.status, 403);
     assert.equal(res.body.error.code, 'not_line_item_assignee');
   });
 
   test('a dispatched technician can report progress on their own line', async () => {
     const { roId, lineId } = await pricedRO();
-    await seedTechnician({ tenantId: tenant, userId: advisor.userId, roles: [] } as any, location, technician.userId);
+    await seedTechnician(
+      { tenantId: tenant, userId: advisor.userId, roles: [] } as any,
+      location,
+      technician.userId,
+    );
 
     const dispatched = await call(advisor, 'POST', '/dispatch/assign', {
-      ro_id: roId, line_item_id: lineId, tech_user_id: technician.userId,
+      ro_id: roId,
+      line_item_id: lineId,
+      tech_user_id: technician.userId,
     });
     assert.equal(dispatched.status, 201);
 
-    const progress = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'in_progress' });
+    const progress = await call(technician, 'PATCH', `/ros/${roId}/line-items/${lineId}`, {
+      status: 'in_progress',
+    });
     assert.equal(progress.status, 200);
     assert.equal(progress.body.data.status, 'in_progress');
   });
@@ -185,8 +243,10 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     assert.equal(est.status, 201);
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     const auth = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
     assert.equal(auth.status, 201);
 
@@ -202,8 +262,10 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     const auth = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
 
     const snap = auth.body.data.approved_snapshot[lineId];
@@ -217,62 +279,86 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
   test('a vehicle with an undecided line cannot be handed back', async () => {
     const { roId, lineId } = await pricedRO();
     const second = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
-      line_type: 'labor', description: 'Wipers', estimated_hours: 0.5,
+      line_type: 'labor',
+      description: 'Wipers',
+      estimated_hours: 0.5,
     });
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     // Only one of the two lines is decided.
     await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
 
-    const stepUp = (action: string) => signStepUpToken({
-      tenantId: tenant, userId: advisor.userId, action, resourceId: roId,
+    const stepUp = (action: string) =>
+      mintReauthGrant({ tenantId: tenant, userLinkId: advisor.userId, action, resourceId: roId });
+    await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'authorized',
+      step_up_token: await stepUp('service.ro.transition:authorized'),
     });
-    await call(advisor, 'POST', `/ros/${roId}/transition`,
-      { to_status: 'authorized', step_up_token: stepUp('ro.transition:authorized') });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
     // The second line was put to the customer, never answered, and the work done anyway.
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, { status: 'completed' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, {
+      status: 'completed',
+    });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
 
-    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'ready_for_pickup',
+    });
     assert.equal(pickup.status, 422);
-    assert.equal(pickup.body.error.code, 'decision_outstanding',
-      'a line the customer never answered blocks delivery');
+    assert.equal(
+      pickup.body.error.code,
+      'decision_outstanding',
+      'a line the customer never answered blocks delivery',
+    );
 
     // Withdrawing that line instead releases the vehicle: cancelled work is not
     // outstanding, because there is nothing left to do and nothing to bill.
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, { status: 'canceled' });
-    const retry = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${second.body.data.line_item_id}`, {
+      status: 'canceled',
+    });
+    const retry = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'ready_for_pickup',
+    });
     assert.equal(retry.status, 200, JSON.stringify(retry.body));
   });
 
   test('a partially decided estimate can still receive its remaining decision', async () => {
     const { roId, lineId } = await pricedRO();
     const second = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
-      line_type: 'labor', description: 'Wipers', estimated_hours: 0.5,
+      line_type: 'labor',
+      description: 'Wipers',
+      estimated_hours: 0.5,
     });
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
 
     const first = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
     assert.equal(first.status, 201);
 
     // The remaining line must still be decidable — this was a dead end before.
     const rest = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [], declined_items: [second.body.data.line_item_id],
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [],
+      declined_items: [second.body.data.line_item_id],
       evidence_refs: { portal_submission_id: randomUUID() },
     });
     assert.equal(rest.status, 201, JSON.stringify(rest.body));
 
-    const est2 = await query('SELECT status FROM ro_estimates WHERE estimate_id=$1', [est.body.data.estimate_id]);
+    const est2 = await query('SELECT status FROM ro_estimates WHERE estimate_id=$1', [
+      est.body.data.estimate_id,
+    ]);
     assert.equal(est2.rows[0].status, 'partially_approved');
   });
 
@@ -285,11 +371,13 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const item = queue.body.data[0];
     assert.ok(item, 'check-in produced a queue item');
 
-    const other = actor([ROLES.TECHNICIAN]);
+    const other = await actor([ROLES.TECHNICIAN]);
     const claimed = await call(other, 'POST', `/queues/${item.queue_item_id}/assign`, {});
     assert.equal(claimed.status, 200);
 
-    const stolen = await call(technician, 'POST', `/queues/${item.queue_item_id}/update-status`, { status: 'done' });
+    const stolen = await call(technician, 'POST', `/queues/${item.queue_item_id}/update-status`, {
+      status: 'done',
+    });
     assert.equal(stolen.status, 403);
     assert.equal(stolen.body.error.code, 'queue_item_taken');
   });
@@ -304,7 +392,9 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
   test('a bad timestamp is a 400, not a database error', async () => {
     const res = await call(advisor, 'POST', '/appointments', {
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: randomUUID(),
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: randomUUID(),
       scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
       scheduled_end: 'the day after tomorrow',
     });
@@ -314,8 +404,10 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
   test('a non-array reason_codes is a 400, not a malformed array literal', async () => {
     const res = await call(advisor, 'POST', '/comebacks', {
-      original_ro_id: randomUUID(), new_ro_id: randomUUID(),
-      root_cause_category: 'workmanship', reason_codes: 'oops',
+      original_ro_id: randomUUID(),
+      new_ro_id: randomUUID(),
+      root_cause_category: 'workmanship',
+      reason_codes: 'oops',
     });
     assert.equal(res.status, 400);
     assert.match(res.body.error.message, /reason_codes/);
@@ -340,16 +432,23 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
 
-    const reusable = signStepUpToken({
-      tenantId: tenant, userId: advisor.userId, action: 'ro.transition:authorized', resourceId: roId,
+    const reusable = await mintReauthGrant({
+      tenantId: tenant,
+      userLinkId: advisor.userId,
+      action: 'service.ro.transition:authorized',
+      resourceId: roId,
     });
 
-    const first = await call(advisor, 'POST', `/ros/${roId}/transition`,
-      { to_status: 'authorized', step_up_token: reusable });
+    const first = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'authorized',
+      step_up_token: reusable,
+    });
     assert.equal(first.status, 200);
 
     // Same token, same action, same resource, same user: the ONLY thing stopping this
@@ -357,18 +456,29 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
-    const replay = await call(advisor, 'POST', `/ros/${roId}/transition`,
-      { to_status: 'ready_for_pickup', step_up_token: reusable });
+    const replay = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'ready_for_pickup',
+      step_up_token: reusable,
+    });
     // ready_for_pickup needs no step-up, so prove the replay directly on a gated action:
     assert.equal(replay.status, 200);
 
-    const cancelToken = signStepUpToken({
-      tenantId: tenant, userId: advisor.userId, action: 'ro.transition:canceled', resourceId: roId,
+    const cancelToken = await mintReauthGrant({
+      tenantId: tenant,
+      userLinkId: advisor.userId,
+      action: 'service.ro.transition:canceled',
+      resourceId: roId,
     });
     const other = await pricedRO();
-    const otherCancel = await call(advisor, 'POST', `/ros/${other.roId}/transition`,
-      { to_status: 'canceled', step_up_token: cancelToken });
-    assert.equal(otherCancel.status, 403, 'a token bound to one repair order cannot cancel another');
+    const otherCancel = await call(advisor, 'POST', `/ros/${other.roId}/transition`, {
+      to_status: 'canceled',
+      step_up_token: cancelToken,
+    });
+    assert.equal(
+      otherCancel.status,
+      403,
+      'a grant bound to one repair order cannot cancel another',
+    );
   });
 
   test('a spent step-up token cannot authorise a second repair order transition', async () => {
@@ -376,20 +486,31 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
 
-    const tok = signStepUpToken({
-      tenantId: tenant, userId: advisor.userId, action: 'ro.transition:canceled', resourceId: roId,
+    const tok = await mintReauthGrant({
+      tenantId: tenant,
+      userLinkId: advisor.userId,
+      action: 'service.ro.transition:canceled',
+      resourceId: roId,
     });
-    const cancelled = await call(advisor, 'POST', `/ros/${roId}/transition`,
-      { to_status: 'canceled', step_up_token: tok });
+    const cancelled = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'canceled',
+      step_up_token: tok,
+    });
     assert.equal(cancelled.status, 200);
 
-    // The ledger row is the only thing that makes a second use fail.
-    const spent = await query('SELECT jti FROM step_up_token_uses WHERE resource_id=$1', [roId]);
-    assert.equal(spent.rows.length, 1, 'the token was recorded as consumed');
+    // The consumed grant is the only thing that makes a second use fail.
+    const spent = await query(
+      'SELECT consumed_at FROM reauthentication_grants WHERE resource_id=$1',
+      [roId],
+    );
+    assert.equal(spent.rows.length, 1, 'the grant was recorded');
+    assert.ok(spent.rows[0].consumed_at, 'and it is spent');
   });
 
   // ── Billable work added after the estimate went out ─────────
@@ -400,13 +521,18 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
     await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: est.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
     await call(advisor, 'POST', `/ros/${roId}/transition`, {
       to_status: 'authorized',
-      step_up_token: signStepUpToken({
-        tenantId: tenant, userId: advisor.userId, action: 'ro.transition:authorized', resourceId: roId,
+      step_up_token: await mintReauthGrant({
+        tenantId: tenant,
+        userLinkId: advisor.userId,
+        action: 'service.ro.transition:authorized',
+        resourceId: roId,
       }),
     });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
@@ -420,16 +546,22 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     // default not_required rather than pending, so a gate that only looks for pending lines
     // would let it through and it would land on the invoice unapproved.
     const extra = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
-      line_type: 'labor', description: 'Found on the bench', estimated_hours: 2,
+      line_type: 'labor',
+      description: 'Found on the bench',
+      estimated_hours: 2,
     });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${extra.body.data.line_item_id}`, {
       price_ref: { amount_cents: 80_000, currency: 'USD' },
     });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${extra.body.data.line_item_id}`, { status: 'completed' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${extra.body.data.line_item_id}`, {
+      status: 'completed',
+    });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
 
-    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'ready_for_pickup',
+    });
     assert.equal(pickup.status, 422);
     assert.equal(pickup.body.error.code, 'decision_outstanding');
   });
@@ -440,13 +572,19 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     // No price: warranty, internal or goodwill work, which is exactly what not_required is
     // for. This must not be caught by the chargeable-work gate.
     const warranty = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
-      line_type: 'labor', description: 'Warranty recall', estimated_hours: 1,
+      line_type: 'labor',
+      description: 'Warranty recall',
+      estimated_hours: 1,
     });
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${warranty.body.data.line_item_id}`, { status: 'completed' });
+    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${warranty.body.data.line_item_id}`, {
+      status: 'completed',
+    });
     await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
 
-    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'ready_for_pickup' });
+    const pickup = await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'ready_for_pickup',
+    });
     assert.equal(pickup.status, 200, JSON.stringify(pickup.body));
     assert.equal(pickup.body.data.status, 'ready_for_pickup');
   });
@@ -467,9 +605,18 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     assert.equal(meddle.body.error.code, 'pending_terms_frozen');
 
     // The sanctioned re-quote: back to estimate_pending, re-price, re-send.
-    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'estimate_pending', reason: 're-quote' });
-    const withdrawn = await query('SELECT status FROM ro_estimates WHERE estimate_id=$1', [v1.body.data.estimate_id]);
-    assert.equal(withdrawn.rows[0].status, 'expired', 'the withdrawn estimate is no longer answerable');
+    await call(advisor, 'POST', `/ros/${roId}/transition`, {
+      to_status: 'estimate_pending',
+      reason: 're-quote',
+    });
+    const withdrawn = await query('SELECT status FROM ro_estimates WHERE estimate_id=$1', [
+      v1.body.data.estimate_id,
+    ]);
+    assert.equal(
+      withdrawn.rows[0].status,
+      'expired',
+      'the withdrawn estimate is no longer answerable',
+    );
 
     await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, {
       price_ref: { amount_cents: 99_999, currency: 'USD' },
@@ -479,26 +626,40 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
     // A customer following the stale portal link is refused, not silently bound.
     const stale = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: v1.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: v1.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
     assert.equal(stale.status, 409);
-    assert.ok(['estimate_not_sent', 'estimate_superseded'].includes(stale.body.error.code), stale.body.error.code);
+    assert.ok(
+      ['estimate_not_sent', 'estimate_superseded'].includes(stale.body.error.code),
+      stale.body.error.code,
+    );
 
     // The current estimate is decidable, and the evidence matches what it showed.
     const auth = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: v2.body.data.estimate_id, method: 'portal',
-      approved_items: [lineId], evidence_refs: { portal_submission_id: randomUUID() },
+      estimate_id: v2.body.data.estimate_id,
+      method: 'portal',
+      approved_items: [lineId],
+      evidence_refs: { portal_submission_id: randomUUID() },
     });
     assert.equal(auth.status, 201);
     assert.equal(Number(auth.body.data.approved_snapshot[lineId].price_ref.amount_cents), 99_999);
-    assert.equal(Number(v2.body.data.totals_ref.amount_cents), 99_999, 'and matches the estimate total');
+    assert.equal(
+      Number(v2.body.data.totals_ref.amount_cents),
+      99_999,
+      'and matches the estimate total',
+    );
 
     // And the repair order is not wedged: it can still be authorised.
     const moved = await call(advisor, 'POST', `/ros/${roId}/transition`, {
       to_status: 'authorized',
-      step_up_token: signStepUpToken({
-        tenantId: tenant, userId: advisor.userId, action: 'ro.transition:authorized', resourceId: roId,
+      step_up_token: await mintReauthGrant({
+        tenantId: tenant,
+        userLinkId: advisor.userId,
+        action: 'service.ro.transition:authorized',
+        resourceId: roId,
       }),
     });
     assert.equal(moved.status, 200);
@@ -509,7 +670,9 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
   test('a no-show is recorded once and queues the follow-up', async () => {
     const appt = await call(advisor, 'POST', '/appointments', {
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: randomUUID(),
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: randomUUID(),
       scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
     });
     const id = appt.body.data.appointment_id;
@@ -522,7 +685,10 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
       `SELECT queue_type FROM service_queue_items WHERE appointment_id=$1 AND status NOT IN ('done','canceled')`,
       [id],
     );
-    assert.deepEqual(queued.rows.map((r: any) => r.queue_type), ['no_show_followup']);
+    assert.deepEqual(
+      queued.rows.map((r: any) => r.queue_type),
+      ['no_show_followup'],
+    );
 
     // The status is terminal for this purpose: marking it twice must not queue a second
     // follow-up call to the same customer.
@@ -537,12 +703,14 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     const { roId } = await pricedRO();
     const templateId = await seedMPITemplate({ tenantId: tenant } as any, location);
     const session = await call(advisor, 'POST', `/ros/${roId}/mpi/start`, {
-      template_id: templateId, tech_user_id: technician.userId,
+      template_id: templateId,
+      tech_user_id: technician.userId,
     });
     assert.equal(session.status, 201);
 
     const bad = await call(advisor, 'POST', `/mpi/${session.body.data.mpi_session_id}/results`, {
-      item_key: 'brake_pads', status: 'fail',
+      item_key: 'brake_pads',
+      status: 'fail',
     });
     assert.equal(bad.status, 400);
     assert.equal(bad.body.error.code, 'severity_required');
@@ -562,13 +730,18 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
 
     // The repo-wide /metrics invariant, asserted at the whole-surface level: the endpoint
     // is unauthenticated, so nothing on it may name a tenant — not a label, not a value.
-    assert.ok(!/tenant/i.test(exposition), 'no series, label or value on /metrics may mention a tenant');
+    assert.ok(
+      !/tenant/i.test(exposition),
+      'no series, label or value on /metrics may mention a tenant',
+    );
   });
 
   test('the waitlist is advisor-writable, technician-readable only', async () => {
     const vehicle = randomUUID();
     const entryBody = {
-      location_id: location, mdm_customer_id: randomUUID(), mdm_vehicle_id: vehicle,
+      location_id: location,
+      mdm_customer_id: randomUUID(),
+      mdm_vehicle_id: vehicle,
       requested_start: new Date(Date.now() + 86_400_000).toISOString(),
     };
 
@@ -583,12 +756,15 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     assert.equal(listed.status, 200, 'shop floor can see the queue');
     assert.equal(listed.body.data.length, 1);
 
-    const techConvert = await call(technician, 'POST', `/waitlist/${id}/convert`,
-      { scheduled_start: new Date(Date.now() + 86_400_000).toISOString() });
-    assert.equal(techConvert.status, 403, 'booking the slot is a commercial action');
+    const techConvert = await call(technician, 'POST', `/waitlist/${id}/convert`, {
+      scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    // resource-scoped denial: unauthorized reads as nonexistent (non-enumeration)
+    assert.equal(techConvert.status, 404, 'booking the slot is a commercial action');
 
-    const converted = await call(advisor, 'POST', `/waitlist/${id}/convert`,
-      { scheduled_start: new Date(Date.now() + 86_400_000).toISOString() });
+    const converted = await call(advisor, 'POST', `/waitlist/${id}/convert`, {
+      scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+    });
     assert.equal(converted.status, 201, JSON.stringify(converted.body));
     assert.equal(converted.body.data.appointment.source, 'waitlist');
   });

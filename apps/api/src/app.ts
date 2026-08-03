@@ -1,5 +1,6 @@
 import express, { Express, NextFunction, Request, Response } from 'express';
 import * as promClient from 'prom-client';
+import authRouter from './routes/auth';
 import serviceCockpitRouter from './routes/service-cockpit';
 import { ValidationError, getConfig } from '@dealer/platform';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
@@ -22,7 +23,9 @@ export function createApp(): Express {
       return next(new ValidationError('Request body is too large', { code: 'body_too_large' }));
     }
     if (err instanceof SyntaxError && 'body' in err) {
-      return next(new ValidationError('Request body is not valid JSON', { code: 'malformed_json' }));
+      return next(
+        new ValidationError('Request body is not valid JSON', { code: 'malformed_json' }),
+      );
     }
     return next(err);
   });
@@ -38,6 +41,7 @@ export function createApp(): Express {
     res.end(await promClient.register.metrics());
   });
 
+  app.use('/auth', authRouter);
   app.use('/api/service', serviceCockpitRouter);
 
   app.use(notFoundHandler);

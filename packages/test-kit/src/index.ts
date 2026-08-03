@@ -4,3 +4,4 @@
  */
 export * from './db';
 export * from './local-issuer';
+export * from './identity';

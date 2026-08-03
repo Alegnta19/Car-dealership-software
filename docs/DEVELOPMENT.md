@@ -13,7 +13,7 @@ the container run; Node 22/24 are known to work for local development) and
 ### With Docker
 
 ```bash
-cp .env.example .env   # set JWT_SECRET, STEP_UP_SECRET, POSTGRES_PASSWORD
+cp .env.example .env   # set POSTGRES_PASSWORD (identity stays disabled for local work)
 ```
 
 ```bash

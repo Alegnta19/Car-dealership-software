@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { serviceCockpitRouter } from '@dealer/api';
+import { authRouter, serviceCockpitRouter } from '@dealer/api';
 import { createApp } from '@dealer/api';
 import { errorHandler, notFoundHandler } from '@dealer/api';
 import { ValidationError } from '@dealer/platform';
@@ -18,10 +18,9 @@ import { ValidationError } from '@dealer/platform';
  */
 
 // createApp() resolves configuration lazily; a portable test presents a complete
-// dummy environment (never asserted on).
+// dummy environment (never asserted on). Identity stays DISABLED — walking the
+// router requires no provider configuration at all.
 process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
-process.env.JWT_SECRET ??= 'contract-test-jwt-secret-32-chars!!!';
-process.env.STEP_UP_SECRET ??= 'contract-test-step-up-secret-32ch!!!';
 
 const SNAPSHOT_PATH = join(__dirname, 'fixtures', 'http-contract-snapshot.json');
 
@@ -29,13 +28,14 @@ interface RouteEntry {
   method: string;
   path: string;
   authenticated: boolean;
-  roles: string[];
+  /** FBL-020: routes declare ONE catalog action; the policy engine owns roles. */
+  action: string | null;
 }
 
 /** The slice of Express router internals this characterization reads. */
 interface RouteHandle {
   name?: string;
-  requiredRoles?: unknown;
+  requiredAction?: unknown;
 }
 interface RouteStackLayer {
   handle?: RouteHandle;
@@ -57,17 +57,15 @@ function walkRouter(router: WalkableRouter): RouteEntry[] {
     if (!layer.route) continue; // app-level middleware, not a mounted route
     const { path, methods, stack } = layer.route;
     const authenticated = stack.some((l) => l.handle?.name === 'authenticate');
-    const roles = stack.flatMap((l) =>
-      Array.isArray(l.handle?.requiredRoles)
-        ? l.handle.requiredRoles.filter((r): r is string => typeof r === 'string')
-        : [],
+    const actions = stack.flatMap((l) =>
+      typeof l.handle?.requiredAction === 'string' ? [l.handle.requiredAction] : [],
     );
     for (const method of Object.keys(methods).filter((m) => m !== '_all')) {
       entries.push({
         method: method.toUpperCase(),
         path,
         authenticated,
-        roles: [...new Set(roles)].sort(),
+        action: actions[0] ?? null,
       });
     }
   }
@@ -76,6 +74,7 @@ function walkRouter(router: WalkableRouter): RouteEntry[] {
 
 describe('HTTP contract characterization', () => {
   const serviceRoutes = walkRouter(serviceCockpitRouter as unknown as WalkableRouter);
+  const authSurface = walkRouter(authRouter as unknown as WalkableRouter);
 
   test('the mounted /api/service surface is exactly 44 endpoints', () => {
     assert.equal(
@@ -86,15 +85,39 @@ describe('HTTP contract characterization', () => {
     );
   });
 
-  test('every /api/service endpoint requires authentication and declares its role gate', () => {
+  test('every /api/service endpoint requires authentication and declares its action gate', () => {
     for (const r of serviceRoutes) {
       assert.ok(r.authenticated, `${r.method} ${r.path} is mounted without authenticate`);
-      assert.ok(r.roles.length > 0, `${r.method} ${r.path} has no authorize(...) role gate`);
+      assert.ok(
+        typeof r.action === 'string' && r.action.length > 0,
+        `${r.method} ${r.path} has no requireAction(...) gate`,
+      );
     }
   });
 
-  test('method, path, auth and roles match the checked-in contract snapshot', () => {
-    const current = JSON.stringify({ service: serviceRoutes }, null, 2) + '\n';
+  test('the /auth surface is exactly the six FBL-020 routes', () => {
+    const listed = authSurface.map((r) => `${r.method} ${r.path}`).sort();
+    assert.deepEqual(listed, [
+      'GET /callback',
+      'GET /login',
+      'GET /reauth/callback',
+      'GET /session',
+      'POST /logout',
+      'POST /reauth/start',
+    ]);
+    // browser-redirect legs authenticate via sealed transaction cookies, not middleware
+    for (const r of authSurface) {
+      const needsMiddlewareAuth = ['GET /session', 'POST /logout', 'POST /reauth/start'];
+      assert.equal(
+        r.authenticated,
+        needsMiddlewareAuth.includes(`${r.method} ${r.path}`),
+        `${r.method} ${r.path} authentication posture drifted`,
+      );
+    }
+  });
+
+  test('method, path, auth and action match the checked-in contract snapshot', () => {
+    const current = JSON.stringify({ service: serviceRoutes, auth: authSurface }, null, 2) + '\n';
     if (process.env.UPDATE_HTTP_CONTRACT === '1') {
       writeFileSync(SNAPSHOT_PATH, current);
     }

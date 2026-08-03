@@ -43,10 +43,15 @@ export const RO_TRANSITIONS: Record<ROStatus, ROStatus[]> = {
  * Transitions that commit the customer to money, or destroy work in progress, and so
  * require a freshly re-authenticated actor (see `shared/security/step-up`).
  */
-export const STEP_UP_TRANSITIONS: ReadonlySet<string> = new Set<ROStatus>(['authorized', 'canceled']);
+export const STEP_UP_TRANSITIONS: ReadonlySet<string> = new Set<ROStatus>([
+  'authorized',
+  'canceled',
+]);
 
 /** Transitions whose customer-authorization evidence must exist before they are allowed. */
-export const AUTHORIZATION_GATED_TRANSITIONS: ReadonlySet<string> = new Set<ROStatus>(['authorized']);
+export const AUTHORIZATION_GATED_TRANSITIONS: ReadonlySet<string> = new Set<ROStatus>([
+  'authorized',
+]);
 
 export function isROStatus(value: unknown): value is ROStatus {
   return typeof value === 'string' && (RO_STATUSES as readonly string[]).includes(value);

@@ -45,14 +45,10 @@ describe('documentation matches the code it describes', () => {
   test('every error code the API can return is listed in the appendix', () => {
     assert.ok(codeAppendix, 'the appendix must carry an "**Error codes:**" line');
 
-    const thrown = new Set(
-      [...SOURCE.matchAll(/\bcode: '([a-z_]+)'/g)].map((m) => m[1]),
-    );
+    const thrown = new Set([...SOURCE.matchAll(/\bcode: '([a-z_]+)'/g)].map((m) => m[1]));
     assert.ok(thrown.size > 40, 'sanity: the scan should find the whole code vocabulary');
 
-    const documented = new Set(
-      [...codeAppendix!.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]),
-    );
+    const documented = new Set([...codeAppendix!.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]));
 
     const missing = [...thrown].filter((c) => !documented.has(c)).sort();
     assert.deepEqual(
@@ -75,7 +71,9 @@ describe('documentation matches the code it describes', () => {
 
   test('the metrics table lists the labels each metric actually carries', () => {
     const declared = new Map<string, string[]>();
-    for (const m of SOURCE.matchAll(/name: '(service_[a-z0-9_]+)'[^}]*?labelNames: \[([^\]]*)\]/g)) {
+    for (const m of SOURCE.matchAll(
+      /name: '(service_[a-z0-9_]+)'[^}]*?labelNames: \[([^\]]*)\]/g,
+    )) {
       declared.set(m[1], [...m[2].matchAll(/'([a-z_]+)'/g)].map((l) => l[1]).sort());
     }
     assert.equal(declared.size, 15, 'sanity: all fifteen metrics should be found');
@@ -84,7 +82,12 @@ describe('documentation matches the code it describes', () => {
       const row = DOC.split('\n').find((l) => l.startsWith(`| \`${metric}\``));
       assert.ok(row, `${metric} must appear in the §9 metrics table`);
 
-      const documented = row!.split('|')[3].split(',').map((l) => l.trim()).filter(Boolean).sort();
+      const documented = row!
+        .split('|')[3]
+        .split(',')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .sort();
       assert.deepEqual(
         documented,
         labels,

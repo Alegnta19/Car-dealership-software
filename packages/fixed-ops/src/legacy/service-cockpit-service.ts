@@ -10,7 +10,7 @@ import {
   ValidationError,
 } from '@dealer/platform';
 import { ROLES, Role } from '@dealer/contracts';
-import { consumeStepUpToken } from '../security/step-up';
+import { consumeSensitiveActionGrant } from '../security/sensitive-action';
 import {
   allowedTransitionsFrom,
   isTransitionAllowed,
@@ -43,21 +43,84 @@ export interface AuthContext {
 
 // ── Prometheus Observability (15 metrics per spec) ────────────
 
-const svcAppointmentsTotal = new promClient.Counter({ name: 'service_appointments_total', help: 'Appointments', labelNames: ['status', 'location'] });
-const svcROTotal = new promClient.Counter({ name: 'service_ro_total', help: 'Repair orders', labelNames: ['status', 'location'] });
-const svcROCycleTime = new promClient.Histogram({ name: 'service_ro_cycle_time_minutes_p95', help: 'RO cycle time', labelNames: ['location'], buckets: [30, 60, 120, 240, 480, 720, 1440] });
-const svcApprovalTime = new promClient.Histogram({ name: 'service_approval_time_minutes_p95', help: 'Approval time', labelNames: ['location'], buckets: [5, 15, 30, 60, 120, 240, 480] });
-const svcPartsBackorderRate = new promClient.Gauge({ name: 'service_parts_backorder_rate', help: 'Parts backorder rate', labelNames: ['location'] });
-const svcPartsWaitTime = new promClient.Histogram({ name: 'service_parts_wait_time_minutes_p95', help: 'Parts wait time', labelNames: ['location'], buckets: [30, 60, 240, 480, 1440, 2880] });
-const svcQCFailRate = new promClient.Gauge({ name: 'service_qc_fail_rate', help: 'QC failure rate', labelNames: ['location'] });
-const svcComebackRate = new promClient.Gauge({ name: 'service_comeback_rate', help: 'Comeback rate', labelNames: ['location', 'category'] });
-const svcTechUtilization = new promClient.Gauge({ name: 'service_tech_utilization', help: 'Tech utilization', labelNames: ['location'] });
-const svcTechEfficiency = new promClient.Gauge({ name: 'service_tech_efficiency', help: 'Tech efficiency', labelNames: ['location'] });
-const svcTechProficiency = new promClient.Gauge({ name: 'service_tech_proficiency', help: 'Tech proficiency', labelNames: ['location'] });
-const svcQueueDepth = new promClient.Gauge({ name: 'service_queue_depth', help: 'Queue depth', labelNames: ['queue_type', 'location'] });
-const svcSLABreachRate = new promClient.Gauge({ name: 'service_sla_breach_rate', help: 'SLA breach rate', labelNames: ['job_type', 'location'] });
-const svcMPIConversionRate = new promClient.Gauge({ name: 'service_mpi_conversion_rate', help: 'MPI conversion rate', labelNames: ['recommendation_type', 'location'] });
-const svcFirstServiceCaptureRate = new promClient.Gauge({ name: 'service_retention_first_service_capture_rate', help: 'First service capture rate', labelNames: ['location'] });
+const svcAppointmentsTotal = new promClient.Counter({
+  name: 'service_appointments_total',
+  help: 'Appointments',
+  labelNames: ['status', 'location'],
+});
+const svcROTotal = new promClient.Counter({
+  name: 'service_ro_total',
+  help: 'Repair orders',
+  labelNames: ['status', 'location'],
+});
+const svcROCycleTime = new promClient.Histogram({
+  name: 'service_ro_cycle_time_minutes_p95',
+  help: 'RO cycle time',
+  labelNames: ['location'],
+  buckets: [30, 60, 120, 240, 480, 720, 1440],
+});
+const svcApprovalTime = new promClient.Histogram({
+  name: 'service_approval_time_minutes_p95',
+  help: 'Approval time',
+  labelNames: ['location'],
+  buckets: [5, 15, 30, 60, 120, 240, 480],
+});
+const svcPartsBackorderRate = new promClient.Gauge({
+  name: 'service_parts_backorder_rate',
+  help: 'Parts backorder rate',
+  labelNames: ['location'],
+});
+const svcPartsWaitTime = new promClient.Histogram({
+  name: 'service_parts_wait_time_minutes_p95',
+  help: 'Parts wait time',
+  labelNames: ['location'],
+  buckets: [30, 60, 240, 480, 1440, 2880],
+});
+const svcQCFailRate = new promClient.Gauge({
+  name: 'service_qc_fail_rate',
+  help: 'QC failure rate',
+  labelNames: ['location'],
+});
+const svcComebackRate = new promClient.Gauge({
+  name: 'service_comeback_rate',
+  help: 'Comeback rate',
+  labelNames: ['location', 'category'],
+});
+const svcTechUtilization = new promClient.Gauge({
+  name: 'service_tech_utilization',
+  help: 'Tech utilization',
+  labelNames: ['location'],
+});
+const svcTechEfficiency = new promClient.Gauge({
+  name: 'service_tech_efficiency',
+  help: 'Tech efficiency',
+  labelNames: ['location'],
+});
+const svcTechProficiency = new promClient.Gauge({
+  name: 'service_tech_proficiency',
+  help: 'Tech proficiency',
+  labelNames: ['location'],
+});
+const svcQueueDepth = new promClient.Gauge({
+  name: 'service_queue_depth',
+  help: 'Queue depth',
+  labelNames: ['queue_type', 'location'],
+});
+const svcSLABreachRate = new promClient.Gauge({
+  name: 'service_sla_breach_rate',
+  help: 'SLA breach rate',
+  labelNames: ['job_type', 'location'],
+});
+const svcMPIConversionRate = new promClient.Gauge({
+  name: 'service_mpi_conversion_rate',
+  help: 'MPI conversion rate',
+  labelNames: ['recommendation_type', 'location'],
+});
+const svcFirstServiceCaptureRate = new promClient.Gauge({
+  name: 'service_retention_first_service_capture_rate',
+  help: 'First service capture rate',
+  labelNames: ['location'],
+});
 
 /**
  * The 11 metrics that are rates, ratios or depths rather than per-request events.
@@ -105,7 +168,15 @@ async function emitAudit(
     await query(
       `INSERT INTO audit_events (event_id,tenant_id,event_type,entity_type,entity_id,actor_user_id,details,created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
-      [generateId(), ctx.tenantId, `service.${action}`, entityType, entityId, ctx.userId, JSON.stringify(details)],
+      [
+        generateId(),
+        ctx.tenantId,
+        `service.${action}`,
+        entityType,
+        entityId,
+        ctx.userId,
+        JSON.stringify(details),
+      ],
     );
   } catch (err) {
     logger.warn({ action, entityId, err }, 'Audit emit failed');
@@ -190,11 +261,16 @@ export interface Page {
  * unbounded result set, which is what the previously hardcoded limits were protecting
  * against — at the cost of making anything past the first page unreachable.
  */
-function pagination(input: { limit?: unknown; offset?: unknown } | undefined, defaultLimit: number, maxLimit: number): Page {
+function pagination(
+  input: { limit?: unknown; offset?: unknown } | undefined,
+  defaultLimit: number,
+  maxLimit: number,
+): Page {
   const parse = (value: unknown, field: string): number | undefined => {
     if (value === undefined || value === null || value === '') return undefined;
     const n = typeof value === 'number' ? value : Number(value);
-    if (!Number.isInteger(n) || n < 0) throw new ValidationError(`${field} must be a non-negative integer`);
+    if (!Number.isInteger(n) || n < 0)
+      throw new ValidationError(`${field} must be a non-negative integer`);
     return n;
   };
 
@@ -202,7 +278,8 @@ function pagination(input: { limit?: unknown; offset?: unknown } | undefined, de
   const offset = parse(input?.offset, 'offset');
   if (limit === 0) throw new ValidationError('limit must be greater than zero');
   // Bounded well inside bigint: an offset past this overflows in Postgres and 500s.
-  if (offset !== undefined && offset > 1_000_000) throw new ValidationError('offset must not exceed 1000000');
+  if (offset !== undefined && offset > 1_000_000)
+    throw new ValidationError('offset must not exceed 1000000');
 
   return { limit: Math.min(limit ?? defaultLimit, maxLimit), offset: offset ?? 0 };
 }
@@ -241,7 +318,11 @@ function validatePriceRef(value: unknown): void {
       throw new ValidationError('price_ref.amount_cents must be a non-negative finite number');
     }
   }
-  if (price.currency !== undefined && price.currency !== null && typeof price.currency !== 'string') {
+  if (
+    price.currency !== undefined &&
+    price.currency !== null &&
+    typeof price.currency !== 'string'
+  ) {
     throw new ValidationError('price_ref.currency must be a string');
   }
 }
@@ -270,13 +351,17 @@ function summariseMoney(rows: any[]): {
     // `typeof number` specifically: Number(null)/Number(true)/Number([]) are all finite,
     // so a line whose amount_cents is null, a boolean, or an empty array would otherwise
     // count as a priced line worth zero and silently understate the estimate.
-    const raw = price && typeof price === 'object' && !Array.isArray(price) ? (price as any).amount_cents : undefined;
+    const raw =
+      price && typeof price === 'object' && !Array.isArray(price)
+        ? (price as any).amount_cents
+        : undefined;
     const amount = typeof raw === 'number' ? raw : NaN;
     if (!Number.isFinite(amount) || amount < 0) {
       unpriced += 1;
       continue;
     }
-    const rowCurrency = typeof (price as any).currency === 'string' ? (price as any).currency : 'USD';
+    const rowCurrency =
+      typeof (price as any).currency === 'string' ? (price as any).currency : 'USD';
     if (currency === null) currency = rowCurrency;
     else if (currency !== rowCurrency) {
       throw new ValidationError('Line items on one estimate must share a currency', {
@@ -359,7 +444,12 @@ async function syncQueueForRO(ex: Executor, ctx: AuthContext, ro: any): Promise<
  * misses are reported as "not found" so the API never confirms that another tenant's
  * repair order exists.
  */
-async function assertRO(ex: Executor, ctx: AuthContext, roId: string, opts: { lock?: boolean } = {}): Promise<any> {
+async function assertRO(
+  ex: Executor,
+  ctx: AuthContext,
+  roId: string,
+  opts: { lock?: boolean } = {},
+): Promise<any> {
   requireUuid(roId, 'ro_id');
   const ro = (
     await ex.query(
@@ -389,7 +479,10 @@ async function assertLineItem(
       [lineItemId, roId, ctx.tenantId],
     )
   ).rows[0];
-  if (!item) throw new NotFoundError('Line item not found on this repair order', { code: 'line_item_not_found' });
+  if (!item)
+    throw new NotFoundError('Line item not found on this repair order', {
+      code: 'line_item_not_found',
+    });
   return item;
 }
 
@@ -433,9 +526,10 @@ async function assertLineItemsOnRO(
  * IANA database here so an unknown name is a 400 rather than a Postgres error.
  */
 function resolveTimezone(supplied?: unknown): string {
-  const candidate = typeof supplied === 'string' && supplied.trim() !== ''
-    ? supplied
-    : getConfig().serviceDefaultTimezone;
+  const candidate =
+    typeof supplied === 'string' && supplied.trim() !== ''
+      ? supplied
+      : getConfig().serviceDefaultTimezone;
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: candidate });
   } catch {
@@ -527,7 +621,10 @@ export async function getServiceCockpitHome(
     exceptions: { parts_delays: partsDelays?.cnt ?? 0, open_comebacks: comebacks?.cnt ?? 0 },
     featured_views: [
       { key: 'todays_queue', label_i18n: i18n("Today's Queue", 'Cola de Hoy') },
-      { key: 'waiting_authorization', label_i18n: i18n('Waiting Authorization', 'Esperando Autorización') },
+      {
+        key: 'waiting_authorization',
+        label_i18n: i18n('Waiting Authorization', 'Esperando Autorización'),
+      },
       { key: 'waiting_parts', label_i18n: i18n('Waiting Parts', 'Esperando Repuestos') },
       { key: 'qc_review', label_i18n: i18n('QC Review', 'Revisión de Calidad') },
       { key: 'ready_pickup', label_i18n: i18n('Ready for Pickup', 'Listo para Recoger') },
@@ -555,7 +652,10 @@ export async function queryServiceCockpitView(
 ): Promise<any> {
   // `Object.hasOwn`, not a truthiness check: inherited keys like `constructor` or
   // `toString` would otherwise pass the guard and reach the query as a function.
-  const queueTypes = typeof viewId === 'string' && Object.hasOwn(VIEW_QUEUE_MAP, viewId) ? VIEW_QUEUE_MAP[viewId] : undefined;
+  const queueTypes =
+    typeof viewId === 'string' && Object.hasOwn(VIEW_QUEUE_MAP, viewId)
+      ? VIEW_QUEUE_MAP[viewId]
+      : undefined;
   if (!queueTypes) {
     throw new ValidationError('Unknown view_id', {
       code: 'unknown_view',
@@ -572,11 +672,14 @@ export async function queryServiceCockpitView(
   // the obvious way to arrive here — fell through the guard and was told nothing, which
   // is the precise outcome the guard exists to prevent.
   if (overrides !== undefined && overrides !== null) {
-    const isEmptyObject = typeof overrides === 'object'
-      && !Array.isArray(overrides)
-      && Object.keys(overrides as object).length === 0;
+    const isEmptyObject =
+      typeof overrides === 'object' &&
+      !Array.isArray(overrides) &&
+      Object.keys(overrides as object).length === 0;
     if (!isEmptyObject) {
-      throw new ValidationError('View overrides are not supported', { code: 'overrides_unsupported' });
+      throw new ValidationError('View overrides are not supported', {
+        code: 'overrides_unsupported',
+      });
     }
   }
 
@@ -626,7 +729,9 @@ export async function createAppointment(
     requireTimestamp(params.scheduled_end, 'scheduled_end');
   }
 
-  const source = params.source ? requireOneOf(params.source, APPOINTMENT_SOURCES, 'source') : 'phone';
+  const source = params.source
+    ? requireOneOf(params.source, APPOINTMENT_SOURCES, 'source')
+    : 'phone';
   // 'waitlist' is provenance, not a channel: it asserts "a waitlist entry was converted",
   // and only convertWaitlistEntry may assert it — same discipline as the authorization
   // fields, which are never caller-supplied either.
@@ -647,9 +752,18 @@ export async function createAppointment(
          scheduled_start,scheduled_end,concerns,preferred_contact_channel,language_preference,source,created_by_user_id,status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'scheduled') RETURNING *`,
       [
-        id, ctx.tenantId, params.location_id, params.mdm_customer_id, params.mdm_vehicle_id,
-        params.scheduled_start, params.scheduled_end ?? null, JSON.stringify(requireConcerns(params.concerns)),
-        channel, language, source, ctx.userId,
+        id,
+        ctx.tenantId,
+        params.location_id,
+        params.mdm_customer_id,
+        params.mdm_vehicle_id,
+        params.scheduled_start,
+        params.scheduled_end ?? null,
+        JSON.stringify(requireConcerns(params.concerns)),
+        channel,
+        language,
+        source,
+        ctx.userId,
       ],
     )
   ).rows[0];
@@ -669,8 +783,13 @@ async function insertAppointment(
   ex: Executor,
   ctx: AuthContext,
   params: {
-    location_id: string; mdm_customer_id: string; mdm_vehicle_id: string; scheduled_start: string;
-    concerns?: unknown; language_preference?: string; source?: string;
+    location_id: string;
+    mdm_customer_id: string;
+    mdm_vehicle_id: string;
+    scheduled_start: string;
+    concerns?: unknown;
+    language_preference?: string;
+    source?: string;
   },
 ): Promise<any> {
   const id = generateId();
@@ -680,15 +799,28 @@ async function insertAppointment(
          scheduled_start,concerns,language_preference,source,created_by_user_id,status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'scheduled') RETURNING *`,
       [
-        id, ctx.tenantId, params.location_id, params.mdm_customer_id, params.mdm_vehicle_id,
-        params.scheduled_start, JSON.stringify(requireConcerns(params.concerns)),
-        params.language_preference ?? 'en', params.source ?? 'phone', ctx.userId,
+        id,
+        ctx.tenantId,
+        params.location_id,
+        params.mdm_customer_id,
+        params.mdm_vehicle_id,
+        params.scheduled_start,
+        JSON.stringify(requireConcerns(params.concerns)),
+        params.language_preference ?? 'en',
+        params.source ?? 'phone',
+        ctx.userId,
       ],
     )
   ).rows[0];
 }
 
-const APPOINTMENT_UPDATABLE = ['scheduled_start', 'scheduled_end', 'concerns', 'preferred_contact_channel', 'language_preference'] as const;
+const APPOINTMENT_UPDATABLE = [
+  'scheduled_start',
+  'scheduled_end',
+  'concerns',
+  'preferred_contact_channel',
+  'language_preference',
+] as const;
 
 /**
  * Reschedule / detail edits only.
@@ -698,13 +830,20 @@ const APPOINTMENT_UPDATABLE = ['scheduled_start', 'scheduled_end', 'concerns', '
  * the matching audit event. Allowing a raw status write let a caller move an
  * appointment anywhere, including undoing a conversion to a repair order.
  */
-export async function updateAppointment(ctx: AuthContext, appointmentId: string, updates: Record<string, unknown>): Promise<any> {
+export async function updateAppointment(
+  ctx: AuthContext,
+  appointmentId: string,
+  updates: Record<string, unknown>,
+): Promise<any> {
   requireUuid(appointmentId, 'appointment_id');
 
   if ('status' in updates) {
-    throw new ValidationError('status cannot be set directly; use the confirm or check-in endpoints', {
-      code: 'status_not_directly_updatable',
-    });
+    throw new ValidationError(
+      'status cannot be set directly; use the confirm or check-in endpoints',
+      {
+        code: 'status_not_directly_updatable',
+      },
+    );
   }
 
   // Validated to the same standard as the create path — otherwise a bad value reaches
@@ -712,7 +851,8 @@ export async function updateAppointment(ctx: AuthContext, appointmentId: string,
   // scheduled_start is NOT NULL in the schema, so a null here must be a 400 rather than
   // a constraint violation surfacing as a 500. scheduled_end is nullable, so an explicit
   // null is a legitimate "clear it".
-  if (updates.scheduled_start !== undefined) requireTimestamp(updates.scheduled_start, 'scheduled_start');
+  if (updates.scheduled_start !== undefined)
+    requireTimestamp(updates.scheduled_start, 'scheduled_start');
   if (updates.scheduled_end !== undefined && updates.scheduled_end !== null) {
     requireTimestamp(updates.scheduled_end, 'scheduled_end');
   }
@@ -750,10 +890,10 @@ export async function confirmAppointment(ctx: AuthContext, appointmentId: string
 
   return withTransaction(async (tx) => {
     const appt = (
-      await tx.query(`SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`, [
-        appointmentId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [appointmentId, ctx.tenantId],
+      )
     ).rows[0];
     if (!appt) throw new NotFoundError('Appointment not found');
     if (!['requested', 'scheduled'].includes(appt.status)) {
@@ -785,18 +925,25 @@ export async function confirmAppointment(ctx: AuthContext, appointmentId: string
  * partial unique index on `repair_orders(appointment_id)` is the backstop if two
  * requests race on separate connections.
  */
-export async function checkIn(ctx: AuthContext, appointmentId: string, params: { odometer?: number }): Promise<any> {
+export async function checkIn(
+  ctx: AuthContext,
+  appointmentId: string,
+  params: { odometer?: number },
+): Promise<any> {
   requireUuid(appointmentId, 'appointment_id');
-  if (params.odometer !== undefined && (!Number.isInteger(params.odometer) || params.odometer < 0)) {
+  if (
+    params.odometer !== undefined &&
+    (!Number.isInteger(params.odometer) || params.odometer < 0)
+  ) {
     throw new ValidationError('odometer must be a non-negative integer');
   }
 
   const result = await withTransaction(async (tx) => {
     const appt = (
-      await tx.query(`SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`, [
-        appointmentId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [appointmentId, ctx.tenantId],
+      )
     ).rows[0];
     if (!appt) throw new NotFoundError('Appointment not found');
 
@@ -820,7 +967,16 @@ export async function checkIn(ctx: AuthContext, appointmentId: string, params: {
       await tx.query(
         `INSERT INTO repair_orders (ro_id,tenant_id,location_id,appointment_id,mdm_customer_id,mdm_vehicle_id,status,odometer,created_by_user_id)
          VALUES ($1,$2,$3,$4,$5,$6,'checked_in',$7,$8) RETURNING *`,
-        [roId, ctx.tenantId, appt.location_id, appointmentId, appt.mdm_customer_id, appt.mdm_vehicle_id, params.odometer ?? null, ctx.userId],
+        [
+          roId,
+          ctx.tenantId,
+          appt.location_id,
+          appointmentId,
+          appt.mdm_customer_id,
+          appt.mdm_vehicle_id,
+          params.odometer ?? null,
+          ctx.userId,
+        ],
       )
     ).rows[0];
 
@@ -831,7 +987,14 @@ export async function checkIn(ctx: AuthContext, appointmentId: string, params: {
     );
 
     await recordAppointmentEvent(tx, ctx, appointmentId, 'checked_in', { user_id: ctx.userId });
-    await recordROEvent(tx, ctx, roId, 'created_from_appointment', { user_id: ctx.userId }, { appointment_id: appointmentId });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'created_from_appointment',
+      { user_id: ctx.userId },
+      { appointment_id: appointmentId },
+    );
     await syncQueueForRO(tx, ctx, ro);
 
     // A first-service offer that produced this visit is now converted.
@@ -846,7 +1009,9 @@ export async function checkIn(ctx: AuthContext, appointmentId: string, params: {
 
   if (result.created) {
     svcROTotal.inc({ status: 'checked_in', location: result.appointment.location_id });
-    await emitAudit(ctx, 'ro.created_from_appointment', 'repair_order', result.ro.ro_id, { appointment_id: appointmentId });
+    await emitAudit(ctx, 'ro.created_from_appointment', 'repair_order', result.ro.ro_id, {
+      appointment_id: appointmentId,
+    });
   }
 
   return { ...result.ro, appointment_id: appointmentId, idempotent_replay: !result.created };
@@ -864,17 +1029,20 @@ export async function markAppointmentNoShow(ctx: AuthContext, appointmentId: str
 
   return withTransaction(async (tx) => {
     const appt = (
-      await tx.query(`SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`, [
-        appointmentId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM service_appointments WHERE appointment_id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [appointmentId, ctx.tenantId],
+      )
     ).rows[0];
     if (!appt) throw new NotFoundError('Appointment not found');
     if (!['requested', 'scheduled', 'confirmed'].includes(appt.status)) {
-      throw new ConflictError(`An appointment that is '${appt.status}' cannot be marked a no-show`, {
-        code: 'invalid_appointment_status',
-        details: { status: appt.status },
-      });
+      throw new ConflictError(
+        `An appointment that is '${appt.status}' cannot be marked a no-show`,
+        {
+          code: 'invalid_appointment_status',
+          details: { status: appt.status },
+        },
+      );
     }
 
     const row = (
@@ -909,7 +1077,12 @@ export async function markAppointmentNoShow(ctx: AuthContext, appointmentId: str
  */
 export async function quickStartIntake(
   ctx: AuthContext,
-  params: { location_id: string; scan_vin?: string; mdm_vehicle_id?: string; language_preference?: string },
+  params: {
+    location_id: string;
+    scan_vin?: string;
+    mdm_vehicle_id?: string;
+    language_preference?: string;
+  },
 ): Promise<any> {
   requireUuid(params.location_id, 'location_id');
   if (params.mdm_vehicle_id !== undefined) requireUuid(params.mdm_vehicle_id, 'mdm_vehicle_id');
@@ -957,13 +1130,13 @@ export async function quickStartIntake(
     scan_vin: params.scan_vin ?? null,
     language_preference: language,
     // VIN resolution belongs to MDM; supply mdm_vehicle_id to get real history back.
-    mdm_match_preview: params.scan_vin && !params.mdm_vehicle_id
-      ? { vin: params.scan_vin, status: 'lookup_required', resolve_via: 'mdm' }
-      : null,
+    mdm_match_preview:
+      params.scan_vin && !params.mdm_vehicle_id
+        ? { vin: params.scan_vin, status: 'lookup_required', resolve_via: 'mdm' }
+        : null,
     vehicle_history: history,
   };
 }
-
 
 // ────────────────────────────────────────────────────────────
 // SSIS2 — Waitlist
@@ -1032,7 +1205,9 @@ export async function createWaitlistEntry(
     }
   }
   const concerns = requireConcerns(params.concerns);
-  const priority = params.priority ? requireOneOf(params.priority, WAITLIST_PRIORITIES, 'priority') : 'p1';
+  const priority = params.priority
+    ? requireOneOf(params.priority, WAITLIST_PRIORITIES, 'priority')
+    : 'p1';
   const channel = params.preferred_contact_channel
     ? requireOneOf(params.preferred_contact_channel, CONTACT_CHANNELS, 'preferred_contact_channel')
     : 'sms';
@@ -1068,9 +1243,19 @@ export async function createWaitlistEntry(
              requested_start,requested_end,concerns,priority,preferred_contact_channel,language_preference,notes,created_by_user_id)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
           [
-            generateId(), ctx.tenantId, params.location_id, params.mdm_customer_id, params.mdm_vehicle_id,
-            params.requested_start, params.requested_end ?? null, JSON.stringify(concerns),
-            priority, channel, language, params.notes ?? null, ctx.userId,
+            generateId(),
+            ctx.tenantId,
+            params.location_id,
+            params.mdm_customer_id,
+            params.mdm_vehicle_id,
+            params.requested_start,
+            params.requested_end ?? null,
+            JSON.stringify(concerns),
+            priority,
+            channel,
+            language,
+            params.notes ?? null,
+            ctx.userId,
           ],
         )
       ).rows[0];
@@ -1182,7 +1367,11 @@ export async function convertWaitlistEntry(
     const entry = await assertWaitlistEntry(tx, ctx, waitlistEntryId, { lock: true });
     assertWaitlistOpen(entry);
 
-    if (entry.status === 'offered' && entry.offer_expires_at && new Date(entry.offer_expires_at) < new Date()) {
+    if (
+      entry.status === 'offered' &&
+      entry.offer_expires_at &&
+      new Date(entry.offer_expires_at) < new Date()
+    ) {
       await tx.query(
         `UPDATE service_waitlist_entries SET status='expired' WHERE waitlist_entry_id=$1 AND tenant_id=$2`,
         [waitlistEntryId, ctx.tenantId],
@@ -1198,9 +1387,17 @@ export async function convertWaitlistEntry(
            scheduled_start,scheduled_end,concerns,preferred_contact_channel,language_preference,source,created_by_user_id,status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'waitlist',$11,'scheduled') RETURNING *`,
         [
-          appointmentId, ctx.tenantId, entry.location_id, entry.mdm_customer_id, entry.mdm_vehicle_id,
-          params.scheduled_start, params.scheduled_end ?? null, JSON.stringify(entry.concerns ?? []),
-          entry.preferred_contact_channel, entry.language_preference, ctx.userId,
+          appointmentId,
+          ctx.tenantId,
+          entry.location_id,
+          entry.mdm_customer_id,
+          entry.mdm_vehicle_id,
+          params.scheduled_start,
+          params.scheduled_end ?? null,
+          JSON.stringify(entry.concerns ?? []),
+          entry.preferred_contact_channel,
+          entry.language_preference,
+          ctx.userId,
         ],
       )
     ).rows[0];
@@ -1213,14 +1410,19 @@ export async function convertWaitlistEntry(
       )
     ).rows[0];
 
-    await recordAppointmentEvent(tx, ctx, appointmentId, 'scheduled_from_waitlist', { user_id: ctx.userId });
+    await recordAppointmentEvent(tx, ctx, appointmentId, 'scheduled_from_waitlist', {
+      user_id: ctx.userId,
+    });
     return { entry: updated, appointment };
   });
 
   if (expiredInstead) {
-    throw new ConflictError('The offered slot has expired; create a new waitlist entry if the customer still wants in', {
-      code: 'waitlist_offer_expired',
-    });
+    throw new ConflictError(
+      'The offered slot has expired; create a new waitlist entry if the customer still wants in',
+      {
+        code: 'waitlist_offer_expired',
+      },
+    );
   }
 
   svcAppointmentsTotal.inc({ status: 'scheduled', location: outcome!.appointment.location_id });
@@ -1271,8 +1473,11 @@ export async function createRO(
   // `checkIn` has always validated odometer; this path, which creates the same row, did
   // not — so a walk-in repair order accepted a non-integer odometer and a malformed
   // promised_time, and both surfaced as a 500 from Postgres instead of a 400.
-  if (params.odometer !== undefined && params.odometer !== null
-      && (!Number.isInteger(params.odometer) || params.odometer < 0)) {
+  if (
+    params.odometer !== undefined &&
+    params.odometer !== null &&
+    (!Number.isInteger(params.odometer) || params.odometer < 0)
+  ) {
     throw new ValidationError('odometer must be a non-negative integer');
   }
   if (params.promised_time !== undefined && params.promised_time !== null) {
@@ -1312,9 +1517,16 @@ export async function createRO(
         `INSERT INTO repair_orders (ro_id,tenant_id,location_id,appointment_id,mdm_customer_id,mdm_vehicle_id,status,odometer,promised_time,advisor_user_id,created_by_user_id)
          VALUES ($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9,$10) RETURNING *`,
         [
-          roId, ctx.tenantId, params.location_id, params.appointment_id ?? null, params.mdm_customer_id,
-          params.mdm_vehicle_id, params.odometer ?? null, params.promised_time ?? null,
-          params.advisor_user_id ?? null, ctx.userId,
+          roId,
+          ctx.tenantId,
+          params.location_id,
+          params.appointment_id ?? null,
+          params.mdm_customer_id,
+          params.mdm_vehicle_id,
+          params.odometer ?? null,
+          params.promised_time ?? null,
+          params.advisor_user_id ?? null,
+          ctx.userId,
         ],
       )
     ).rows[0];
@@ -1328,7 +1540,11 @@ export async function createRO(
   return ro;
 }
 
-export async function getRO(ctx: AuthContext, roId: string, options?: { event_limit?: unknown }): Promise<any> {
+export async function getRO(
+  ctx: AuthContext,
+  roId: string,
+  options?: { event_limit?: unknown },
+): Promise<any> {
   const ro = await assertRO({ query }, ctx, roId);
   const events_page = pagination({ limit: options?.event_limit }, 30, 200);
 
@@ -1337,13 +1553,41 @@ export async function getRO(ctx: AuthContext, roId: string, options?: { event_li
   // handful of simultaneous reads exhausted the pool and turned into 500s instead of
   // queueing. These are indexed point lookups; the round-trips are cheap.
   const [lineItems, events, estimates, auths, partsList, subletJobs, tickets] = await sequentially([
-    () => query(`SELECT * FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
-    () => query(`SELECT * FROM ro_events WHERE ro_id=$1 AND tenant_id=$2 ORDER BY occurred_at DESC LIMIT $3`, [roId, ctx.tenantId, events_page.limit]),
-    () => query(`SELECT * FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2 ORDER BY version DESC`, [roId, ctx.tenantId]),
-    () => query(`SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`, [roId, ctx.tenantId]),
-    () => query(`SELECT * FROM ro_parts_lines WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
-    () => query(`SELECT * FROM ro_sublet_jobs WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [roId, ctx.tenantId]),
-    () => query(`SELECT * FROM tech_work_tickets WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [roId, ctx.tenantId]),
+    () =>
+      query(`SELECT * FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [
+        roId,
+        ctx.tenantId,
+      ]),
+    () =>
+      query(
+        `SELECT * FROM ro_events WHERE ro_id=$1 AND tenant_id=$2 ORDER BY occurred_at DESC LIMIT $3`,
+        [roId, ctx.tenantId, events_page.limit],
+      ),
+    () =>
+      query(`SELECT * FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2 ORDER BY version DESC`, [
+        roId,
+        ctx.tenantId,
+      ]),
+    () =>
+      query(
+        `SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`,
+        [roId, ctx.tenantId],
+      ),
+    () =>
+      query(`SELECT * FROM ro_parts_lines WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [
+        roId,
+        ctx.tenantId,
+      ]),
+    () =>
+      query(`SELECT * FROM ro_sublet_jobs WHERE ro_id=$1 AND tenant_id=$2 ORDER BY status`, [
+        roId,
+        ctx.tenantId,
+      ]),
+    () =>
+      query(`SELECT * FROM tech_work_tickets WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at`, [
+        roId,
+        ctx.tenantId,
+      ]),
   ]);
 
   return {
@@ -1376,20 +1620,23 @@ export async function transitionRO(
     const ro = await assertRO(tx, ctx, roId, { lock: true });
 
     if (!isTransitionAllowed(ro.status, toStatus)) {
-      throw new UnprocessableError(`Cannot move a repair order from '${ro.status}' to '${toStatus}'`, {
-        code: 'invalid_transition',
-        details: { from: ro.status, to: toStatus, allowed: allowedTransitionsFrom(ro.status) },
-      });
+      throw new UnprocessableError(
+        `Cannot move a repair order from '${ro.status}' to '${toStatus}'`,
+        {
+          code: 'invalid_transition',
+          details: { from: ro.status, to: toStatus, allowed: allowedTransitionsFrom(ro.status) },
+        },
+      );
     }
 
     // Privileged transitions require a freshly re-authenticated actor, bound to this
     // exact user, tenant, action and repair order. The token is burned in this same
     // transaction, so it cannot be replayed and a rolled-back transition releases it.
     if (transitionRequiresStepUp(toStatus)) {
-      await consumeStepUpToken(tx, params.step_up_token, {
+      await consumeSensitiveActionGrant(tx, params.step_up_token, {
         tenantId: ctx.tenantId,
         userId: ctx.userId,
-        action: `ro.transition:${toStatus}`,
+        action: `service.ro.transition:${toStatus}`,
         resourceId: roId,
       });
     }
@@ -1405,14 +1652,22 @@ export async function transitionRO(
         )
       ).rows;
       if (openWork.length > 0) {
-        throw new UnprocessableError('Every line item must be completed, declined or canceled before pickup', {
-          code: 'work_incomplete',
-          details: { open_line_items: openWork.map((l: any) => ({ line_item_id: l.line_item_id, status: l.status })) },
-          messageI18n: i18n(
-            'Work is still open on this repair order',
-            'Todavía hay trabajo abierto en esta orden de reparación',
-          ),
-        });
+        throw new UnprocessableError(
+          'Every line item must be completed, declined or canceled before pickup',
+          {
+            code: 'work_incomplete',
+            details: {
+              open_line_items: openWork.map((l: any) => ({
+                line_item_id: l.line_item_id,
+                status: l.status,
+              })),
+            },
+            messageI18n: i18n(
+              'Work is still open on this repair order',
+              'Todavía hay trabajo abierto en esta orden de reparación',
+            ),
+          },
+        );
       }
 
       // Billing gate: no line may still be awaiting a customer decision. Otherwise work
@@ -1448,19 +1703,22 @@ export async function transitionRO(
         )
       ).rows;
       if (undecided.length > 0) {
-        throw new UnprocessableError('Every chargeable line item must have a recorded customer decision before pickup', {
-          code: 'decision_outstanding',
-          details: {
-            undecided_line_items: undecided.map((l: any) => ({
-              line_item_id: l.line_item_id,
-              authorization_status: l.authorization_status,
-            })),
+        throw new UnprocessableError(
+          'Every chargeable line item must have a recorded customer decision before pickup',
+          {
+            code: 'decision_outstanding',
+            details: {
+              undecided_line_items: undecided.map((l: any) => ({
+                line_item_id: l.line_item_id,
+                authorization_status: l.authorization_status,
+              })),
+            },
+            messageI18n: i18n(
+              'The customer has not decided on all chargeable work',
+              'El cliente no ha decidido sobre todo el trabajo facturable',
+            ),
           },
-          messageI18n: i18n(
-            'The customer has not decided on all chargeable work',
-            'El cliente no ha decidido sobre todo el trabajo facturable',
-          ),
-        });
+        );
       }
     }
 
@@ -1507,13 +1765,16 @@ export async function transitionRO(
       ).rows[0];
 
       if (!evidence) {
-        throw new UnprocessableError('Customer authorization for the current estimate is required', {
-          code: 'authorization_required',
-          messageI18n: i18n(
-            'Customer authorization for the current estimate is required',
-            'Se requiere la autorización del cliente para el presupuesto actual',
-          ),
-        });
+        throw new UnprocessableError(
+          'Customer authorization for the current estimate is required',
+          {
+            code: 'authorization_required',
+            messageI18n: i18n(
+              'Customer authorization for the current estimate is required',
+              'Se requiere la autorización del cliente para el presupuesto actual',
+            ),
+          },
+        );
       }
     }
 
@@ -1550,11 +1811,18 @@ export async function transitionRO(
 
     await syncQueueForRO(tx, ctx, updated);
 
-    await recordROEvent(tx, ctx, roId, 'status_changed', { user_id: ctx.userId }, {
-      from: ro.status,
-      to: toStatus,
-      reason: params.reason ?? null,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'status_changed',
+      { user_id: ctx.userId },
+      {
+        from: ro.status,
+        to: toStatus,
+        reason: params.reason ?? null,
+      },
+    );
 
     return { ro, updated };
   });
@@ -1565,13 +1833,23 @@ export async function transitionRO(
       (Date.now() - new Date(outcome.ro.created_at).getTime()) / 60_000,
     );
   }
-  await emitAudit(ctx, 'ro.transitioned', 'repair_order', roId, { from: outcome.ro.status, to: toStatus });
+  await emitAudit(ctx, 'ro.transitioned', 'repair_order', roId, {
+    from: outcome.ro.status,
+    to: toStatus,
+  });
 
   return outcome.updated;
 }
 
 const LINE_TYPES = ['labor', 'parts', 'sublet', 'fee'] as const;
-const LINE_STATUSES = ['proposed', 'approved', 'declined', 'in_progress', 'completed', 'canceled'] as const;
+const LINE_STATUSES = [
+  'proposed',
+  'approved',
+  'declined',
+  'in_progress',
+  'completed',
+  'canceled',
+] as const;
 
 /**
  * Adds a line to a repair order.
@@ -1594,15 +1872,21 @@ export async function addLineItem(
   },
 ): Promise<any> {
   if ('authorization_status' in params || 'authorization_ref' in params) {
-    throw new ForbiddenError('authorization_status is set from a recorded customer authorization, not directly', {
-      code: 'authorization_fields_readonly',
-    });
+    throw new ForbiddenError(
+      'authorization_status is set from a recorded customer authorization, not directly',
+      {
+        code: 'authorization_fields_readonly',
+      },
+    );
   }
   const lineType = requireOneOf(params.line_type, LINE_TYPES, 'line_type');
   if (typeof params.description !== 'string' || params.description.trim() === '') {
     throw new ValidationError('description is required');
   }
-  if (params.estimated_hours !== undefined && (typeof params.estimated_hours !== 'number' || params.estimated_hours < 0)) {
+  if (
+    params.estimated_hours !== undefined &&
+    (typeof params.estimated_hours !== 'number' || params.estimated_hours < 0)
+  ) {
     throw new ValidationError('estimated_hours must be a non-negative number');
   }
 
@@ -1613,8 +1897,14 @@ export async function addLineItem(
         `INSERT INTO ro_line_items (line_item_id,tenant_id,ro_id,line_type,category,description,labor_op_code,estimated_hours,authorization_status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'not_required') RETURNING *`,
         [
-          generateId(), ctx.tenantId, roId, lineType, params.category ?? null, params.description,
-          params.labor_op_code ?? null, params.estimated_hours ?? null,
+          generateId(),
+          ctx.tenantId,
+          roId,
+          lineType,
+          params.category ?? null,
+          params.description,
+          params.labor_op_code ?? null,
+          params.estimated_hours ?? null,
         ],
       )
     ).rows[0];
@@ -1648,9 +1938,12 @@ export async function updateLineItem(
 ): Promise<any> {
   for (const forbidden of ['authorization_status', 'authorization_ref']) {
     if (forbidden in updates) {
-      throw new ForbiddenError(`${forbidden} is set from a recorded customer authorization, not directly`, {
-        code: 'authorization_fields_readonly',
-      });
+      throw new ForbiddenError(
+        `${forbidden} is set from a recorded customer authorization, not directly`,
+        {
+          code: 'authorization_fields_readonly',
+        },
+      );
     }
   }
   if ('assigned_tech_user_id' in updates) {
@@ -1662,15 +1955,21 @@ export async function updateLineItem(
   const commercial = (LINE_ITEM_COMMERCIAL_FIELDS as readonly string[]).filter((f) => f in updates);
   const supervises = hasAnyRole(ctx, ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER);
   if (commercial.length > 0 && !supervises) {
-    throw new ForbiddenError('Only a service advisor or manager may change what the customer is billed', {
-      code: 'commercial_fields_restricted',
-      details: { fields: commercial },
-    });
+    throw new ForbiddenError(
+      'Only a service advisor or manager may change what the customer is billed',
+      {
+        code: 'commercial_fields_restricted',
+        details: { fields: commercial },
+      },
+    );
   }
 
   if (updates.status !== undefined) requireOneOf(updates.status, LINE_STATUSES, 'status');
-  if (updates.sold_hours !== undefined && updates.sold_hours !== null
-      && (typeof updates.sold_hours !== 'number' || updates.sold_hours < 0)) {
+  if (
+    updates.sold_hours !== undefined &&
+    updates.sold_hours !== null &&
+    (typeof updates.sold_hours !== 'number' || updates.sold_hours < 0)
+  ) {
     throw new ValidationError('sold_hours must be a non-negative number');
   }
   if ('price_ref' in updates) validatePriceRef(updates.price_ref);
@@ -1691,7 +1990,11 @@ export async function updateLineItem(
 
     // `status` on a declined line is the record that the customer said no. Letting it
     // be rewritten would quietly return declined work to the shop floor.
-    if (line.authorization_status === 'declined' && updates.status !== undefined && updates.status !== 'declined') {
+    if (
+      line.authorization_status === 'declined' &&
+      updates.status !== undefined &&
+      updates.status !== 'declined'
+    ) {
       throw new ConflictError('This line was declined by the customer and cannot be reopened', {
         code: 'line_item_declined',
       });
@@ -1714,7 +2017,10 @@ export async function updateLineItem(
       );
     }
 
-    const writable = [...LINE_ITEM_PROGRESS_FIELDS, ...(supervises ? LINE_ITEM_COMMERCIAL_FIELDS : [])] as string[];
+    const writable = [
+      ...LINE_ITEM_PROGRESS_FIELDS,
+      ...(supervises ? LINE_ITEM_COMMERCIAL_FIELDS : []),
+    ] as string[];
     const sets: string[] = [];
     const vals: unknown[] = [lineItemId, roId, ctx.tenantId];
     for (const [k, v] of Object.entries(updates)) {
@@ -1762,7 +2068,11 @@ export async function listMPITemplates(ctx: AuthContext, locationId?: string): P
       )
     ).rows;
   }
-  return (await query(`SELECT * FROM mpi_templates WHERE tenant_id=$1 AND status='active'`, [ctx.tenantId])).rows;
+  return (
+    await query(`SELECT * FROM mpi_templates WHERE tenant_id=$1 AND status='active'`, [
+      ctx.tenantId,
+    ])
+  ).rows;
 }
 
 export async function startMPISession(
@@ -1786,10 +2096,10 @@ export async function startMPISession(
     }
 
     const template = (
-      await tx.query(`SELECT template_id FROM mpi_templates WHERE template_id=$1 AND tenant_id=$2 AND status='active'`, [
-        params.template_id,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT template_id FROM mpi_templates WHERE template_id=$1 AND tenant_id=$2 AND status='active'`,
+        [params.template_id, ctx.tenantId],
+      )
     ).rows[0];
     if (!template) throw new NotFoundError('MPI template not found');
 
@@ -1811,7 +2121,14 @@ export async function startMPISession(
     ).rows[0];
     if (moved) await syncQueueForRO(tx, ctx, moved);
 
-    await recordROEvent(tx, ctx, roId, 'mpi_started', { tech_user_id: params.tech_user_id }, { mpi_session_id: id });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'mpi_started',
+      { tech_user_id: params.tech_user_id },
+      { mpi_session_id: id },
+    );
     return session;
   });
 }
@@ -1822,7 +2139,13 @@ const MPI_SEVERITIES = ['info', 'maintenance', 'safety'] as const;
 export async function recordMPIResult(
   ctx: AuthContext,
   mpiSessionId: string,
-  params: { item_key: string; status: string; severity?: string; notes?: string; evidence_artifact_refs?: string[] },
+  params: {
+    item_key: string;
+    status: string;
+    severity?: string;
+    notes?: string;
+    evidence_artifact_refs?: string[];
+  },
 ): Promise<any> {
   requireUuid(mpiSessionId, 'mpi_session_id');
   const status = requireOneOf(params.status, MPI_RESULT_STATUSES, 'status');
@@ -1839,10 +2162,13 @@ export async function recordMPIResult(
       details: { allowed: MPI_SEVERITIES },
     });
   }
-  const severity = params.severity ? requireOneOf(params.severity, MPI_SEVERITIES, 'severity') : 'info';
-  const evidenceRefs = params.evidence_artifact_refs === undefined
-    ? []
-    : requireStringArray(params.evidence_artifact_refs, 'evidence_artifact_refs');
+  const severity = params.severity
+    ? requireOneOf(params.severity, MPI_SEVERITIES, 'severity')
+    : 'info';
+  const evidenceRefs =
+    params.evidence_artifact_refs === undefined
+      ? []
+      : requireStringArray(params.evidence_artifact_refs, 'evidence_artifact_refs');
 
   return withTransaction(async (tx) => {
     const session = await assertOwnMPISession(tx, ctx, mpiSessionId, { lock: true });
@@ -1870,7 +2196,16 @@ export async function recordMPIResult(
                notes=EXCLUDED.notes,
                evidence_artifact_refs=EXCLUDED.evidence_artifact_refs
          RETURNING *`,
-        [generateId(), ctx.tenantId, mpiSessionId, params.item_key, status, severity, params.notes ?? null, evidenceRefs],
+        [
+          generateId(),
+          ctx.tenantId,
+          mpiSessionId,
+          params.item_key,
+          status,
+          severity,
+          params.notes ?? null,
+          evidenceRefs,
+        ],
       )
     ).rows[0];
   });
@@ -1882,7 +2217,9 @@ export async function submitMPISession(ctx: AuthContext, mpiSessionId: string): 
   return withTransaction(async (tx) => {
     const session = await assertOwnMPISession(tx, ctx, mpiSessionId, { lock: true });
     if (!['started', 'in_progress'].includes(session.status)) {
-      throw new ConflictError(`Session is already '${session.status}'`, { code: 'invalid_session_status' });
+      throw new ConflictError(`Session is already '${session.status}'`, {
+        code: 'invalid_session_status',
+      });
     }
 
     const submitted = (
@@ -1906,8 +2243,12 @@ export async function submitMPISession(ctx: AuthContext, mpiSessionId: string): 
         `INSERT INTO service_recommendations (recommendation_id,tenant_id,ro_id,source,title_i18n,description_i18n,priority)
          VALUES ($1,$2,$3,'mpi',$4,$5,$6)`,
         [
-          generateId(), ctx.tenantId, session.ro_id,
-          JSON.stringify(i18n(`MPI: ${r.item_key} (${r.status})`, `IPM: ${r.item_key} (${r.status})`)),
+          generateId(),
+          ctx.tenantId,
+          session.ro_id,
+          JSON.stringify(
+            i18n(`MPI: ${r.item_key} (${r.status})`, `IPM: ${r.item_key} (${r.status})`),
+          ),
           JSON.stringify(
             i18n(
               // The generated sentence is genuinely bilingual. A technician's free-text
@@ -1923,10 +2264,17 @@ export async function submitMPISession(ctx: AuthContext, mpiSessionId: string): 
       );
     }
 
-    await recordROEvent(tx, ctx, session.ro_id, 'mpi_submitted', { user_id: ctx.userId }, {
-      mpi_session_id: mpiSessionId,
-      results_count: results.length,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      session.ro_id,
+      'mpi_submitted',
+      { user_id: ctx.userId },
+      {
+        mpi_session_id: mpiSessionId,
+        results_count: results.length,
+      },
+    );
 
     return { ...submitted, recommendations_generated: results.length };
   });
@@ -1971,12 +2319,23 @@ export async function sendRecommendationsToCustomer(
     ).rows[0];
 
     if (openTask) {
-      await recordROEvent(tx, ctx, roId, 'recommendations_sent', { user_id: ctx.userId }, {
-        portal_task_id: openTask.portal_task_id,
+      await recordROEvent(
+        tx,
+        ctx,
+        roId,
+        'recommendations_sent',
+        { user_id: ctx.userId },
+        {
+          portal_task_id: openTask.portal_task_id,
+          sent_count: recs.length,
+          channel: params.channel ?? null,
+        },
+      );
+      return {
         sent_count: recs.length,
-        channel: params.channel ?? null,
-      });
-      return { sent_count: recs.length, portal_task_id: openTask.portal_task_id, reused_existing_task: true };
+        portal_task_id: openTask.portal_task_id,
+        reused_existing_task: true,
+      };
     }
 
     const taskId = generateId();
@@ -1984,7 +2343,9 @@ export async function sendRecommendationsToCustomer(
       `INSERT INTO service_portal_tasks (portal_task_id,tenant_id,ro_id,task_type,title_i18n,description_i18n,status)
        VALUES ($1,$2,$3,'review_recommendations',$4,$5,'created')`,
       [
-        taskId, ctx.tenantId, roId,
+        taskId,
+        ctx.tenantId,
+        roId,
         JSON.stringify(i18n('Review Inspection Results', 'Revisar Resultados de Inspección')),
         JSON.stringify(
           i18n(
@@ -1995,11 +2356,18 @@ export async function sendRecommendationsToCustomer(
       ],
     );
 
-    await recordROEvent(tx, ctx, roId, 'recommendations_sent', { user_id: ctx.userId }, {
-      portal_task_id: taskId,
-      sent_count: recs.length,
-      channel: params.channel ?? null,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'recommendations_sent',
+      { user_id: ctx.userId },
+      {
+        portal_task_id: taskId,
+        sent_count: recs.length,
+        channel: params.channel ?? null,
+      },
+    );
 
     return { sent_count: recs.length, portal_task_id: taskId };
   });
@@ -2032,8 +2400,14 @@ export async function generateEstimate(
     // customer is re-quoted through the explicit transition back to `estimate_pending`, so
     // the repair order's status never disagrees with what is being asked.
     const QUOTABLE = [
-      'checked_in', 'inspection_in_progress', 'estimate_pending',
-      'authorized', 'in_repair', 'waiting_parts', 'sublet_in_progress', 'qc',
+      'checked_in',
+      'inspection_in_progress',
+      'estimate_pending',
+      'authorized',
+      'in_repair',
+      'waiting_parts',
+      'sublet_in_progress',
+      'qc',
     ];
     if (!QUOTABLE.includes(ro.status)) {
       throw new ConflictError(`An estimate cannot be generated for a '${ro.status}' repair order`, {
@@ -2056,20 +2430,25 @@ export async function generateEstimate(
       )
     ).rows;
     if (lineItems.length === 0) {
-      throw new ConflictError('There is no undecided work to quote on this repair order', { code: 'no_line_items' });
+      throw new ConflictError('There is no undecided work to quote on this repair order', {
+        code: 'no_line_items',
+      });
     }
 
     const maxVer = (
-      await tx.query(`SELECT COALESCE(MAX(version),0)::int AS v FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2`, [
-        roId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT COALESCE(MAX(version),0)::int AS v FROM ro_estimates WHERE ro_id=$1 AND tenant_id=$2`,
+        [roId, ctx.tenantId],
+      )
     ).rows[0].v;
 
     const estId = generateId();
     const totals = {
       line_count: lineItems.length,
-      estimated_hours: lineItems.reduce((s: number, l: any) => s + Number(l.estimated_hours ?? 0), 0),
+      estimated_hours: lineItems.reduce(
+        (s: number, l: any) => s + Number(l.estimated_hours ?? 0),
+        0,
+      ),
       ...summariseMoney(lineItems),
     };
 
@@ -2103,10 +2482,17 @@ export async function generateEstimate(
     ).rows[0];
     if (moved) await syncQueueForRO(tx, ctx, moved);
 
-    await recordROEvent(tx, ctx, roId, 'estimate_generated', { user_id: ctx.userId }, {
-      estimate_id: estId,
-      version: maxVer + 1,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'estimate_generated',
+      { user_id: ctx.userId },
+      {
+        estimate_id: estId,
+        version: maxVer + 1,
+      },
+    );
 
     return est;
   });
@@ -2136,15 +2522,19 @@ export async function sendEstimate(
     // The estimate must belong to THIS repair order; matching on estimate_id alone let
     // a mismatched pair advance an unrelated RO.
     const est = (
-      await tx.query(`SELECT * FROM ro_estimates WHERE estimate_id=$1 AND ro_id=$2 AND tenant_id=$3 FOR UPDATE`, [
-        estimateId,
-        roId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM ro_estimates WHERE estimate_id=$1 AND ro_id=$2 AND tenant_id=$3 FOR UPDATE`,
+        [estimateId, roId, ctx.tenantId],
+      )
     ).rows[0];
-    if (!est) throw new NotFoundError('Estimate not found on this repair order', { code: 'estimate_not_found' });
+    if (!est)
+      throw new NotFoundError('Estimate not found on this repair order', {
+        code: 'estimate_not_found',
+      });
     if (est.status !== 'draft') {
-      throw new ConflictError(`Estimate is already '${est.status}'`, { code: 'estimate_not_draft' });
+      throw new ConflictError(`Estimate is already '${est.status}'`, {
+        code: 'estimate_not_draft',
+      });
     }
 
     const sent = (
@@ -2164,10 +2554,17 @@ export async function sendEstimate(
     ).rows[0];
     if (moved) await syncQueueForRO(tx, ctx, moved);
 
-    await recordROEvent(tx, ctx, roId, 'estimate_sent', { user_id: ctx.userId }, {
-      estimate_id: estimateId,
-      channel: params.channel ?? null,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'estimate_sent',
+      { user_id: ctx.userId },
+      {
+        estimate_id: estimateId,
+        channel: params.channel ?? null,
+      },
+    );
 
     return sent;
   });
@@ -2176,10 +2573,10 @@ export async function sendEstimate(
 export async function listAuthorizations(ctx: AuthContext, roId: string): Promise<any[]> {
   await assertRO({ query }, ctx, roId);
   return (
-    await query(`SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`, [
-      roId,
-      ctx.tenantId,
-    ])
+    await query(
+      `SELECT * FROM ro_authorizations WHERE ro_id=$1 AND tenant_id=$2 ORDER BY created_at DESC`,
+      [roId, ctx.tenantId],
+    )
   ).rows;
 }
 
@@ -2210,9 +2607,12 @@ export async function recordAuthorization(
 ): Promise<any> {
   requireUuid(params.estimate_id, 'estimate_id');
   if (!isAuthorizationMethod(params.method)) {
-    throw new ValidationError('method must be one of: portal, signature, staff_attestation, recorded_call_ref');
+    throw new ValidationError(
+      'method must be one of: portal, signature, staff_attestation, recorded_call_ref',
+    );
   }
-  if (!Array.isArray(params.approved_items)) throw new ValidationError('approved_items must be an array');
+  if (!Array.isArray(params.approved_items))
+    throw new ValidationError('approved_items must be an array');
   if (params.declined_items !== undefined && !Array.isArray(params.declined_items)) {
     throw new ValidationError('declined_items must be an array');
   }
@@ -2230,7 +2630,10 @@ export async function recordAuthorization(
     });
   }
 
-  if (!methodRequiresStepUp(params.method) && (!params.evidence_refs || Object.keys(params.evidence_refs).length === 0)) {
+  if (
+    !methodRequiresStepUp(params.method) &&
+    (!params.evidence_refs || Object.keys(params.evidence_refs).length === 0)
+  ) {
     // Every other method claims a customer-produced artifact — a portal submission, a
     // signature, a call recording. The record must carry a pointer to it, otherwise
     // "the customer approved via the portal" is an unfalsifiable assertion and the
@@ -2250,30 +2653,36 @@ export async function recordAuthorization(
 
     if (methodRequiresStepUp(params.method)) {
       // Staff asserting the decision on the customer's behalf: no customer-produced
-      // artifact exists, so the actor must re-authenticate. Burned in this transaction.
-      await consumeStepUpToken(tx, params.step_up_token, {
+      // artifact exists, so the actor must freshly re-authenticate at the provider.
+      // The grant is spent in this same transaction.
+      await consumeSensitiveActionGrant(tx, params.step_up_token, {
         tenantId: ctx.tenantId,
         userId: ctx.userId,
-        action: `authorization.record:${params.method}`,
+        action: `service.ro.authorization.record:${params.method}`,
         resourceId: roId,
       });
     }
 
     const estimate = (
-      await tx.query(`SELECT * FROM ro_estimates WHERE estimate_id=$1 AND ro_id=$2 AND tenant_id=$3 FOR UPDATE`, [
-        params.estimate_id,
-        roId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM ro_estimates WHERE estimate_id=$1 AND ro_id=$2 AND tenant_id=$3 FOR UPDATE`,
+        [params.estimate_id, roId, ctx.tenantId],
+      )
     ).rows[0];
-    if (!estimate) throw new NotFoundError('Estimate not found on this repair order', { code: 'estimate_not_found' });
+    if (!estimate)
+      throw new NotFoundError('Estimate not found on this repair order', {
+        code: 'estimate_not_found',
+      });
     // `partially_approved` is decidable too: a customer who approved some lines and
     // left the rest open must be able to come back and decide the remainder. Accepting
     // only `sent` made the partial state a dead end that could never be completed.
     if (!['sent', 'partially_approved'].includes(estimate.status)) {
-      throw new ConflictError(`Estimate is '${estimate.status}'; only a sent or partially decided estimate can be decided`, {
-        code: 'estimate_not_sent',
-      });
+      throw new ConflictError(
+        `Estimate is '${estimate.status}'; only a sent or partially decided estimate can be decided`,
+        {
+          code: 'estimate_not_sent',
+        },
+      );
     }
 
     // A decision must answer the version currently in front of the customer. Accepting an
@@ -2294,7 +2703,9 @@ export async function recordAuthorization(
 
     // Locked in a stable order so two decisions on overlapping lines serialise instead
     // of interleaving.
-    const decidedLines = await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined], { lock: true });
+    const decidedLines = await assertLineItemsOnRO(tx, ctx, roId, [...approved, ...declined], {
+      lock: true,
+    });
     const notPending = decidedLines.filter((l: any) => l.authorization_status !== 'pending');
     if (notPending.length > 0) {
       throw new ConflictError('One or more line items are not awaiting a customer decision', {
@@ -2328,8 +2739,16 @@ export async function recordAuthorization(
            approved_items,declined_items,evidence_refs,customer_language_used,approved_snapshot,authorized_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) RETURNING *`,
         [
-          authId, ctx.tenantId, roId, params.estimate_id, params.method, authStatus,
-          approved, declined, JSON.stringify(params.evidence_refs ?? {}), language,
+          authId,
+          ctx.tenantId,
+          roId,
+          params.estimate_id,
+          params.method,
+          authStatus,
+          approved,
+          declined,
+          JSON.stringify(params.evidence_refs ?? {}),
+          language,
           JSON.stringify(snapshot),
         ],
       )
@@ -2382,51 +2801,74 @@ export async function recordAuthorization(
     // Estimates generated before the association existed have no tagged lines. Fall back
     // to the previous repair-order-wide count for them rather than deriving a status from
     // an empty population, which `deriveEstimateStatus` would read as fully declined.
-    const scoped = Number(tally.scoped) > 0
-      ? tally
-      : (
-        await tx.query(
-          `SELECT
+    const scoped =
+      Number(tally.scoped) > 0
+        ? tally
+        : (
+            await tx.query(
+              `SELECT
              COUNT(*) FILTER (WHERE authorization_status='approved')::int AS approved,
              COUNT(*) FILTER (WHERE authorization_status='declined')::int AS declined,
              COUNT(*) FILTER (WHERE authorization_status='pending')::int  AS pending
            FROM ro_line_items WHERE ro_id=$1 AND tenant_id=$2`,
-          [roId, ctx.tenantId],
-        )
-      ).rows[0];
+              [roId, ctx.tenantId],
+            )
+          ).rows[0];
 
     await tx.query(
       `UPDATE ro_estimates SET status=$3, updated_at=NOW() WHERE estimate_id=$1 AND tenant_id=$2`,
       [
         params.estimate_id,
         ctx.tenantId,
-        deriveEstimateStatus(Number(scoped.approved), Number(scoped.declined), Number(scoped.pending)),
+        deriveEstimateStatus(
+          Number(scoped.approved),
+          Number(scoped.declined),
+          Number(scoped.pending),
+        ),
       ],
     );
 
-    await recordROEvent(tx, ctx, roId, 'authorization_received', { user_id: ctx.userId }, {
-      authorization_id: authId,
-      method: params.method,
-      status: authStatus,
-      approved: approved.length,
-      declined: declined.length,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      roId,
+      'authorization_received',
+      { user_id: ctx.userId },
+      {
+        authorization_id: authId,
+        method: params.method,
+        status: authStatus,
+        approved: approved.length,
+        declined: declined.length,
+      },
+    );
 
     return { auth, estimate };
   });
 
   if (outcome.estimate.sent_at) {
-    const ro = (await query(`SELECT location_id FROM repair_orders WHERE ro_id=$1 AND tenant_id=$2`, [roId, ctx.tenantId])).rows[0];
+    const ro = (
+      await query(`SELECT location_id FROM repair_orders WHERE ro_id=$1 AND tenant_id=$2`, [
+        roId,
+        ctx.tenantId,
+      ])
+    ).rows[0];
     svcApprovalTime.observe(
       { location: ro?.location_id ?? 'unknown' },
       (Date.now() - new Date(outcome.estimate.sent_at).getTime()) / 60_000,
     );
   }
-  await emitAudit(ctx, 'authorization.recorded', 'ro_authorization', outcome.auth.authorization_id, {
-    ro_id: roId,
-    method: params.method,
-    status: outcome.auth.status,
-  });
+  await emitAudit(
+    ctx,
+    'authorization.recorded',
+    'ro_authorization',
+    outcome.auth.authorization_id,
+    {
+      ro_id: roId,
+      method: params.method,
+      status: outcome.auth.status,
+    },
+  );
 
   return outcome.auth;
 }
@@ -2435,7 +2877,15 @@ export async function recordAuthorization(
 // 6) POS2 — Parts Operations
 // ============================================================
 
-const PART_STATUSES = ['requested', 'ordered', 'backordered', 'received', 'picked', 'installed', 'canceled'] as const;
+const PART_STATUSES = [
+  'requested',
+  'ordered',
+  'backordered',
+  'received',
+  'picked',
+  'installed',
+  'canceled',
+] as const;
 
 export async function requestPart(
   ctx: AuthContext,
@@ -2449,7 +2899,8 @@ export async function requestPart(
     throw new ValidationError('description is required');
   }
   const quantity = params.quantity ?? 1;
-  if (typeof quantity !== 'number' || quantity <= 0) throw new ValidationError('quantity must be greater than zero');
+  if (typeof quantity !== 'number' || quantity <= 0)
+    throw new ValidationError('quantity must be greater than zero');
 
   return withTransaction(async (tx) => {
     await assertRO(tx, ctx, roId);
@@ -2459,7 +2910,15 @@ export async function requestPart(
       await tx.query(
         `INSERT INTO ro_parts_lines (part_line_id,tenant_id,ro_id,line_item_id,part_number,description,quantity)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [generateId(), ctx.tenantId, roId, params.line_item_id, params.part_number, params.description, quantity],
+        [
+          generateId(),
+          ctx.tenantId,
+          roId,
+          params.line_item_id,
+          params.part_number,
+          params.description,
+          quantity,
+        ],
       )
     ).rows[0];
   });
@@ -2498,7 +2957,10 @@ export async function updatePartLine(
   sets.push('updated_at=NOW()');
 
   const row = (
-    await query(`UPDATE ro_parts_lines SET ${sets.join(',')} WHERE part_line_id=$1 AND tenant_id=$2 RETURNING *`, vals)
+    await query(
+      `UPDATE ro_parts_lines SET ${sets.join(',')} WHERE part_line_id=$1 AND tenant_id=$2 RETURNING *`,
+      vals,
+    )
   ).rows[0];
   if (!row) throw new NotFoundError('Part line not found');
   return row;
@@ -2508,7 +2970,14 @@ export async function updatePartLine(
 // 7) SOS2 — Sublet Operations
 // ============================================================
 
-const SUBLET_STATUSES = ['requested', 'sent', 'in_progress', 'returned', 'verified', 'canceled'] as const;
+const SUBLET_STATUSES = [
+  'requested',
+  'sent',
+  'in_progress',
+  'returned',
+  'verified',
+  'canceled',
+] as const;
 
 export async function createSubletJob(
   ctx: AuthContext,
@@ -2518,7 +2987,10 @@ export async function createSubletJob(
   if (!params.vendor_ref || typeof params.vendor_ref !== 'object') {
     throw new ValidationError('vendor_ref must be an object');
   }
-  if (params.expected_return_at !== undefined && Number.isNaN(Date.parse(params.expected_return_at))) {
+  if (
+    params.expected_return_at !== undefined &&
+    Number.isNaN(Date.parse(params.expected_return_at))
+  ) {
     throw new ValidationError('expected_return_at must be a timestamp');
   }
 
@@ -2530,7 +3002,14 @@ export async function createSubletJob(
       await tx.query(
         `INSERT INTO ro_sublet_jobs (sublet_job_id,tenant_id,ro_id,line_item_id,vendor_ref,expected_return_at)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [generateId(), ctx.tenantId, roId, params.line_item_id, JSON.stringify(params.vendor_ref), params.expected_return_at ?? null],
+        [
+          generateId(),
+          ctx.tenantId,
+          roId,
+          params.line_item_id,
+          JSON.stringify(params.vendor_ref),
+          params.expected_return_at ?? null,
+        ],
       )
     ).rows[0];
   });
@@ -2557,7 +3036,10 @@ export async function updateSubletJob(
   sets.push('updated_at=NOW()');
 
   const row = (
-    await query(`UPDATE ro_sublet_jobs SET ${sets.join(',')} WHERE sublet_job_id=$1 AND tenant_id=$2 RETURNING *`, vals)
+    await query(
+      `UPDATE ro_sublet_jobs SET ${sets.join(',')} WHERE sublet_job_id=$1 AND tenant_id=$2 RETURNING *`,
+      vals,
+    )
   ).rows[0];
   if (!row) throw new NotFoundError('Sublet job not found');
   return row;
@@ -2567,7 +3049,14 @@ export async function updateSubletJob(
 // 8) TDTS2 — Technician Dispatch & Time
 // ============================================================
 
-const TICKET_STATUSES = ['assigned', 'started', 'paused', 'completed', 'reassigned', 'canceled'] as const;
+const TICKET_STATUSES = [
+  'assigned',
+  'started',
+  'paused',
+  'completed',
+  'reassigned',
+  'canceled',
+] as const;
 const TIME_EVENT_TYPES = ['start', 'pause', 'resume', 'stop'] as const;
 
 export async function dispatchTech(
@@ -2659,7 +3148,12 @@ async function assertOwnMPISession(
   return session;
 }
 
-async function assertOwnTicket(ex: Executor, ctx: AuthContext, ticketId: string, opts: { lock?: boolean } = {}): Promise<any> {
+async function assertOwnTicket(
+  ex: Executor,
+  ctx: AuthContext,
+  ticketId: string,
+  opts: { lock?: boolean } = {},
+): Promise<any> {
   requireUuid(ticketId, 'ticket_id');
   const ticket = (
     await ex.query(
@@ -2711,7 +3205,10 @@ export async function updateTicketStatus(
     }
 
     return (
-      await tx.query(`UPDATE tech_work_tickets SET ${sets.join(',')} WHERE ticket_id=$1 AND tenant_id=$2 RETURNING *`, vals)
+      await tx.query(
+        `UPDATE tech_work_tickets SET ${sets.join(',')} WHERE ticket_id=$1 AND tenant_id=$2 RETURNING *`,
+        vals,
+      )
     ).rows[0];
   });
 }
@@ -2728,7 +3225,8 @@ export async function recordTimeEntry(
     const parsed = Date.parse(params.occurred_at);
     if (Number.isNaN(parsed)) throw new ValidationError('occurred_at must be a timestamp');
     // Offline capture may back-date, but nobody clocks time in the future.
-    if (parsed > Date.now() + 60_000) throw new ValidationError('occurred_at cannot be in the future');
+    if (parsed > Date.now() + 60_000)
+      throw new ValidationError('occurred_at cannot be in the future');
     occurredAt = new Date(parsed);
   }
 
@@ -2767,13 +3265,16 @@ export async function recordTimeEntry(
       pause: ['resume', 'stop'],
       stop: ['start'],
     };
-    const permitted = previous === null ? ['start'] : allowedNext[previous] ?? [];
+    const permitted = previous === null ? ['start'] : (allowedNext[previous] ?? []);
     if (!permitted.includes(eventType)) {
       throw new ConflictError(
         previous === null
           ? 'The first time entry on a ticket must be a start'
           : `A '${previous}' entry cannot be followed by '${eventType}'`,
-        { code: 'invalid_time_sequence', details: { previous, attempted: eventType, allowed: permitted } },
+        {
+          code: 'invalid_time_sequence',
+          details: { previous, attempted: eventType, allowed: permitted },
+        },
       );
     }
 
@@ -2781,7 +3282,14 @@ export async function recordTimeEntry(
       await tx.query(
         `INSERT INTO tech_time_entries (time_entry_id,tenant_id,ticket_id,tech_user_id,event_type,occurred_at)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [generateId(), ctx.tenantId, ticketId, ticket.assigned_tech_user_id, eventType, occurredAt.toISOString()],
+        [
+          generateId(),
+          ctx.tenantId,
+          ticketId,
+          ticket.assigned_tech_user_id,
+          eventType,
+          occurredAt.toISOString(),
+        ],
       )
     ).rows[0];
   });
@@ -2793,7 +3301,11 @@ export async function recordTimeEntry(
 
 export async function createWarrantyClaim(
   ctx: AuthContext,
-  params: { ro_id: string; evidence_refs?: Record<string, unknown>; provider_ref?: Record<string, unknown> },
+  params: {
+    ro_id: string;
+    evidence_refs?: Record<string, unknown>;
+    provider_ref?: Record<string, unknown>;
+  },
 ): Promise<any> {
   return withTransaction(async (tx) => {
     await assertRO(tx, ctx, params.ro_id);
@@ -2802,7 +3314,9 @@ export async function createWarrantyClaim(
         `INSERT INTO warranty_claims (claim_id,tenant_id,ro_id,evidence_refs,provider_ref)
          VALUES ($1,$2,$3,$4,$5) RETURNING *`,
         [
-          generateId(), ctx.tenantId, params.ro_id,
+          generateId(),
+          ctx.tenantId,
+          params.ro_id,
           JSON.stringify(params.evidence_refs ?? {}),
           params.provider_ref ? JSON.stringify(params.provider_ref) : null,
         ],
@@ -2841,9 +3355,18 @@ export async function createComebackCase(
   if (params.original_ro_id === params.new_ro_id) {
     throw new ValidationError('A comeback must reference two different repair orders');
   }
-  const rootCause = requireOneOf(params.root_cause_category, COMEBACK_ROOT_CAUSES, 'root_cause_category');
-  const reasonCodes = params.reason_codes === undefined ? [] : requireStringArray(params.reason_codes, 'reason_codes');
-  const severity = params.severity ? requireOneOf(params.severity, COMEBACK_SEVERITIES, 'severity') : 'sev2';
+  const rootCause = requireOneOf(
+    params.root_cause_category,
+    COMEBACK_ROOT_CAUSES,
+    'root_cause_category',
+  );
+  const reasonCodes =
+    params.reason_codes === undefined
+      ? []
+      : requireStringArray(params.reason_codes, 'reason_codes');
+  const severity = params.severity
+    ? requireOneOf(params.severity, COMEBACK_SEVERITIES, 'severity')
+    : 'sev2';
 
   const comeback = await withTransaction(async (tx) => {
     // Both repair orders are locked, in a deterministic order. Locking only one leaves
@@ -2856,9 +3379,12 @@ export async function createComebackCase(
     const original = await assertRO(tx, ctx, params.original_ro_id);
 
     if (original.status !== 'closed') {
-      throw new ConflictError(`The original repair order is '${original.status}'; only a closed RO can come back`, {
-        code: 'original_ro_not_closed',
-      });
+      throw new ConflictError(
+        `The original repair order is '${original.status}'; only a closed RO can come back`,
+        {
+          code: 'original_ro_not_closed',
+        },
+      );
     }
 
     const cb = (
@@ -2866,8 +3392,13 @@ export async function createComebackCase(
         `INSERT INTO comeback_cases (comeback_id,tenant_id,original_ro_id,new_ro_id,root_cause_category,reason_codes,severity)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
         [
-          generateId(), ctx.tenantId, params.original_ro_id, params.new_ro_id,
-          rootCause, reasonCodes, severity,
+          generateId(),
+          ctx.tenantId,
+          params.original_ro_id,
+          params.new_ro_id,
+          rootCause,
+          reasonCodes,
+          severity,
         ],
       )
     ).rows[0];
@@ -2881,14 +3412,28 @@ export async function createComebackCase(
     ).rows[0];
     if (flagged) await syncQueueForRO(tx, ctx, flagged);
 
-    await recordROEvent(tx, ctx, params.original_ro_id, 'comeback_opened', { user_id: ctx.userId }, {
-      comeback_id: cb.comeback_id,
-      new_ro_id: params.new_ro_id,
-    });
-    await recordROEvent(tx, ctx, params.new_ro_id, 'comeback_linked', { user_id: ctx.userId }, {
-      comeback_id: cb.comeback_id,
-      original_ro_id: params.original_ro_id,
-    });
+    await recordROEvent(
+      tx,
+      ctx,
+      params.original_ro_id,
+      'comeback_opened',
+      { user_id: ctx.userId },
+      {
+        comeback_id: cb.comeback_id,
+        new_ro_id: params.new_ro_id,
+      },
+    );
+    await recordROEvent(
+      tx,
+      ctx,
+      params.new_ro_id,
+      'comeback_linked',
+      { user_id: ctx.userId },
+      {
+        comeback_id: cb.comeback_id,
+        original_ro_id: params.original_ro_id,
+      },
+    );
 
     return cb;
   });
@@ -2900,7 +3445,11 @@ export async function createComebackCase(
   return comeback;
 }
 
-export async function updateComebackCase(ctx: AuthContext, comebackId: string, updates: { status?: string }): Promise<any> {
+export async function updateComebackCase(
+  ctx: AuthContext,
+  comebackId: string,
+  updates: { status?: string },
+): Promise<any> {
   requireUuid(comebackId, 'comeback_id');
   const status = requireOneOf(updates.status, COMEBACK_STATUSES, 'status');
 
@@ -2952,7 +3501,8 @@ async function resolveSlaDueAt(
   explicit?: string,
 ): Promise<string | null> {
   if (explicit) {
-    if (Number.isNaN(Date.parse(explicit))) throw new ValidationError('sla_due_at must be a timestamp');
+    if (Number.isNaN(Date.parse(explicit)))
+      throw new ValidationError('sla_due_at must be a timestamp');
     return explicit;
   }
   const target = (
@@ -2985,7 +3535,9 @@ export async function createServiceQueueItem(
   },
 ): Promise<any> {
   requireUuid(params.location_id, 'location_id');
-  const priority = params.priority ? requireOneOf(params.priority, QUEUE_PRIORITIES, 'priority') : 'p1';
+  const priority = params.priority
+    ? requireOneOf(params.priority, QUEUE_PRIORITIES, 'priority')
+    : 'p1';
   const slaDueAt = await resolveSlaDueAt(ex, ctx, params.queue_type, params.sla_due_at);
 
   return (
@@ -2993,8 +3545,14 @@ export async function createServiceQueueItem(
       `INSERT INTO service_queue_items (queue_item_id,tenant_id,location_id,queue_type,ro_id,appointment_id,priority,sla_due_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
       [
-        generateId(), ctx.tenantId, params.location_id, params.queue_type,
-        params.ro_id ?? null, params.appointment_id ?? null, priority, slaDueAt,
+        generateId(),
+        ctx.tenantId,
+        params.location_id,
+        params.queue_type,
+        params.ro_id ?? null,
+        params.appointment_id ?? null,
+        priority,
+        slaDueAt,
       ],
     )
   ).rows[0];
@@ -3002,7 +3560,13 @@ export async function createServiceQueueItem(
 
 export async function listServiceQueueItems(
   ctx: AuthContext,
-  filters: { location_id?: string; queue_type?: string; status?: string; limit?: unknown; offset?: unknown },
+  filters: {
+    location_id?: string;
+    queue_type?: string;
+    status?: string;
+    limit?: unknown;
+    offset?: unknown;
+  },
 ): Promise<any[]> {
   const page = pagination(filters, 100, 200);
   const conds = ['qi.tenant_id=$1'];
@@ -3051,15 +3615,17 @@ export async function assignServiceQueueItem(ctx: AuthContext, queueItemId: stri
 
   return withTransaction(async (tx) => {
     const item = (
-      await tx.query(`SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`, [
-        queueItemId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [queueItemId, ctx.tenantId],
+      )
     ).rows[0];
     if (!item) throw new NotFoundError('Queue item not found');
 
     if (['done', 'canceled'].includes(item.status)) {
-      throw new ConflictError(`Queue item is already '${item.status}'`, { code: 'queue_item_closed' });
+      throw new ConflictError(`Queue item is already '${item.status}'`, {
+        code: 'queue_item_closed',
+      });
     }
     if (item.assigned_to_user_id && item.assigned_to_user_id !== ctx.userId) {
       throw new ConflictError('Queue item is already assigned to another user', {
@@ -3085,14 +3651,15 @@ export async function updateServiceQueueItemStatus(
 ): Promise<any> {
   requireUuid(queueItemId, 'queue_item_id');
   const status = requireOneOf(params.status, QUEUE_STATUSES, 'status');
-  if (params.block_reason_codes !== undefined) requireStringArray(params.block_reason_codes, 'block_reason_codes');
+  if (params.block_reason_codes !== undefined)
+    requireStringArray(params.block_reason_codes, 'block_reason_codes');
 
   return withTransaction(async (tx) => {
     const item = (
-      await tx.query(`SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`, [
-        queueItemId,
-        ctx.tenantId,
-      ])
+      await tx.query(
+        `SELECT * FROM service_queue_items WHERE queue_item_id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [queueItemId, ctx.tenantId],
+      )
     ).rows[0];
     if (!item) throw new NotFoundError('Queue item not found');
 
@@ -3102,7 +3669,9 @@ export async function updateServiceQueueItemStatus(
     // reopenable onto the cockpit board indefinitely.
     const supervises = hasAnyRole(ctx, ROLES.SERVICE_MANAGER, ROLES.SERVICE_ADVISOR);
     if (!supervises && item.assigned_to_user_id && item.assigned_to_user_id !== ctx.userId) {
-      throw new ForbiddenError('This queue item is assigned to another user', { code: 'queue_item_taken' });
+      throw new ForbiddenError('This queue item is assigned to another user', {
+        code: 'queue_item_taken',
+      });
     }
     if (['done', 'canceled'].includes(item.status) && !['done', 'canceled'].includes(status)) {
       throw new ConflictError(`Queue item is already '${item.status}' and cannot be reopened`, {
@@ -3141,7 +3710,9 @@ export async function escalateServiceQueueItem(
   // Runbook creation is not implemented; accepting the flag and reporting success would
   // tell an operator a runbook exists when none does.
   if (params.create_runbook) {
-    throw new ValidationError('Runbook creation is not available in this build', { code: 'runbook_unsupported' });
+    throw new ValidationError('Runbook creation is not available in this build', {
+      code: 'runbook_unsupported',
+    });
   }
 
   const row = (
@@ -3153,7 +3724,9 @@ export async function escalateServiceQueueItem(
   ).rows[0];
   if (!row) throw new NotFoundError('Queue item not found');
 
-  await emitAudit(ctx, 'queue_item.escalated', 'service_queue_item', queueItemId, { reason: params.reason });
+  await emitAudit(ctx, 'queue_item.escalated', 'service_queue_item', queueItemId, {
+    reason: params.reason,
+  });
   return { ...row, escalated: true, runbook_created: false };
 }
 
@@ -3209,7 +3782,9 @@ export async function createFirstServiceOffer(
       scheduled_start: params.recommended_window_start,
       source: 'sales_handoff',
       language_preference: language,
-      concerns: [{ category: 'first_service', description: 'New vehicle first service', priority: 'p2' }],
+      concerns: [
+        { category: 'first_service', description: 'New vehicle first service', priority: 'p2' },
+      ],
     });
 
     const created = (
@@ -3220,8 +3795,13 @@ export async function createFirstServiceOffer(
          ON CONFLICT (tenant_id, deal_id) DO NOTHING
          RETURNING *`,
         [
-          generateId(), ctx.tenantId, params.location_id, params.deal_id,
-          params.mdm_customer_id, params.mdm_vehicle_id, appointment.appointment_id,
+          generateId(),
+          ctx.tenantId,
+          params.location_id,
+          params.deal_id,
+          params.mdm_customer_id,
+          params.mdm_vehicle_id,
+          appointment.appointment_id,
         ],
       )
     ).rows[0];
@@ -3241,7 +3821,12 @@ export async function createFirstServiceOffer(
     appointment_id: appt.appointment_id,
   });
 
-  return { offer_id: offer.offer_id, appointment_id: appt.appointment_id, deal_id: params.deal_id, status: 'offer_created' };
+  return {
+    offer_id: offer.offer_id,
+    appointment_id: appt.appointment_id,
+    deal_id: params.deal_id,
+    status: 'offer_created',
+  };
 }
 
 // ============================================================

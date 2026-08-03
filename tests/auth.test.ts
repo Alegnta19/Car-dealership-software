@@ -1,149 +1,355 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
-import { test } from 'node:test';
-
+import { createHmac, randomUUID } from 'node:crypto';
+import type { AddressInfo } from 'node:net';
+import type { Server } from 'node:http';
+import { after, before, beforeEach, describe, test } from 'node:test';
+import {
+  resetDatabase,
+  seedActor,
+  seedRooftopIdentity,
+  seedTenantIdentity,
+  skipIntegration,
+  startIdentityTestEnv,
+  type IdentityTestEnv,
+} from '@dealer/test-kit';
+import { closePool, query } from '@dealer/database';
 import { ROLES } from '@dealer/contracts';
-import { authenticate, authorize, rejectTenantOverride, requireContext } from '@dealer/api';
+import {
+  createSession,
+  csrfTokenForSession,
+  ensureActivatedUserLink,
+  revokeSessionByToken,
+} from '@dealer/identity-access';
+import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } from '@dealer/api';
 
-// The module reads its secret per call, so setting it here is enough.
-const SECRET = 'test-jwt-secret-that-is-definitely-long-enough';
-process.env.JWT_SECRET = SECRET;
-// The lazy config boundary validates the WHOLE configuration on first access, so a
-// portable unit test must present a complete (dummy) environment.
-process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
-process.env.STEP_UP_SECRET ??= 'auth-test-step-up-secret-32-chars!!!';
+/**
+ * FBL-020 authentication matrix at the wire: provider-verified bearer tokens
+ * OR server-side session cookies, one at a time; locally signed HS256 is
+ * gone; CSRF guards cookie-authenticated writes; policy denials render 403
+ * for tenant-context actions and the not-found envelope for resource-scoped
+ * ones (non-enumeration).
+ */
+describe(
+  'authentication and authorization at the wire',
+  { skip: skipIntegration ? 'set TEST_DATABASE_URL to run' : false },
+  () => {
+    let server: Server;
+    let base: string;
+    let env: IdentityTestEnv;
+    let tenant: string;
+    let location: string;
 
-const TENANT = '11111111-1111-4111-8111-111111111111';
-const OTHER_TENANT = '99999999-9999-4999-8999-999999999999';
-const USER = '22222222-2222-4222-8222-222222222222';
+    before(async () => {
+      env = await startIdentityTestEnv();
+      resetIdentityCompositionForTests();
+      resetAuthRoutesForTests();
+      server = createApp().listen(0);
+      await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
 
-function b64(value: object): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
+    after(async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await env.stop();
+      await closePool();
+    });
 
-/** Mints a token that is valid by default; pass `exp` explicitly to override. */
-function mintToken(payload: Record<string, unknown>, opts: { alg?: string; secret?: string } = {}): string {
-  const header = b64({ alg: opts.alg ?? 'HS256', typ: 'JWT' });
-  const body = b64({ exp: Math.floor(Date.now() / 1000) + 3600, ...payload });
-  const signature = createHmac('sha256', opts.secret ?? SECRET).update(`${header}.${body}`).digest('base64url');
-  return `${header}.${body}.${signature}`;
-}
+    beforeEach(async () => {
+      await resetDatabase();
+      tenant = randomUUID();
+      location = randomUUID();
+      await seedTenantIdentity(tenant);
+      await seedRooftopIdentity(tenant, location);
+    });
 
-/** Mints a token from exactly the given claims, with no defaults added. */
-function mintRawToken(payload: unknown): string {
-  const header = b64({ alg: 'HS256', typ: 'JWT' });
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const signature = createHmac('sha256', SECRET).update(`${header}.${body}`).digest('base64url');
-  return `${header}.${body}.${signature}`;
-}
+    async function get(path: string, headers: Record<string, string> = {}) {
+      const res = await fetch(base + path, { headers });
+      const text = await res.text();
+      return { status: res.status, body: text ? JSON.parse(text) : null, headers: res.headers };
+    }
 
-function runMiddleware(mw: any, req: any): any {
-  let captured: any = null;
-  mw(req, {}, (err?: any) => {
-    captured = err ?? null;
-  });
-  return captured;
-}
+    async function post(path: string, headers: Record<string, string> = {}, body: unknown = {}) {
+      const res = await fetch(base + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      return { status: res.status, body: text ? JSON.parse(text) : null, headers: res.headers };
+    }
 
-function requestWith(token?: string, extra: Record<string, any> = {}): any {
-  return { headers: token ? { authorization: `Bearer ${token}` } : {}, body: {}, query: {}, ...extra };
-}
+    test('a valid provider bearer token authenticates and resolves the database identity', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const res = await get('/api/service/home', { authorization: `Bearer ${advisor.token}` });
+      assert.equal(res.status, 200);
+    });
 
-test('a valid token establishes the tenant context', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [ROLES.SERVICE_ADVISOR] }));
-  assert.equal(runMiddleware(authenticate, req), null);
-  assert.deepEqual(req.tenantContext, { tenantId: TENANT, userId: USER, roles: [ROLES.SERVICE_ADVISOR] });
-});
+    test('locally signed HS256 tokens are DEAD — the FBL-020 regression proof', async () => {
+      const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+      const header = b64({ alg: 'HS256', typ: 'JWT' });
+      const payload = b64({
+        sub: randomUUID(),
+        tid: tenant,
+        roles: [ROLES.SERVICE_ADVISOR, 'platform_admin'],
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      });
+      for (const secret of [
+        'integration-test-jwt-secret-long-enough-value',
+        'any-other-secret-value-32-chars!!',
+      ]) {
+        const sig = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+        const res = await get('/api/service/home', {
+          authorization: `Bearer ${header}.${payload}.${sig}`,
+        });
+        assert.equal(res.status, 401, 'an HS256 token must never authenticate again');
+      }
+    });
 
-test('a request with no token is rejected', () => {
-  const err = runMiddleware(authenticate, requestWith());
-  assert.equal(err?.statusCode, 401);
-});
+    test('garbage, expired and unknown-identity bearers are all a neutral 401', async () => {
+      // garbage
+      assert.equal(
+        (await get('/api/service/home', { authorization: 'Bearer not-a-token' })).status,
+        401,
+      );
+      // cryptographically valid but expired
+      const now = Math.floor(Date.now() / 1000);
+      const expired = await env.issuer.signAccessToken({
+        exp: now - 600,
+        iat: now - 700,
+        auth_time: now - 700,
+      });
+      assert.equal(
+        (await get('/api/service/home', { authorization: `Bearer ${expired}` })).status,
+        401,
+      );
+      // valid token for an organization with no active connection
+      const foreignOrg = await env.issuer.signAccessToken({
+        org_id: 'org_unknown_' + randomUUID().slice(0, 8),
+      });
+      assert.equal(
+        (await get('/api/service/home', { authorization: `Bearer ${foreignOrg}` })).status,
+        401,
+      );
+      // valid token, known org, but no user link
+      const strangers = await env.issuer.signAccessToken({ org_id: `org_test_${tenant}` });
+      assert.equal(
+        (await get('/api/service/home', { authorization: `Bearer ${strangers}` })).status,
+        401,
+      );
+    });
 
-test('a token signed with the wrong key is rejected', () => {
-  const token = mintToken({ sub: USER, tid: TENANT, roles: [] }, { secret: 'a-completely-different-secret-value-here' });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+    test('a deactivated identity is refused even with a valid provider token', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      await query(`UPDATE user_links SET status = 'deactivated' WHERE user_link_id = $1`, [
+        advisor.userLinkId,
+      ]);
+      const res = await get('/api/service/home', { authorization: `Bearer ${advisor.token}` });
+      assert.equal(res.status, 401);
+    });
 
-test('algorithm confusion is rejected', () => {
-  const token = mintToken({ sub: USER, tid: TENANT, roles: [] }, { alg: 'none' });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+    test('bearer + cookie together is ambiguous and refused', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const res = await get('/api/service/home', {
+        authorization: `Bearer ${advisor.token}`,
+        cookie: 'dealer_session=whatever',
+      });
+      assert.equal(res.status, 401);
+    });
 
-test('an expired token is rejected', () => {
-  const token = mintToken({ sub: USER, tid: TENANT, roles: [], exp: Math.floor(Date.now() / 1000) - 10 });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+    async function sessionFor(roles: string[]) {
+      const link = await ensureActivatedUserLink({
+        tenantId: tenant,
+        providerUserId: 'user_session_' + randomUUID().slice(0, 8),
+        email: null,
+        displayName: null,
+      });
+      assert.ok(link);
+      for (const role of roles) {
+        await query(
+          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+         VALUES ($1, $2, $3, 'tenant', $1)`,
+          [tenant, link.userLinkId, role],
+        );
+      }
+      const created = await createSession({
+        tenantId: tenant,
+        userLinkId: link.userLinkId,
+        providerSessionId: 'sid_' + randomUUID().slice(0, 8),
+        authTime: new Date(),
+        ttlSeconds: 3600,
+      });
+      return { link, created };
+    }
 
-test('a token without a usable tenant claim is rejected', () => {
-  const token = mintToken({ sub: USER, tid: 'acme-motors', roles: [] });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+    test('session cookies authenticate reads; unsafe methods demand the CSRF token', async () => {
+      const { created } = await sessionFor([ROLES.SERVICE_ADVISOR]);
+      const cookie = `dealer_session=${created.sessionToken}`;
 
-test('a token with no expiry is rejected rather than treated as valid forever', () => {
-  // An optional exp would make such a token a permanent credential.
-  const token = mintRawToken({ sub: USER, tid: TENANT, roles: [] });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+      const read = await get('/api/service/home', { cookie });
+      assert.equal(read.status, 200);
 
-test('a non-numeric expiry is rejected', () => {
-  const token = mintRawToken({ sub: USER, tid: TENANT, roles: [], exp: '9999999999' });
-  assert.equal(runMiddleware(authenticate, requestWith(token))?.statusCode, 401);
-});
+      const sess = await get('/auth/session', { cookie });
+      assert.equal(sess.status, 200);
+      assert.equal(sess.body.data.tenant_id, tenant);
+      assert.ok(typeof sess.body.data.csrf_token === 'string');
 
-test('a scalar or null token payload is rejected, not crashed on', () => {
-  for (const payload of [null, 1, 'string', []]) {
-    const err = runMiddleware(authenticate, requestWith(mintRawToken(payload)));
-    assert.equal(err?.statusCode, 401, `payload ${JSON.stringify(payload)} should be a 401`);
-  }
-});
+      // write WITHOUT the CSRF token: refused with its own code
+      const blocked = await post(
+        '/api/service/appointments',
+        { cookie },
+        {
+          location_id: location,
+          mdm_customer_id: randomUUID(),
+          mdm_vehicle_id: randomUUID(),
+          scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      );
+      assert.equal(blocked.status, 403);
+      assert.equal(blocked.body.error.code, 'csrf_required');
 
-test('the tenant always comes from the token, never from the request body', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [] }), { body: { tenant_id: OTHER_TENANT } });
-  runMiddleware(authenticate, req);
-  assert.equal(requireContext(req).tenantId, TENANT);
-});
+      // with it: accepted
+      const allowed = await post(
+        '/api/service/appointments',
+        { cookie, 'x-csrf-token': sess.body.data.csrf_token },
+        {
+          location_id: location,
+          mdm_customer_id: randomUUID(),
+          mdm_vehicle_id: randomUUID(),
+          scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      );
+      assert.equal(allowed.status, 201, JSON.stringify(allowed.body));
+    });
 
-test('a body tenant_id that disagrees with the token is refused outright', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [] }), { body: { tenant_id: OTHER_TENANT } });
-  runMiddleware(authenticate, req);
-  assert.throws(() => rejectTenantOverride(req), (err: any) => err?.code === 'tenant_mismatch' && err?.statusCode === 403);
-});
+    test('a revoked session dies immediately', async () => {
+      const { created } = await sessionFor([ROLES.SERVICE_ADVISOR]);
+      const cookie = `dealer_session=${created.sessionToken}`;
+      assert.equal((await get('/api/service/home', { cookie })).status, 200);
+      await revokeSessionByToken(created.sessionToken, 'test');
+      assert.equal((await get('/api/service/home', { cookie })).status, 401);
+    });
 
-test('a query tenant_id that disagrees with the token is refused outright', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [] }), { query: { tenant_id: OTHER_TENANT } });
-  runMiddleware(authenticate, req);
-  assert.throws(() => rejectTenantOverride(req), (err: any) => err?.code === 'tenant_mismatch');
-});
+    test('logout revokes the session, clears the cookie and returns the provider logout URL', async () => {
+      const { created } = await sessionFor([ROLES.SERVICE_ADVISOR]);
+      const cookie = `dealer_session=${created.sessionToken}`;
+      const sess = await get('/auth/session', { cookie });
+      const out = await post('/auth/logout', { cookie, 'x-csrf-token': sess.body.data.csrf_token });
+      assert.equal(out.status, 200, JSON.stringify(out.body));
+      assert.equal(out.body.data.logged_out, true);
+      const setCookie = out.headers.get('set-cookie') ?? '';
+      assert.match(setCookie, /dealer_session=;/);
+      assert.equal((await get('/api/service/home', { cookie })).status, 401);
+    });
 
-test('an echoed matching tenant_id is accepted', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [] }), { body: { tenant_id: TENANT } });
-  runMiddleware(authenticate, req);
-  rejectTenantOverride(req);
-});
+    test('deny-by-default: an authenticated identity with NO bindings gets 403 on tenant actions', async () => {
+      const nobody = await seedActor(env.issuer, { tenantId: tenant, roles: [] });
+      const res = await post(
+        '/api/service/ros',
+        { authorization: `Bearer ${nobody.token}` },
+        {
+          location_id: location,
+          mdm_customer_id: randomUUID(),
+          mdm_vehicle_id: randomUUID(),
+        },
+      );
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error.code, 'forbidden');
+      // and the decision left evidence
+      const evidence = await query(
+        `SELECT COUNT(*)::int AS n FROM policy_decisions WHERE decision = 'deny' AND actor_user_link_id = $1`,
+        [nobody.userLinkId],
+      );
+      assert.ok(Number((evidence.rows[0] as { n: number }).n) >= 1);
+    });
 
-test('authorize admits a permitted role and refuses the rest', () => {
-  const advisor = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [ROLES.SERVICE_ADVISOR] }));
-  runMiddleware(authenticate, advisor);
-  assert.equal(runMiddleware(authorize(ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER), advisor), null);
+    test('non-enumeration: a resource-scoped denial is indistinguishable from a missing resource', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const auth = { authorization: `Bearer ${advisor.token}` };
+      const appt = await post('/api/service/appointments', auth, {
+        location_id: location,
+        mdm_customer_id: randomUUID(),
+        mdm_vehicle_id: randomUUID(),
+        scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      assert.equal(appt.status, 201);
+      const checkedIn = await post(
+        `/api/service/appointments/${appt.body.data.appointment_id}/check-in`,
+        auth,
+      );
+      const roId = checkedIn.body.data.ro_id as string;
 
-  const tech = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [ROLES.TECHNICIAN] }));
-  runMiddleware(authenticate, tech);
-  assert.equal(runMiddleware(authorize(ROLES.SERVICE_ADVISOR, ROLES.SERVICE_MANAGER), tech)?.statusCode, 403);
-});
+      // an actor in ANOTHER tenant, real role, probing this RO id
+      const otherTenant = randomUUID();
+      await seedTenantIdentity(otherTenant);
+      const outsider = await seedActor(env.issuer, {
+        tenantId: otherTenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const probe = await get(`/api/service/ros/${roId}`, {
+        authorization: `Bearer ${outsider.token}`,
+      });
+      const ghost = await get(`/api/service/ros/${randomUUID()}`, {
+        authorization: `Bearer ${outsider.token}`,
+      });
+      assert.equal(probe.status, 404);
+      assert.equal(ghost.status, 404);
+      assert.deepEqual(
+        { code: probe.body.error.code },
+        { code: ghost.body.error.code },
+        'cross-tenant and nonexistent must be the SAME answer',
+      );
+    });
 
-test('a principal with no roles is refused', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [] }));
-  runMiddleware(authenticate, req);
-  assert.equal(runMiddleware(authorize(ROLES.SERVICE_ADVISOR), req)?.statusCode, 403);
-});
+    test('revoking a role binding denies the very next request', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const auth = { authorization: `Bearer ${advisor.token}` };
+      const body = {
+        location_id: location,
+        mdm_customer_id: randomUUID(),
+        mdm_vehicle_id: randomUUID(),
+        scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+      };
+      assert.equal((await post('/api/service/appointments', auth, body)).status, 201);
+      await query(
+        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW() WHERE user_link_id = $1`,
+        [advisor.userLinkId],
+      );
+      // the SAME still-valid token now fails: nothing to outlive the binding
+      assert.equal((await post('/api/service/appointments', auth, body)).status, 403);
+    });
 
-test('platform_admin passes every role check', () => {
-  const req = requestWith(mintToken({ sub: USER, tid: TENANT, roles: [ROLES.ADMIN] }));
-  runMiddleware(authenticate, req);
-  assert.equal(runMiddleware(authorize(ROLES.WARRANTY_ADMIN), req), null);
-});
-
-test('authorize refuses when authenticate never ran', () => {
-  assert.equal(runMiddleware(authorize(ROLES.SERVICE_ADVISOR), requestWith())?.statusCode, 401);
-});
+    test('the tenant a request operates on comes from the identity, never the body', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const res = await post(
+        '/api/service/ros',
+        { authorization: `Bearer ${advisor.token}` },
+        {
+          tenant_id: randomUUID(),
+          location_id: location,
+          mdm_customer_id: randomUUID(),
+          mdm_vehicle_id: randomUUID(),
+        },
+      );
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error.code, 'tenant_mismatch');
+    });
+  },
+);

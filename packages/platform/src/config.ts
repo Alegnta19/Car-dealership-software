@@ -45,8 +45,6 @@ export type IdentityConfig =
 
 export interface AppConfig {
   readonly databaseUrl: string;
-  readonly jwtSecret: string;
-  readonly stepUpSecret: string;
   readonly port: number;
   readonly shutdownGraceMs: number;
   readonly metricsIntervalMs: number;
@@ -59,6 +57,12 @@ export interface AppConfig {
   readonly pgPoolConnectMs: number;
   readonly pgSslRequire: boolean;
   readonly identity: IdentityConfig;
+  /**
+   * True when NODE_ENV=production. The one place the environment's
+   * deployment posture is read; consumers (e.g. cookie `Secure`) ask the
+   * configuration, never process.env.
+   */
+  readonly isProduction: boolean;
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -156,8 +160,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
 
   const config: AppConfig = {
     databaseUrl: requireVar(env, 'DATABASE_URL'),
-    jwtSecret: secret(env, 'JWT_SECRET'),
-    stepUpSecret: secret(env, 'STEP_UP_SECRET'),
     port: integer(env, 'PORT', 3000, { min: 1, max: 65535 }),
     shutdownGraceMs: integer(env, 'SHUTDOWN_GRACE_MS', 30_000, { min: 1_000, max: 600_000 }),
     metricsIntervalMs: integer(env, 'METRICS_INTERVAL_MS', 60_000, { min: 1_000, max: 3_600_000 }),
@@ -170,6 +172,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     pgPoolConnectMs: integer(env, 'PGPOOL_CONNECT_MS', 5_000, { min: 100, max: 60_000 }),
     pgSslRequire: env.PGSSL === 'require',
     identity: loadIdentityConfig(env),
+    isProduction: env.NODE_ENV === 'production',
   };
   return Object.freeze(config);
 }

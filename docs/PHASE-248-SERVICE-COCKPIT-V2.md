@@ -128,7 +128,7 @@ Single source of truth for what each subdomain owns.
 | 12  | **CSPP2**   | Customer Service Portal Packager         | `service_portal_tasks`                                                           | `listPortalTasks`, `updatePortalTaskStatus`                                                                                                                                                                                              | 2                               |
 | 13  | **PSFSRB2** | Post-Sale First Service Retention Bridge | `first_service_offers`                                                           | `createFirstServiceOffer`                                                                                                                                                                                                                | 1                               |
 
-The subdomain endpoint counts sum to 44. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the step-up ledger, migration 050).
+The subdomain endpoint counts sum to 44. Two supporting tables have no subdomain of their own: `audit_events` (platform, migration 000) and `step_up_token_uses` (the retired local step-up ledger, migration 050 — superseded by `reauthentication_grants` in migration 055 and no longer written).
 
 Notable structural facts:
 
@@ -327,7 +327,7 @@ stateDiagram-v2
 
 - **Re-quote (`awaiting_authorization → estimate_pending`).** Withdraws the outstanding estimate as `expired` and returns its still-undecided lines to `not_required`, so they can be re-priced and shown again. Commercial terms are frozen while a line is `pending` (`pending_terms_frozen`), which is what keeps the price the customer was shown identical to the price recorded as approved.
 - **Authorization gate (`→ authorized`).** Requires an `ro_authorizations` row that is `status='approved'`, has a **non-empty `approved_items` array**, and references the RO's **latest estimate version**. An approval of estimate v1 does not authorize work priced in v3, and an all-declined decision (stored as `declined`) does not satisfy the gate at all. Failure returns a bilingual `authorization_required` (HTTP 422).
-- **Step-up gate (`→ authorized`, `→ canceled`).** Requires a valid step-up token bound to this tenant, user, action and repair order. Failure returns `step_up_required` (HTTP 403).
+- **Reauthentication gate (`→ authorized`, `→ canceled`).** Requires a single-use provider-backed reauthentication grant (FBL-020, ADR-006) bound to this tenant, user, action and repair order; the grant is spent inside the same transaction. Failure returns `step_up_required` (HTTP 403).
 - **Guarded write.** The `UPDATE` re-asserts the source status; if it matches zero rows, another request changed the RO first and the caller gets `concurrent_modification` (HTTP 409) rather than a silent lost update.
 - `→ closed` observes the `service_ro_cycle_time_minutes_p95` histogram (minutes since RO creation), after commit.
 - Every successful transition appends a `status_changed` event to `ro_events` inside the same transaction, plus a post-commit audit row.
@@ -628,18 +628,24 @@ quantiles at query time and the suffix is misleading.
 
 ### Configuration
 
-| Variable                                            | Required | Purpose                                                                |
-| --------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
-| `DATABASE_URL`                                      | yes      | Postgres connection string                                             |
-| `JWT_SECRET`                                        | yes      | Verifies bearer tokens (≥ 32 chars)                                    |
-| `STEP_UP_SECRET`                                    | yes      | Signs and verifies step-up tokens (≥ 32 chars)                         |
-| `PORT`                                              | no       | Listen port, default 3000                                              |
-| `LOG_LEVEL`                                         | no       | `debug` / `info` / `warn` / `error`, default `info`                    |
-| `PGSSL`                                             | no       | Set to `require` when the database is reached over the public internet |
-| `PGPOOL_MAX`, `PGPOOL_IDLE_MS`, `PGPOOL_CONNECT_MS` | no       | Pool tuning                                                            |
-| `JSON_BODY_LIMIT`                                   | no       | Request body cap, default `1mb`                                        |
-| `METRICS_INTERVAL_MS`                               | no       | Aggregation period, default 60000                                      |
-| `METRICS_WINDOW_DAYS`                               | no       | Rolling window for rates, default 30                                   |
+| Variable                                            | Required  | Purpose                                                                |
+| --------------------------------------------------- | --------- | ---------------------------------------------------------------------- |
+| `DATABASE_URL`                                      | yes       | Postgres connection string                                             |
+| `IDENTITY_PROVIDER`                                 | no        | `workos` to serve logins; unset/`disabled` for CI and offline work     |
+| `WORKOS_CLIENT_ID`                                  | if workos | AuthKit client id                                                      |
+| `WORKOS_API_KEY`                                    | if workos | AuthKit API key (≥ 32 chars)                                           |
+| `WORKOS_ISSUER`, `WORKOS_JWKS_URI`                  | if workos | Token issuer and key set — the ONLY trust anchors (https in prod)      |
+| `WORKOS_REDIRECT_URI`, `WORKOS_LOGOUT_REDIRECT_URI` | if workos | Exact redirect targets (https in prod)                                 |
+| `WORKOS_COOKIE_PASSWORD`                            | if workos | Seals cookies and derives CSRF tokens (≥ 32 chars)                     |
+| `OIDC_AUDIENCE`                                     | if workos | Audience claim this API accepts                                        |
+| `OIDC_CLOCK_SKEW_SECONDS`                           | no        | Bounded temporal tolerance, default 60, max 300                        |
+| `PORT`                                              | no        | Listen port, default 3000                                              |
+| `LOG_LEVEL`                                         | no        | `debug` / `info` / `warn` / `error`, default `info`                    |
+| `PGSSL`                                             | no        | Set to `require` when the database is reached over the public internet |
+| `PGPOOL_MAX`, `PGPOOL_IDLE_MS`, `PGPOOL_CONNECT_MS` | no        | Pool tuning                                                            |
+| `JSON_BODY_LIMIT`                                   | no        | Request body cap, default `1mb`                                        |
+| `METRICS_INTERVAL_MS`                               | no        | Aggregation period, default 60000                                      |
+| `METRICS_WINDOW_DAYS`                               | no        | Rolling window for rates, default 30                                   |
 
 `server.ts` fails fast if any required variable is missing, rather than accepting traffic it cannot
 authenticate.
@@ -703,6 +709,6 @@ Three invariants a new endpoint must preserve:
 
 **Authorization methods:** `portal`, `signature`, `staff_attestation`, `recorded_call_ref` · **Priorities:** `p0` (safety) > `p1` (maintenance) > `p2` · **Comeback severities:** `sev0`–`sev3`
 
-**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `estimate_superseded`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_inspection_owner`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `pending_terms_frozen`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `ticket_closed`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `waitlist_entry_closed`, `waitlist_entry_exists`, `waitlist_not_found`, `waitlist_offer_expired`, `work_incomplete`
+**Error codes:** `appointment_already_converted`, `approved_terms_frozen`, `assignment_via_dispatch_only`, `authorization_fields_readonly`, `authorization_required`, `body_too_large`, `commercial_fields_restricted`, `concurrent_modification`, `contradictory_decision`, `csrf_required`, `decision_outstanding`, `estimate_not_draft`, `estimate_not_found`, `estimate_not_sent`, `estimate_superseded`, `evidence_required`, `forbidden`, `internal_error`, `invalid_appointment_status`, `invalid_session_status`, `invalid_time_sequence`, `invalid_transition`, `line_item_declined`, `line_item_not_found`, `line_items_not_pending`, `malformed_json`, `mixed_currency`, `no_approved_work`, `no_line_items`, `not_found`, `not_inspection_owner`, `not_line_item_assignee`, `not_ticket_assignee`, `offer_already_exists`, `original_ro_not_closed`, `overrides_unsupported`, `pending_terms_frozen`, `queue_item_closed`, `queue_item_taken`, `ro_not_estimable`, `ro_not_estimate_pending`, `ro_not_found`, `ro_not_inspectable`, `route_not_found`, `runbook_unsupported`, `severity_required`, `status_not_directly_updatable`, `step_up_required`, `tech_not_available`, `tenant_mismatch`, `ticket_closed`, `unauthorized`, `unknown_line_items`, `unknown_timezone`, `unknown_view`, `validation_error`, `waitlist_entry_closed`, `waitlist_entry_exists`, `waitlist_not_found`, `waitlist_offer_expired`, `work_incomplete`
 
 **Queue types (closed set, DB-enforced):** `appointments_today`, `waiting_checkin`, `waiting_authorization`, `waiting_parts`, `in_repair`, `qc`, `ready_pickup`, `comeback_review`, `no_show_followup`

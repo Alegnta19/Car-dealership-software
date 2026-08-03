@@ -25,8 +25,6 @@ import {
 
 const VALID_ENV = {
   DATABASE_URL: 'postgres://user@localhost:5432/db',
-  JWT_SECRET: 'a-jwt-secret-that-is-32-characters!!',
-  STEP_UP_SECRET: 'a-step-up-secret-that-is-32-chars!!!',
 };
 
 describe('configuration boundary', () => {
@@ -48,18 +46,29 @@ describe('configuration boundary', () => {
       () => loadConfig({ ...VALID_ENV, DATABASE_URL: undefined }),
       /DATABASE_URL is required/,
     );
-    assert.throws(() => loadConfig({ ...VALID_ENV, JWT_SECRET: '' }), /JWT_SECRET is required/);
   });
 
   test('a short secret fails WITHOUT the value appearing in the error', () => {
     const sentinel = 'sentinel-short-secret-value';
-    for (const key of ['JWT_SECRET', 'STEP_UP_SECRET'] as const) {
+    for (const key of ['WORKOS_API_KEY', 'WORKOS_COOKIE_PASSWORD'] as const) {
       try {
-        loadConfig({ ...VALID_ENV, [key]: sentinel });
+        loadConfig({
+          ...VALID_ENV,
+          IDENTITY_PROVIDER: 'workos',
+          WORKOS_CLIENT_ID: 'client_x',
+          WORKOS_API_KEY: 'k'.repeat(40),
+          WORKOS_ISSUER: 'https://issuer.example.com',
+          WORKOS_JWKS_URI: 'https://issuer.example.com/jwks',
+          WORKOS_REDIRECT_URI: 'https://app.example.com/auth/callback',
+          WORKOS_LOGOUT_REDIRECT_URI: 'https://app.example.com/',
+          WORKOS_COOKIE_PASSWORD: 'c'.repeat(40),
+          OIDC_AUDIENCE: 'aud',
+          [key]: sentinel,
+        });
         assert.fail('should have thrown');
       } catch (err) {
         const message = (err as Error).message;
-        assert.match(message, new RegExp(`${key} must be at least 32 characters`));
+        assert.match(message, new RegExp(key));
         assert.ok(!message.includes(sentinel), 'the secret value must never appear in the error');
       }
     }
@@ -355,8 +364,6 @@ describe('request-context middleware over HTTP', () => {
   // createApp() resolves config lazily; give the portable test a valid environment
   // (values are test-only and never asserted on).
   process.env.DATABASE_URL ??= 'postgres://user@localhost:5432/db';
-  process.env.JWT_SECRET ??= 'platform-test-jwt-secret-32-chars!!!';
-  process.env.STEP_UP_SECRET ??= 'platform-test-step-up-secret-32ch!!!';
 
   async function withServer(fn: (base: string) => Promise<void>): Promise<void> {
     const server = createApp().listen(0);

@@ -21,16 +21,16 @@ module list.
 Only the phases that share a boundary with fixed ops. Statuses reflect the reviewed bundle,
 not aspirations.
 
-| Phase | System | Relationship to this repo | Bundle condition |
-|---|---|---|---|
-| 209/239/259 | Customer & vehicle master (three parallel generations) | Owns the identities behind `mdm_customer_id` / `mdm_vehicle_id` | 239 has the right shape but never ran end-to-end; 259 is a regression (see §4) |
-| 228/244/245 | Sales / deals | `first_service_offers.deal_id` — the sales→service retention handoff; appointment `source='sales_handoff'` | Generated CRUD, unexercised |
-| 229 | Service workflow v1 | Predecessor of this entire repo — **superseded** | Its `service_appointments` collides by name with ours (§5) |
-| 249/224/264 | Accounting / AR (three parallel GL stacks) | Would consume RO money records (`ro_authorizations.approved_snapshot`) downstream | Non-functional: wrong PK names, simulated GL posting |
-| 255 | Frontline mobility | Mobile capture; its `capture_sessions` has an `mpi_supplement` context aimed at our MPI flow | Unrunnable; soft seam only, no FK, no code joins it |
-| 257/258 | Deal-to-delivery / post-sale lifecycle | `handoff_type='service_intro'` and we-owe items are the natural feeders of `first_service_offers` and future ROs | Concepts sound, code unrunnable |
-| 211/231/263 | Customer portals | Would surface `service_portal_tasks`; the platform's portal exposed **public estimate approve/decline endpoints** | Touches this repo's most protected invariant (§5) |
-| 204 | Notifications | Appointment reminders would ride on `preferred_contact_channel` | Not reviewed in depth; likeliest first future import |
+| Phase       | System                                                 | Relationship to this repo                                                                                         | Bundle condition                                                               |
+| ----------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 209/239/259 | Customer & vehicle master (three parallel generations) | Owns the identities behind `mdm_customer_id` / `mdm_vehicle_id`                                                   | 239 has the right shape but never ran end-to-end; 259 is a regression (see §4) |
+| 228/244/245 | Sales / deals                                          | `first_service_offers.deal_id` — the sales→service retention handoff; appointment `source='sales_handoff'`        | Generated CRUD, unexercised                                                    |
+| 229         | Service workflow v1                                    | Predecessor of this entire repo — **superseded**                                                                  | Its `service_appointments` collides by name with ours (§5)                     |
+| 249/224/264 | Accounting / AR (three parallel GL stacks)             | Would consume RO money records (`ro_authorizations.approved_snapshot`) downstream                                 | Non-functional: wrong PK names, simulated GL posting                           |
+| 255         | Frontline mobility                                     | Mobile capture; its `capture_sessions` has an `mpi_supplement` context aimed at our MPI flow                      | Unrunnable; soft seam only, no FK, no code joins it                            |
+| 257/258     | Deal-to-delivery / post-sale lifecycle                 | `handoff_type='service_intro'` and we-owe items are the natural feeders of `first_service_offers` and future ROs  | Concepts sound, code unrunnable                                                |
+| 211/231/263 | Customer portals                                       | Would surface `service_portal_tasks`; the platform's portal exposed **public estimate approve/decline endpoints** | Touches this repo's most protected invariant (§5)                              |
+| 204         | Notifications                                          | Appointment reminders would ride on `preferred_contact_channel`                                                   | Not reviewed in depth; likeliest first future import                           |
 
 ## 2. Seams this repository maintains on purpose
 
@@ -49,13 +49,13 @@ not aspirations.
 
 ## 3. What was taken from the platform bundle (July 2026)
 
-| Item | From | What survived |
-|---|---|---|
-| Deployment packaging (`Dockerfile`, `docker-compose.yml`) | `docker/` | The two-stage/non-root/healthcheck *shape*. Every fail-open default was inverted: no baked secrets (`${VAR:?}` refuses to start), a one-shot migrate service, postgres unpublished. The bundle's own artifacts had never been built (no lockfile; broken compose build context). |
-| Node default process metrics + bounded shutdown | `shared/middleware/metrics.ts`, `server.ts` | Two lines of concept. The bundle's request-metrics middleware was refused (raw `req.path` as a label value = unbounded cardinality on an unauthenticated endpoint). |
-| Bilingual 18-item MPI checklist content | migration 030 seed | The data only, reshaped to this repo's vocabulary (`pass/attention/fail` rubric keys, explicit `default_severity`), delivered as a per-tenant seed script — `mpi_templates.tenant_id` is NOT NULL, so a global seed migration was the wrong shape. |
-| Waitlist concept | migration 030 `service_waitlist_entries` | The concept and table name. The implementation is new: the sketch had no tenant scoping, no closed transitions, no uniqueness backstop and no conversion path. |
-| This document's context map | `PHASES_242_265_SUMMARY.md`, transcripts journal | Curated. The summary file itself was stale against its own bundle (wrong table counts, wrong migration count) and describes platform architecture this repo deliberately does not have. |
+| Item                                                      | From                                             | What survived                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deployment packaging (`Dockerfile`, `docker-compose.yml`) | `docker/`                                        | The two-stage/non-root/healthcheck _shape_. Every fail-open default was inverted: no baked secrets (`${VAR:?}` refuses to start), a one-shot migrate service, postgres unpublished. The bundle's own artifacts had never been built (no lockfile; broken compose build context). |
+| Node default process metrics + bounded shutdown           | `shared/middleware/metrics.ts`, `server.ts`      | Two lines of concept. The bundle's request-metrics middleware was refused (raw `req.path` as a label value = unbounded cardinality on an unauthenticated endpoint).                                                                                                              |
+| Bilingual 18-item MPI checklist content                   | migration 030 seed                               | The data only, reshaped to this repo's vocabulary (`pass/attention/fail` rubric keys, explicit `default_severity`), delivered as a per-tenant seed script — `mpi_templates.tenant_id` is NOT NULL, so a global seed migration was the wrong shape.                               |
+| Waitlist concept                                          | migration 030 `service_waitlist_entries`         | The concept and table name. The implementation is new: the sketch had no tenant scoping, no closed transitions, no uniqueness backstop and no conversion path.                                                                                                                   |
+| This document's context map                               | `PHASES_242_265_SUMMARY.md`, transcripts journal | Curated. The summary file itself was stale against its own bundle (wrong table counts, wrong migration count) and describes platform architecture this repo deliberately does not have.                                                                                          |
 
 ## 4. What was reviewed and refused
 

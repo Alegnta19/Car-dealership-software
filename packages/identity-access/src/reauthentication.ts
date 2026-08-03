@@ -208,3 +208,16 @@ export async function consumeReauthenticationGrant(
   );
   return (result.rowCount ?? 0) === 1;
 }
+
+/**
+ * Bookkeeping hygiene for the scheduled aggregator: transactions that were
+ * started but never completed move to 'expired'. Grants need no sweep —
+ * consumption and expiry are decided by their own columns at read time.
+ */
+export async function expireStaleReauthenticationTransactions(): Promise<number> {
+  const result = await query(
+    `UPDATE reauthentication_transactions SET state = 'expired'
+      WHERE state = 'started' AND expires_at < NOW()`,
+  );
+  return result.rowCount ?? 0;
+}

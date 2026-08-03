@@ -10,9 +10,12 @@ import { logger } from '@dealer/platform';
  * Resolved from __dirname, not process.cwd(), so the runner is not sensitive to where
  * it is invoked from.
  */
-const MIGRATIONS_DIR = process.env.MIGRATIONS_DIR
-  ?? ([join(__dirname, '..', 'migrations'), join(__dirname, '..', '..', 'migrations')]
-    .find((dir) => existsSync(dir)) ?? join(__dirname, '..', 'migrations'));
+const MIGRATIONS_DIR =
+  process.env.MIGRATIONS_DIR ??
+  [join(__dirname, '..', 'migrations'), join(__dirname, '..', '..', 'migrations')].find((dir) =>
+    existsSync(dir),
+  ) ??
+  join(__dirname, '..', 'migrations');
 
 /**
  * Applies every unapplied migration in filename order, each inside its own
@@ -29,7 +32,9 @@ async function migrate(): Promise<void> {
   `);
 
   const applied = new Set(
-    (await pool.query<{ filename: string }>('SELECT filename FROM schema_migrations')).rows.map((r) => r.filename),
+    (await pool.query<{ filename: string }>('SELECT filename FROM schema_migrations')).rows.map(
+      (r) => r.filename,
+    ),
   );
 
   const files = readdirSync(MIGRATIONS_DIR)

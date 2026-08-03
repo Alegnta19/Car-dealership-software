@@ -4,8 +4,6 @@ import { loadConfig } from '@dealer/platform';
 
 const BASE = {
   DATABASE_URL: 'postgresql://localhost/db',
-  JWT_SECRET: 'x'.repeat(40),
-  STEP_UP_SECRET: 'y'.repeat(40),
 };
 
 const WORKOS = {

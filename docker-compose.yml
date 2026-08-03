@@ -5,7 +5,7 @@
 # start rather than boot with a well-known secret — and the server would refuse anyway
 # (src/server.ts asserts both secrets exist and are at least 32 characters).
 #
-#   cp .env.example .env   # fill in JWT_SECRET, STEP_UP_SECRET, POSTGRES_PASSWORD
+#   cp .env.example .env   # fill in POSTGRES_PASSWORD (and the WORKOS_* block to serve logins)
 #   docker compose up --build
 #
 # Compose reads .env from this directory automatically. Never commit the real .env.
@@ -51,8 +51,18 @@ services:
       NODE_ENV: production
       PORT: 3000
       DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (minimum 32 characters)}
-      STEP_UP_SECRET: ${STEP_UP_SECRET:?STEP_UP_SECRET is required (minimum 32 characters)}
+      # Identity is OPTIONAL here: unset means the /auth surface does not serve and
+      # the stack still boots for schema/API work. Set IDENTITY_PROVIDER=workos and
+      # the rest to exercise real logins; loadConfig then requires every one of them.
+      IDENTITY_PROVIDER: ${IDENTITY_PROVIDER:-}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_API_KEY: ${WORKOS_API_KEY:-}
+      WORKOS_ISSUER: ${WORKOS_ISSUER:-}
+      WORKOS_JWKS_URI: ${WORKOS_JWKS_URI:-}
+      WORKOS_REDIRECT_URI: ${WORKOS_REDIRECT_URI:-}
+      WORKOS_LOGOUT_REDIRECT_URI: ${WORKOS_LOGOUT_REDIRECT_URI:-}
+      WORKOS_COOKIE_PASSWORD: ${WORKOS_COOKIE_PASSWORD:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
