@@ -14,3 +14,5 @@ export * from './user-link';
 export * from './session';
 export * from './policy';
 export * from './actions';
+export * from './reauthentication';
+export * from './support-access';
