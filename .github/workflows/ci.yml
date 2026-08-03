@@ -47,9 +47,6 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Generate test-only secrets (runtime, masked — never tracked text)
-        run: |
-
       - name: Locked install
         run: npm ci
 
@@ -170,9 +167,6 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Generate test-only secrets (runtime, masked — never tracked text)
-        run: |
 
       - name: Locked install
         run: npm ci
