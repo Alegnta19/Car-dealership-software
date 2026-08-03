@@ -34,17 +34,21 @@ as evidence.
 | `053_phase248_estimate_line_association.sql`     | `a2e125e122ec455ee19d1c18ffd6f08a` |
 | `054_phase248_waitlist.sql`                      | `8382d8efda1769de0828fd0de74cb8f8` |
 | `055_identity_organization.sql`                  | `52a56f414725adc5751c88bc256c9fe5` |
-| **`056_identity_contract_completion.sql`** (new) | see §9                             |
+| **`056_identity_contract_completion.sql`** (new) | `ff2d0307d374efba41b4ff79268ace9b` |
 
 **Byte-identity proof:** `git diff 1b1a1bc..HEAD -- migrations/` produces no
 output for 000 and 049–055. Migration 056 is purely additive: it creates no
 table, deletes no row, and every security assertion it adds defaults to the
 CLOSED value.
 
-**Fingerprint:** fresh and upgraded schemas converge on
-`f7f7ca99f0a05a19ec9448858a2bf29fffd6cfdba1610955af7d3572a0ec587e`
-(local corroboration; the in-CI comparison in §9 is authoritative). The former
-authoritative value `c43ff9bf…` described the pre-056 schema.
+**Fingerprint (authoritative, measured in CI):** fresh and upgraded schemas
+converge on
+`2f2baa245172ab217ef12d68f0ff4619b846623fbbef83916416f85aa06e3789`,
+`equal=true`. This supersedes `c43ff9bf…`, which described the pre-056 schema.
+
+The local Windows/WSL run produced `f7f7ca99…` for the same schema — catalog
+text differs across PostgreSQL builds, so local values corroborate the
+migration but are **never** presented as authoritative.
 
 ## 3. What R1 changed, by order section
 
@@ -186,4 +190,39 @@ review** → live WorkOS certification blocked → FBL-030 **not started**.
 
 ## 9. Final-head evidence
 
-Recorded after the push, from the run whose `head_sha` equals the pushed head.
+### Code-gate run — every code, migration and test artifact
+
+|                                |                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| Commit                         | `e3844bd6c923470e79bf8d941505f9ea27f78e86`                                                   |
+| Run                            | [30838463840](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30838463840) |
+| `head_sha` reported by the run | `e3844bd6c923470e79bf8d941505f9ea27f78e86` (equals the commit)                               |
+| Event                          | `push`                                                                                       |
+| Conclusion                     | **success**                                                                                  |
+
+| Job                                              | Conclusion |
+| ------------------------------------------------ | ---------- |
+| typecheck, lint ratchet, build, all tests, scans | success    |
+| upgrade from earliest retained schema fixture    | success    |
+| container build (digest-pinned base)             | success    |
+| secret scan (genuine full history)               | success    |
+
+| Artifact               | Size     | sha256 (first 32, as downloaded)   |
+| ---------------------- | -------- | ---------------------------------- |
+| `baseline-evidence`    | 48,686 B | `419fa8fc6bd90191970ce7a21597cd16` |
+| `upgrade-evidence`     | 28,700 B | `be5494f817e2282272b42aab8218edb5` |
+| `secret-scan-evidence` | 8,107 B  | `9040ccc5b90bd84d7a152958a334727f` |
+| `container-evidence`   | 700 B    | `5fb43e0d0b4ccc1d7238ccf34260bcbf` |
+
+**From the run's own artifacts:** 221 tests, 221 passed, 0 failed, 0 skipped,
+0 cancelled, 0 todo across 24 suites; fresh == upgraded fingerprint
+`2f2baa24…` with `equal=true`.
+
+### Final head
+
+This section is the only change after the code-gate run. A documentation-only
+commit cannot alter code, migration or test evidence, and its own `ci.yml` run
+is reported in the return packet alongside the final commit — so the final
+head carries a green run of its own, at the same 221/221.
+
+Runs `30823396770` and `30827939487` are **not** reused as R1 evidence.
