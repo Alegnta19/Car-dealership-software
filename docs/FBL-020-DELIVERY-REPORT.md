@@ -1,207 +1,189 @@
-# FBL-020 — Identity and Organization v1: Delivery Report
+# FBL-020 — Identity and Organization v1: Delivery Report (R1)
 
-**Status: CODE COMPLETE — LIVE CERTIFICATION PENDING.**
-Gate A (code + deterministic CI) is closed. Gate B (live WorkOS certification)
-is **not** attempted: no live WorkOS credentials exist in this environment.
-FBL-030 has not been started.
+This report supersedes every earlier version. The previous one was rejected as
+non-authoritative: it cited an older CI run, reported 204 tests, and referenced
+a section that did not exist. Its evidence is discarded, not amended.
 
-|                              |                                                                                                                         |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Base (FBL-010 accepted head) | `7cb1044`                                                                                                               |
-| Delivered head               | see §9 (FBL-020-R0 correction wave)                                                                                     |
-| Commits                      | 11                                                                                                                      |
-| Diff                         | 102 files, +13,543 / −2,814                                                                                             |
-| CI run                       | [30823396770](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30823396770) — **conclusion `success`** |
+**Status: FBL-020 CODE COMPLETE — LIVE CERTIFICATION PENDING.**
+Gate A (code + deterministic CI) is presented for review at the final-head run
+recorded in §9. Gate B (live WorkOS certification) is **not** attempted: no
+live WorkOS credentials exist in this environment. **FBL-030 has not been
+started.**
 
-## 1. CI evidence (the run's own conclusion, per job)
+## 1. Final head and exact CI run
 
-| Job                                              | Conclusion |
-| ------------------------------------------------ | ---------- |
-| typecheck, lint ratchet, build, all tests, scans | success    |
-| upgrade from earliest retained schema fixture    | success    |
-| container build (digest-pinned base)             | success    |
-| secret scan (genuine full history)               | success    |
+|                               |                                               |
+| ----------------------------- | --------------------------------------------- |
+| Base head (R1 order)          | `1b1a1bcbcefdd7302e452159af54faaa7f68753f`    |
+| Final commit                  | see §9                                        |
+| `HEAD` == `origin/main`       | see §9                                        |
+| Exact final-head `ci.yml` run | see §9 (id, URL, event, head SHA, conclusion) |
 
-From the run's own artifacts:
+Runs `30823396770` and `30827939487` are **not** the R1 run and are not reused
+as evidence.
 
-- **Tests in CI: 204 passed / 0 failed / 0 skipped / 0 cancelled** (22 suites).
-- **Schema fingerprint equality, measured in CI** (the only authoritative
-  comparison):
-  `fresh = upgraded = c43ff9bfbdbdcd730bc63b89ac669dc38f1dbf3cb8be5c36cfcfc823c8fe1859`,
-  `equal=true`, 40 tables (26 pre-existing + 14 new).
-  **This supersedes the previous authoritative fingerprint
-  `40420288…`**, which described the pre-055 schema.
-- **Backfill reconciliation in CI**: legacy tenant parity complete, every
-  tenant `pending_configuration`, rooftop parity complete
-  (`rooftop_id = legacy location_id`), ancestry intact, and all nine identity
-  tables (`user_links`, `identity_sessions`, `role_bindings`,
-  `identity_provider_connections`, `policy_decisions`,
-  `reauthentication_transactions`, `reauthentication_grants`,
-  `support_access_requests`, `support_access_sessions`) **empty** — the
-  migration invented no identities.
-- Legacy seed rows survived the upgrade; both NOT VALID constraints remain
-  NOT VALID.
-- Migration idempotence: second run `applied=0`.
-- `npm audit`: 0 vulnerabilities at every severity.
-- Toolchain: node `v20.20.2`, npm `10.8.2`, tsc `5.9.3`, eslint `10.8.0`,
-  prettier `3.9.6`, postgres image digest-pinned.
+## 2. Migrations
 
-## 2. Independent verification outside CI
+| File                                             | sha256 (first 32)                  |
+| ------------------------------------------------ | ---------------------------------- |
+| `000_platform_core.sql`                          | `a3e0f4ca4990a313cabdefa8b26ca762` |
+| `049_phase248_service_cockpit.sql`               | `523ee2e236b427e55fdd06037f350ac4` |
+| `050_phase248_hardening.sql`                     | `ec3b02e23f10a1be2236579118ee1cc4` |
+| `051_phase248_metrics_support.sql`               | `e79d9a9fd56b76134ab6823fd8f7c83a` |
+| `052_phase248_authorization_binding.sql`         | `94179a31e1f96185af52ecc37bc93bb9` |
+| `053_phase248_estimate_line_association.sql`     | `a2e125e122ec455ee19d1c18ffd6f08a` |
+| `054_phase248_waitlist.sql`                      | `8382d8efda1769de0828fd0de74cb8f8` |
+| `055_identity_organization.sql`                  | `52a56f414725adc5751c88bc256c9fe5` |
+| **`056_identity_contract_completion.sql`** (new) | see §9                             |
 
-| Gate                                                            | Windows   | Linux / Node 20.20.2 (WSL parity, real PostgreSQL 16) |
-| --------------------------------------------------------------- | --------- | ----------------------------------------------------- |
-| Full battery (after FBL-020-R0)                                 | 216 / 216 | **216 / 216**                                         |
-| Build (`tsc -b`)                                                | 0         | 0                                                     |
-| Architecture checks (dependency, app-SQL, manifest, env-access) | 4 / 4 OK  | 4 / 4 OK                                              |
-| Quality ratchet                                                 | OK        | OK                                                    |
+**Byte-identity proof:** `git diff 1b1a1bc..HEAD -- migrations/` produces no
+output for 000 and 049–055. Migration 056 is purely additive: it creates no
+table, deletes no row, and every security assertion it adds defaults to the
+CLOSED value.
 
-Local fresh-vs-upgraded fingerprints also matched (`cda982e3…` on the local
-Windows PostgreSQL build) — recorded as corroboration only; catalog text
-differs across PostgreSQL builds, so **only the in-CI comparison is
-authoritative**.
+**Fingerprint:** fresh and upgraded schemas converge on
+`f7f7ca99f0a05a19ec9448858a2bf29fffd6cfdba1610955af7d3572a0ec587e`
+(local corroboration; the in-CI comparison in §9 is authoritative). The former
+authoritative value `c43ff9bf…` described the pre-056 schema.
 
-## 3. Quality baselines — TIGHTENED at closure
+## 3. What R1 changed, by order section
 
-| Dimension  | Ceiling (order) | Before | Now     |
-| ---------- | --------------- | ------ | ------- |
-| tsc-strict | ≤ 59            | 59     | **53**  |
-| eslint     | ≤ 136           | 136    | **125** |
-| format     | ≤ 23            | 23     | **1**   |
+### B — UserLink lifecycle
 
-Never raised. The reduction comes from deleting `platform/src/jwt.ts`,
-`fixed-ops/src/security/step-up.ts` and `tests/step-up.test.ts`, plus
-formatting the new code to zero debt.
+Login no longer activates anything.
 
-## 4. What was built (by order requirement)
+| Situation                      | Result                                                     |
+| ------------------------------ | ---------------------------------------------------------- |
+| Unknown provider identity      | ONE idempotent **pending** link created; no session        |
+| Pending link, subsequent login | bounded identifier refresh only; still pending; no session |
+| Deactivated link               | refused; no session; audited                               |
+| Activated link                 | session issued                                             |
 
-1. **OIDC verification** (`packages/identity-access/src/oidc/token-verifier.ts`,
-   jose): configured issuer/audience/JWKS only; asymmetric allowlist that
-   **refuses to construct** with `HS*` or `none`; `kid` resolved solely through
-   the configured JWKS; `exp`/`iat`/`sub`/`sid`/`auth_time` required; bounded
-   skew; cached JWKS with cooldown-bounded single refresh on unknown `kid` and
-   concurrent-refresh dedup; rotation without restart; fail closed on outage.
-2. **Provider roles are display hints only.** `VerifiedAccessToken` exposes
-   `roleHints` and nothing authorization reads. The policy engine has no
-   parameter through which token content could reach a decision.
-3. **Central policy engine** (`policy.ts`): deny by default; RoleBindings read
-   from the database on **every** decision (revocation effective on the next
-   request); scope covers descendants; cross-tenant denied before any lookup;
-   `platform_admin` has no implicit dealership access; **every** decision writes
-   an append-only `policy_decisions` row (ids/codes/versions, `details` always
-   `{}`).
-4. **Routes declare actions, not roles.** All 44 `/api/service` routes now use
-   `requireAction('<catalog action>')`. Fixed Ops publishes the 44-action
-   service catalog; identity-access publishes the 10-action administration
-   catalog; the scope-resolver port is implemented in Fixed Ops and composed in
-   the API. The reverse dependency (identity-access → fixed-ops) remains
-   prohibited and is enforced by dependency-cruiser.
-5. **Non-enumeration**: resource-scoped denials render the existing not-found
-   envelope. Cross-tenant and nonexistent are asserted to produce the identical
-   response.
-6. **Reauthentication replaces local step-up**: `max_age=0`, single-use
-   transactions, `auth_time`-after-start proof with bounded skew (a stale
-   `auth_time` marks the transaction failed and mints nothing), grants stored
-   only as SHA-256 digests, bound to tenant + user + action + resource, atomic
-   consumption on the caller's transaction (rollback releases the grant, replay
-   fails closed). `platform/src/jwt.ts` and `fixed-ops/src/security/step-up.ts`
-   are **deleted**; the external error code `step_up_required` is preserved.
-7. **Support access, never impersonation**: the platform-support person remains
-   the actor everywhere; requester ≠ approver is a database CHECK; ≤ 60 minutes
-   is a database CHECK; revocation is effective on the next decision; the
-   indicator surfaces via `x-support-access` on every response served under it,
-   via `GET /auth/session`, and via the `support_session_id` on each policy
-   decision; reason text never leaves the request row.
-8. **Six `/auth` routes** outside `/api/service` with Code+PKCE, single-use
-   state, sealed AES-256-GCM transaction cookies, relative-path return
-   allowlist, HttpOnly/SameSite=Lax/host-only cookies (Secure in production),
-   CSRF on every non-safe method for cookie auth, and **bearer + cookie
-   rejected as ambiguous**.
-9. **UserLink** activates with zero roles; the bootstrap command is dry-run by
-   default, idempotent, audited, refuses ambiguous mappings, prints no
-   credentials.
-10. **Migration 055**: one forward-only migration, 14 tables, tenant-qualified
-    uniqueness from the first migration, composite `(tenant_id, parent_id)`
-    foreign keys, append-only trigger on policy evidence, catalog-driven
-    additive backfill that fails loudly if one `location_id` spans two tenants.
-11. **Configuration**: `IDENTITY_PROVIDER=workos|disabled`; every `WORKOS_*` /
-    `OIDC_*` variable required and validated when workos is selected; HTTPS
-    enforced in production; **no WorkOS credential is needed for CI** (the
-    deterministic local issuer stands in); `JWT_SECRET`/`STEP_UP_SECRET` removed
-    from the config surface, `.env.example`, compose and CI.
-12. **Preserved**: 44 `/api/service` routes, envelopes, error codes. The only
-    changes are the two authorized ones (HS256 removal, documented
-    non-enumeration) plus one new code `csrf_required`, documented in the §14
-    appendix.
-13. **SAML/SCIM are interfaces only**: every operation throws
-    `FederationNotEnabled`, the SCIM port exposes no role-granting operation,
-    and migration 055's provider CHECK refuses `saml`/`scim`/`okta` rows —
-    there is no configuration or code path that enables them.
+Activation is `activateUserLink`: explicit, attributable
+(`activated_by_user_link_id`), version-incrementing, and it creates **no**
+RoleBinding. Bootstrap remains dry-run-by-default, refuses ambiguous mappings,
+and prints no credentials. Pending, deactivated and unknown are externally
+indistinguishable.
 
-## 5. Defects we found in our own delivery, and fixed (FBL-020-R0)
+### C — Provider and session revocation
 
-The first pass was pushed and CI-green, then put through a seven-dimension
-adversarial review in which each finding had to survive an independent skeptic.
-**28 findings were raised, 10 were refuted, 18 were confirmed** (13 distinct
-defects after deduplication). All are fixed here. They are listed in full
-because a green CI run did not catch a single one of them, and that is the
-useful thing to know.
+Every bearer **and** cookie request re-checks: tenant, provider connection,
+**issuer agreement**, user link, local session — all active and effective.
+Sessions record the connection they were established through. Five independent
+kill switches deny the very next request with the same otherwise-valid
+credential, with no restart and no expiry wait:
 
-### Found by the end-to-end journey while writing it
+| Disable                                 | Result |
+| --------------------------------------- | ------ |
+| provider connection `status='disabled'` | 401    |
+| provider connection window expired      | 401    |
+| tenant suspended                        | 401    |
+| user link window expired                | 401    |
+| connection issuer ≠ configured issuer   | 401    |
 
-- `service.ro.transition` demanded a reauthentication grant for the
-  `authorized` / `canceled` transitions while the action catalog did not mark
-  it `sensitive`, so `POST /auth/reauth/start` refused to open a transaction
-  for the very action that needed one — a dead end reachable by any advisor.
+### D — OIDC claim completion
 
-### Found by the adversarial review
+A cryptographically random nonce is minted for login **and** reauthentication,
+sealed in the transaction cookie, sent on the authorization request, required
+back, and compared against that same single-use transaction. It is distinct
+from `state`, the PKCE verifier and every internal grant identifier, and it is
+never logged. Missing, mismatched, near-miss and replayed all fail closed.
 
-| #   | Severity | Defect                                                                                                                                                                                                                                                                                                                                                                                                                       | Fix                                                                                                                                                                                                                                                                              |
-| --- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **HIGH** | **Privilege escalation.** `covers()` ignored binding scope entirely for every resource-less action, so a binding scoped to ONE rooftop authorized 13 of the 44 service actions across the WHOLE tenant (create appointments/ROs anywhere, dispatch onto any rooftop's work, read every queue). The same file already applied the correct, narrower rule to support sessions.                                                 | Resource-less actions now carry a **scope hint** (the request's `location_id`, which migration 055 made the rooftop id). A hint is resolved and must be covered like a resource; with no hint the action is genuinely tenant-wide and **only a tenant-scope binding covers it**. |
-| 2   | **HIGH** | **Reauthentication could never complete in production.** The `max_age=0` authorization URL carried the LOGIN `redirect_uri`, so the provider returned the browser to `/auth/callback`, which reads a different transaction cookie and 401s. `GET /auth/reauth/callback` had no reachable caller, no grant could ever be minted, and every gated transition and staff-attested authorization would have been permanently 403. | The port takes a per-flow `redirectUri`; a new required `WORKOS_REAUTH_REDIRECT_URI` is configured, documented and registered separately in WorkOS.                                                                                                                              |
-| 3   | **HIGH** | **Archived organization nodes still authorized.** `resolveAncestry` filtered on ids only — no status, no effective window — so archiving a rooftop revoked nothing, and a still-`pending_configuration` backfilled node authorized immediately, contradicting migration 055's own header. `isEffectiveAt()` had zero production callers.                                                                                     | Every level of the chain must now be `active` and inside its effective window; one retired ancestor breaks the chain and the engine denies.                                                                                                                                      |
-| 4   | **HIGH** | The journey's "callback-equivalent" helper opened a **second** reauthentication transaction and completed that, so it proved nothing about the transaction the route actually opened.                                                                                                                                                                                                                                        | The journey now opens the **sealed cookie the route set**, extracts the real nonce, completes THAT transaction, and asserts exactly one transaction and one grant exist.                                                                                                         |
-| 5   | MEDIUM   | `platform_admin` was still an implicit superuser inside the legacy Fixed Ops guards (`hasAnyRole` short-circuited on it), and `rolesForUserLink` handed platform-scope roles into the dealership domain.                                                                                                                                                                                                                     | The short-circuit is removed and role lookup is tenant-scoped.                                                                                                                                                                                                                   |
-| 6   | MEDIUM   | A raw `x-request-id` header went straight into `policy_decisions`, whose CHECK requires 8–128 chars — a one-character header **500'd every gated request**, and arbitrary text (including PII) could be written into an append-only table.                                                                                                                                                                                   | The correlation id is screened with the same `SAFE_ID` pattern request-context uses; anything else is dropped.                                                                                                                                                                   |
-| 7   | MEDIUM   | `readCookie` called `decodeURIComponent` unguarded: `Cookie: dealer_session=%` produced an **unauthenticated 500 with a full stack log**, repeatable at will.                                                                                                                                                                                                                                                                | Malformed encoding is treated as a malformed credential — a neutral 401.                                                                                                                                                                                                         |
-| 8   | MEDIUM   | An empty-string `IDENTITY_PROVIDER` was a fatal config error, and `docker-compose.yml` always sets it to empty — the documented `docker compose up` quick start would **crash-loop**.                                                                                                                                                                                                                                        | `''` is treated as absent, exactly as every other variable in the file treats it.                                                                                                                                                                                                |
-| 9   | MEDIUM   | `README.md` still documented the deleted HS256 / `JWT_SECRET` model as current.                                                                                                                                                                                                                                                                                                                                              | Rewritten to the WorkOS model.                                                                                                                                                                                                                                                   |
-| 10  | MEDIUM   | Both runbooks instructed operators to grant roles through an administration path **that does not exist** — no route declares the `identity.*` actions.                                                                                                                                                                                                                                                                       | Both now state plainly that FBL-020 ships the actions and the engine but no HTTP admin surface, and give the direct SQL.                                                                                                                                                         |
-| 11  | LOW      | Three of the six `/auth` routes and the whole sealed-cookie primitive had **zero executable coverage** — deleting the state check or the AEAD tag would not have failed a test.                                                                                                                                                                                                                                              | New `tests/auth-surface.test.ts`: 8 tests covering login/callback/reauth-callback, open-redirect refusal, purpose separation, wrong-key and byte-flip tamper detection, malformed cookies, hostile request ids.                                                                  |
-| 12  | LOW      | The two HTTP tests that claimed to prove single-use grants were **vacuous** — one "replayed" onto an ungated transition and asserted success.                                                                                                                                                                                                                                                                                | Replaced with a real replay proof on the authorization-record path (the one gated path that repeats on the same resource).                                                                                                                                                       |
-| 13  | LOW      | `docker-compose.yml`'s header asserted a secrets model that no longer exists.                                                                                                                                                                                                                                                                                                                                                | Corrected.                                                                                                                                                                                                                                                                       |
+`org_id` is now required **inside the verifier** — bounded, non-empty — so the
+rejection cannot be forgotten by a later caller. The former positive test is
+reversed into three negatives (absent, empty, over-long).
 
-Regression tests were added for defects 1, 2, 3, 4, 6, 7, 11 and 12, so each
-would now fail loudly rather than silently.
+### E — MFA and high assurance
 
-**Why this matters for the review:** three of these (1, 2, 3) are the kind of
-defect that a passing test suite actively conceals — the tests asserted the
-right things about the wrong paths. The suite that shipped the first pass was
-204/204 green.
+| Assurance              | Requires                                                                 |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `fresh_only`           | fresh provider authentication (`max_age=0` + `auth_time`)                |
+| `fresh_and_mfa_policy` | that **and** an active connection certifying the organization MFA policy |
 
-## 6. Documentation delivered
+Uncertified, false, expired or inactive certification **fails closed** and
+mints nothing. No AMR value is fabricated and no authentication method is
+claimed. Classification is recorded on the grant and in policy evidence.
 
-- `docs/adr/ADR-006-workos-authkit-identity.md`, `ADR-007-organization-hierarchy-policy.md`, `ADR-008-support-access.md`
-- `docs/architecture/THREAT-MODEL-DELTA-FBL-020.md`
-- `docs/identity/DATA-DICTIONARY.md`, `ROLE-ACTION-SCOPE-MATRIX.md`, `AUTH-FLOWS.md`, `MIGRATION-055-NOTES.md`, `KNOWN-LIMITATIONS.md`
-- `docs/runbooks/WORKOS-OPERATOR-RUNBOOK.md`, `TENANT-BOOTSTRAP-RUNBOOK.md`
+### F — Exact typed-resource RoleBindings
 
-## 7. What this delivery does NOT prove
+`scope_level='resource'` matches on tenant + resource type + resource id, and
+nothing else — no descendants, no siblings, never a tenant-wide action. Four
+database CHECKs refuse ambiguous or incomplete scope.
 
-Stated plainly, and expanded in `docs/identity/KNOWN-LIMITATIONS.md`:
+### G — Complete policy evidence
+
+Every stored decision carries matched binding ids with their authorization
+versions, freshness and MFA classification, a correlation id distinct from the
+request id, and the support request/session when applicable. A **deny may
+never claim a matched binding** — enforced by CHECK, not convention. Evidence
+remains append-only and free of names, emails, tokens, bodies and support
+reasons.
+
+### H — Data-dictionary reconciliation
+
+All 14 tables were audited against the field rules. The five organization
+tables gained the missing `created_by` / `updated_by` / `authorization_version`.
+Six records legitimately omit some fields, and each omission is **documented
+with its reason** in `docs/identity/DATA-DICTIONARY.md` §5 — for example,
+`policy_decisions` is append-only immutable evidence, so it has no status to
+change, no window to expire, no updater and no version. No hard deletion of
+organization, identity, role, session, reauthentication, policy or
+support-access history exists anywhere.
+
+## 4. Defects introduced by this wave and caught before submission
+
+Stated because they are useful signal, not because they were required:
+
+1. `deactivateUserLink` did not stamp `deactivated_at`, which its own new
+   CHECK requires.
+2. The bootstrap command did not record an issuer, which section C makes
+   mandatory.
+3. An empty-string issuer placeholder in the test kit broke 50 unrelated
+   tests — a fixture asserting a value the schema forbids.
+4. `policy_decisions.scope_level` was not widened alongside `role_bindings`,
+   so evidence could not name the level it matched.
+5. My own revocation test wrote an invalid effective window
+   (`effective_to` before `effective_from`).
+
+## 5. Verification
+
+| Gate                | Windows      | Linux / Node 20.20.2 | CI     |
+| ------------------- | ------------ | -------------------- | ------ |
+| Full battery        | 221 / 221    | see §9               | see §9 |
+| Build               | 0            | see §9               | see §9 |
+| Architecture checks | 4 / 4        | see §9               | see §9 |
+| Quality ratchet     | 53 / 125 / 1 | see §9               | see §9 |
+
+Zero failures, skips, cancellations or todos. Ceilings remain **59 / 136 / 23**
+and were not raised; the recorded baselines are tighter.
+
+**Raw-output sentinel scan:** 0 matches for token, nonce, cookie,
+authorization-code, credential and PAT patterns across the full raw test log.
+
+## 6. Change surface
+
+Confined to the authorized areas. `git diff 1b1a1bc..HEAD` touches **nothing**
+in `packages/fixed-ops`, `apps/api/src/routes/service-cockpit.ts`,
+`quality-baselines.json` or `.github/` — Fixed Ops business behavior, the
+44-route surface, the quality ceilings and CI are untouched.
+
+## 7. What this delivery still does NOT prove
 
 - **No live WorkOS behaviour is exercised.** Every verifier property is proven
-  against a deterministic local RSA issuer with a counted JWKS endpoint. Real
-  AuthKit redirect parameters, real token claim shapes, real `max_age=0`
-  semantics and real organization membership are untested. That is Gate B.
-- The WorkOS SDK adapter compiles and is architecture-tested for confinement,
-  but no test invokes the real SDK.
-- Audit rows are transactional; **durable delivery is not claimed** (outbox is
-  FBL-040).
-- RLS remains FBL-030. `step_up_token_uses` (migration 050) is now dead weight;
+  against a deterministic local RSA issuer. Real AuthKit parameters, real claim
+  shapes, real `max_age=0` semantics, real organization membership and the
+  **actual MFA-required organization policy** are untested. That is Gate B.
+- The WorkOS SDK adapter compiles and is confinement-tested; no test invokes
+  the real SDK.
+- Audit rows are transactional; durable delivery is **not** claimed (FBL-040).
+- RLS remains FBL-030. `step_up_token_uses` (migration 050) is dead weight;
   dropping it is a future migration.
 
 ## 8. Position
 
-FBL-000 closed → FBL-010 closed → **FBL-020 code complete, awaiting review and
-live certification** → FBL-030 blocked, not started.
+FBL-000 closed → FBL-010 closed → **FBL-020-R1 submitted for code-gate
+review** → live WorkOS certification blocked → FBL-030 **not started**.
+
+## 9. Final-head evidence
+
+Recorded after the push, from the run whose `head_sha` equals the pushed head.
