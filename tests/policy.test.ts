@@ -199,6 +199,128 @@ describe(
       assert.equal(denied.resourceVisible, false);
     });
 
+    test('a sub-tenant binding does NOT widen to tenant-wide reach on resource-less actions', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      // ONE rooftop-scoped binding — the narrowest thing an advisor can hold
+      await bind(world.tenantId, user, 'service_advisor', 'rooftop', world.rooftopA);
+      const actor = {
+        userLinkId: user,
+        actorScope: 'dealership' as const,
+        tenantId: world.tenantId,
+      };
+
+      // a resource-less action naming NO location reaches the whole tenant:
+      // a rooftop binding must not authorize it (this was the escalation)
+      const tenantWide = await engine.decide({ actor, action: 'service.ro.create' });
+      assert.equal(tenantWide.decision, 'deny');
+      assert.equal(tenantWide.reasonCode, 'NO_MATCHING_BINDING');
+
+      // naming THEIR rooftop is allowed…
+      const own = await engine.decide({
+        actor,
+        action: 'service.ro.create',
+        scopeHint: { level: 'rooftop', id: world.rooftopA },
+      });
+      assert.equal(own.decision, 'allow');
+
+      // …and naming the SIBLING rooftop is denied
+      const sibling = await engine.decide({
+        actor,
+        action: 'service.ro.create',
+        scopeHint: { level: 'rooftop', id: world.rooftopB },
+      });
+      assert.equal(sibling.decision, 'deny');
+      assert.equal(sibling.reasonCode, 'NO_MATCHING_BINDING');
+
+      // a scope hint that does not resolve in this tenant stays invisible
+      const foreign = await engine.decide({
+        actor,
+        action: 'service.ro.create',
+        scopeHint: { level: 'rooftop', id: randomUUID() },
+      });
+      assert.equal(foreign.decision, 'deny');
+      assert.equal(foreign.reasonCode, 'SCOPE_NOT_FOUND');
+      assert.equal(foreign.resourceVisible, false);
+
+      // a TENANT-scope binding still reaches tenant-wide actions
+      const boss = await makeUser(world.tenantId);
+      await bind(world.tenantId, boss, 'service_advisor', 'tenant', world.tenantId);
+      const bossDecision = await engine.decide({
+        actor: { userLinkId: boss, actorScope: 'dealership', tenantId: world.tenantId },
+        action: 'service.ro.create',
+      });
+      assert.equal(bossDecision.decision, 'allow');
+    });
+
+    test('archiving an organization node revokes every binding scoped to it', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      await bind(world.tenantId, user, 'service_advisor', 'rooftop', world.rooftopA);
+      const actor = {
+        userLinkId: user,
+        actorScope: 'dealership' as const,
+        tenantId: world.tenantId,
+      };
+      const input = {
+        actor,
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roA },
+      };
+      assert.equal((await engine.decide(input)).decision, 'allow');
+
+      // retire the rooftop the documented way — the binding row is untouched
+      await query(`UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`, [
+        world.rooftopA,
+      ]);
+      const afterArchive = await engine.decide(input);
+      assert.equal(afterArchive.decision, 'deny', 'an archived rooftop must authorize nothing');
+      assert.equal(afterArchive.resourceVisible, false);
+      const stillActive = await query(
+        `SELECT COUNT(*)::int AS n FROM role_bindings WHERE user_link_id = $1 AND status = 'active'`,
+        [user],
+      );
+      assert.equal(
+        Number((stillActive.rows[0] as { n: number }).n),
+        1,
+        'the binding itself was not touched',
+      );
+    });
+
+    test('an ANCESTOR that is not effective breaks the chain', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      await bind(world.tenantId, user, 'service_advisor', 'tenant', world.tenantId);
+      const input = {
+        actor: { userLinkId: user, actorScope: 'dealership' as const, tenantId: world.tenantId },
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roA },
+      };
+      assert.equal((await engine.decide(input)).decision, 'allow');
+      // deactivate the LEGAL ENTITY above the rooftop
+      await query(`UPDATE legal_entities SET status = 'inactive' WHERE tenant_id = $1`, [
+        world.tenantId,
+      ]);
+      assert.equal((await engine.decide(input)).decision, 'deny');
+    });
+
+    test('a still-pending backfilled rooftop authorizes nothing until activated', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      await bind(world.tenantId, user, 'service_advisor', 'tenant', world.tenantId);
+      // migration 055 writes backfilled rooftops as pending_configuration
+      await query(`UPDATE rooftops SET status = 'pending_configuration' WHERE rooftop_id = $1`, [
+        world.rooftopA,
+      ]);
+      const decision = await engine.decide({
+        actor: { userLinkId: user, actorScope: 'dealership', tenantId: world.tenantId },
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roA },
+      });
+      assert.equal(decision.decision, 'deny');
+      assert.equal(decision.resourceVisible, false);
+    });
+
     test('revocation denies the VERY NEXT decision — no token to outlive it', async () => {
       const world = await buildWorld();
       const user = await makeUser(world.tenantId);

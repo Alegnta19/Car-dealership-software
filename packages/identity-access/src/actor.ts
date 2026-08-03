@@ -35,10 +35,25 @@ export async function findUserLinkByProviderIdentity(
  * authorization decision still goes through the policy engine, which reads
  * the bindings itself.
  */
-export async function rolesForUserLink(userLinkId: string): Promise<string[]> {
-  const result = await query(
-    `SELECT DISTINCT role FROM role_bindings WHERE user_link_id = $1 AND status = 'active' ORDER BY role`,
-    [userLinkId],
-  );
+export async function rolesForUserLink(
+  userLinkId: string,
+  tenantId?: string | null,
+): Promise<string[]> {
+  // Scoped to ONE tenant when the caller names it: a platform-scope binding
+  // (tenant_id IS NULL) must never surface as a dealership role, or the
+  // legacy domain guards would treat a platform actor as staff.
+  const result =
+    tenantId === undefined
+      ? await query(
+          `SELECT DISTINCT role FROM role_bindings
+            WHERE user_link_id = $1 AND status = 'active' ORDER BY role`,
+          [userLinkId],
+        )
+      : await query(
+          `SELECT DISTINCT role FROM role_bindings
+            WHERE user_link_id = $1 AND status = 'active'
+              AND tenant_id IS NOT DISTINCT FROM $2 ORDER BY role`,
+          [userLinkId, tenantId],
+        );
   return (result.rows as Array<{ role: string }>).map((r) => r.role);
 }

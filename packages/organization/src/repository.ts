@@ -223,10 +223,25 @@ export async function setUnitStatus(
 }
 
 /**
+ * A node authorizes only while it is EFFECTIVE: status 'active' and now
+ * inside [effective_from, effective_to). Archiving a rooftop therefore
+ * revokes every binding scoped to it, and a backfilled
+ * 'pending_configuration' node authorizes nothing until it is deliberately
+ * activated — which is exactly what migration 055's header promises.
+ */
+const EFFECTIVE = (alias: string): string =>
+  `${alias}.status = 'active' AND ${alias}.effective_from <= NOW() ` +
+  `AND (${alias}.effective_to IS NULL OR ${alias}.effective_to > NOW())`;
+
+/**
  * Resolves the full ancestor chain of a node, tenant first, node last —
  * the shape the policy engine consumes for descendant-covering scope checks.
- * Returns null when the node does not exist IN THIS TENANT (a cross-tenant id
- * is indistinguishable from a nonexistent one, by design).
+ * EVERY level of the chain must be effective; one archived ancestor breaks
+ * the chain and the policy engine denies.
+ *
+ * Returns null when the node does not exist IN THIS TENANT, or is not
+ * effective (a cross-tenant id, a nonexistent one and a retired one are
+ * deliberately indistinguishable).
  */
 export async function resolveAncestry(
   tenantId: string,
@@ -235,12 +250,16 @@ export async function resolveAncestry(
   switch (ref.level) {
     case 'tenant': {
       if (ref.id !== tenantId) return null;
-      const t = await query(`SELECT tenant_id FROM tenants WHERE tenant_id = $1`, [tenantId]);
+      const t = await query(
+        `SELECT tenant_id FROM tenants WHERE tenant_id = $1 AND ${EFFECTIVE('tenants')}`,
+        [tenantId],
+      );
       return t.rows.length > 0 ? [{ level: 'tenant', id: tenantId }] : null;
     }
     case 'dealer_group': {
       const r = await query(
-        `SELECT dealer_group_id FROM dealer_groups WHERE tenant_id = $1 AND dealer_group_id = $2`,
+        `SELECT dealer_group_id FROM dealer_groups
+          WHERE tenant_id = $1 AND dealer_group_id = $2 AND ${EFFECTIVE('dealer_groups')}`,
         [tenantId, ref.id],
       );
       if (r.rows.length === 0) return null;
@@ -251,7 +270,11 @@ export async function resolveAncestry(
     }
     case 'legal_entity': {
       const r = await query(
-        `SELECT dealer_group_id FROM legal_entities WHERE tenant_id = $1 AND legal_entity_id = $2`,
+        `SELECT le.dealer_group_id FROM legal_entities le
+           JOIN dealer_groups g
+             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
+          WHERE le.tenant_id = $1 AND le.legal_entity_id = $2
+            AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
         [tenantId, ref.id],
       );
       if (r.rows.length === 0) return null;
@@ -267,7 +290,10 @@ export async function resolveAncestry(
            FROM rooftops rt
            JOIN legal_entities le
              ON le.tenant_id = rt.tenant_id AND le.legal_entity_id = rt.legal_entity_id
-          WHERE rt.tenant_id = $1 AND rt.rooftop_id = $2`,
+           JOIN dealer_groups g
+             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
+          WHERE rt.tenant_id = $1 AND rt.rooftop_id = $2
+            AND ${EFFECTIVE('rt')} AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
         [tenantId, ref.id],
       );
       if (r.rows.length === 0) return null;
@@ -286,7 +312,10 @@ export async function resolveAncestry(
            JOIN rooftops rt ON rt.tenant_id = d.tenant_id AND rt.rooftop_id = d.rooftop_id
            JOIN legal_entities le
              ON le.tenant_id = rt.tenant_id AND le.legal_entity_id = rt.legal_entity_id
-          WHERE d.tenant_id = $1 AND d.department_id = $2`,
+           JOIN dealer_groups g
+             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
+          WHERE d.tenant_id = $1 AND d.department_id = $2
+            AND ${EFFECTIVE('d')} AND ${EFFECTIVE('rt')} AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
         [tenantId, ref.id],
       );
       if (r.rows.length === 0) return null;

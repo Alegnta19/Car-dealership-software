@@ -14,6 +14,7 @@ const WORKOS = {
   WORKOS_ISSUER: 'https://auth.example.workos.com',
   WORKOS_JWKS_URI: 'https://auth.example.workos.com/oauth2/jwks',
   WORKOS_REDIRECT_URI: 'https://app.example.com/auth/callback',
+  WORKOS_REAUTH_REDIRECT_URI: 'https://app.example.com/auth/reauth/callback',
   WORKOS_LOGOUT_REDIRECT_URI: 'https://app.example.com/',
   WORKOS_COOKIE_PASSWORD: 'c'.repeat(40),
   OIDC_AUDIENCE: 'dealer-platform-api',
@@ -44,6 +45,7 @@ describe('identity configuration (FBL-020)', () => {
       'WORKOS_ISSUER',
       'WORKOS_JWKS_URI',
       'WORKOS_REDIRECT_URI',
+      'WORKOS_REAUTH_REDIRECT_URI',
       'WORKOS_LOGOUT_REDIRECT_URI',
       'WORKOS_COOKIE_PASSWORD',
       'OIDC_AUDIENCE',
@@ -70,6 +72,7 @@ describe('identity configuration (FBL-020)', () => {
       'WORKOS_ISSUER',
       'WORKOS_JWKS_URI',
       'WORKOS_REDIRECT_URI',
+      'WORKOS_REAUTH_REDIRECT_URI',
       'WORKOS_LOGOUT_REDIRECT_URI',
     ] as const) {
       const env = { ...WORKOS, NODE_ENV: 'production', [name]: 'http://plain.example.com/x' };

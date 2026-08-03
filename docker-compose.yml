@@ -1,9 +1,12 @@
 # Local/single-host deployment: postgres, a one-shot migration run, and the API.
 # Adapted from the origin platform's compose file with everything the repo has no code
 # for removed (redis, minio, scheduler, five worker pools) and its fail-open defaults
-# inverted: secrets here have NO fallback values. `${VAR:?...}` makes compose refuse to
-# start rather than boot with a well-known secret — and the server would refuse anyway
-# (src/server.ts asserts both secrets exist and are at least 32 characters).
+# inverted: POSTGRES_PASSWORD has NO fallback — `${VAR:?...}` makes compose refuse to
+# start rather than boot with a well-known secret.
+#
+# Identity (FBL-020) is OPTIONAL here: leaving the WORKOS_* block empty starts the
+# stack with the /auth surface disabled. Setting IDENTITY_PROVIDER=workos makes every
+# WORKOS_* / OIDC_* variable REQUIRED, and loadConfig refuses to start without them.
 #
 #   cp .env.example .env   # fill in POSTGRES_PASSWORD (and the WORKOS_* block to serve logins)
 #   docker compose up --build
@@ -60,6 +63,7 @@ services:
       WORKOS_ISSUER: ${WORKOS_ISSUER:-}
       WORKOS_JWKS_URI: ${WORKOS_JWKS_URI:-}
       WORKOS_REDIRECT_URI: ${WORKOS_REDIRECT_URI:-}
+      WORKOS_REAUTH_REDIRECT_URI: ${WORKOS_REAUTH_REDIRECT_URI:-}
       WORKOS_LOGOUT_REDIRECT_URI: ${WORKOS_LOGOUT_REDIRECT_URI:-}
       WORKOS_COOKIE_PASSWORD: ${WORKOS_COOKIE_PASSWORD:-}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}

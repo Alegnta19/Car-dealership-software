@@ -130,7 +130,17 @@ export function readCookie(req: Request, name: string): string | undefined {
   if (header === undefined) return undefined;
   for (const part of header.split(';')) {
     const [rawName, ...rest] = part.trim().split('=');
-    if (rawName === name) return decodeURIComponent(rest.join('='));
+    if (rawName === name) {
+      const raw = rest.join('=');
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        // Malformed percent-encoding is a malformed credential, not a server
+        // fault: return it undecoded so it fails the normal credential path
+        // (a neutral 401), never a 500 with a stack from an anonymous caller.
+        return raw;
+      }
+    }
   }
   return undefined;
 }
@@ -284,6 +294,22 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     }
   }
 
+  // A resource-less action names no existing row, but it usually names WHERE
+  // it lands: `location_id` is the legacy column that migration 055 made the
+  // rooftop id. Passing it as a scope hint keeps a rooftop-scoped binding
+  // working at its own rooftop while denying it the rest of the tenant. When
+  // no location is named the action reaches the whole tenant, and only a
+  // tenant-scope binding may authorize it (enforced in the policy engine).
+  let scopeHint: { level: 'rooftop'; id: string } | null = null;
+  if (def !== undefined && def.resourceType === null) {
+    const fromBody = (req.body as Record<string, unknown> | undefined)?.location_id;
+    const fromQuery = req.query?.location_id;
+    const named = typeof fromBody === 'string' ? fromBody : fromQuery;
+    if (typeof named === 'string' && isUuid(named)) {
+      scopeHint = { level: 'rooftop', id: named };
+    }
+  }
+
   const decision = await policyEngine().decide({
     actor: {
       userLinkId: identity.userLinkId,
@@ -293,7 +319,11 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     action,
     targetTenantId,
     resource,
-    requestId: typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'] : null,
+    scopeHint,
+    // The evidence row records the SANITIZED correlation id — the same one
+    // the response header echoes. A hostile header value must never reach an
+    // append-only table (nor violate its CHECK and 500 the request).
+    requestId: safeRequestId(req),
   });
 
   if (decision.decision !== 'allow') {
@@ -312,13 +342,26 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     res.setHeader('x-support-access', `active; support_session=${decision.supportSessionId}`);
   }
 
-  const roles = (await rolesForUserLink(identity.userLinkId)) as Role[];
+  // Roles bound in the TARGET tenant only: a platform binding must not leak
+  // into the dealership domain guards (it grants no dealership access).
+  const roles = (await rolesForUserLink(identity.userLinkId, targetTenantId)) as Role[];
   req.tenantContext = {
     tenantId: targetTenantId as string,
     userId: identity.userLinkId,
     roles,
   };
   bindRequestActor({ tenantId: targetTenantId as string, userId: identity.userLinkId, roles });
+}
+
+/**
+ * The correlation id, screened exactly as request-context screens it: a
+ * hostile or malformed `x-request-id` is dropped rather than propagated.
+ */
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
+
+function safeRequestId(req: Request): string | null {
+  const raw = req.headers['x-request-id'];
+  return typeof raw === 'string' && SAFE_REQUEST_ID.test(raw) ? raw : null;
 }
 
 /** Convenience used by route handlers (unchanged shape from FBL-010). */

@@ -99,6 +99,14 @@ export interface PolicyInput {
   /** the tenant the request TARGETS (defaults to the actor's own tenant) */
   readonly targetTenantId?: string | null;
   readonly resource?: { readonly type: string; readonly id: string } | null;
+  /**
+   * Where a RESOURCE-LESS action lands in the organization. Creating an
+   * appointment names no existing resource, but it does plant one at a
+   * rooftop — the caller passes that rooftop here so scope is still enforced.
+   * Omitted means the action is genuinely tenant-wide, and only a
+   * tenant-scope binding can cover it.
+   */
+  readonly scopeHint?: OrganizationNodeRef | null;
   readonly requestId?: string | null;
 }
 
@@ -246,8 +254,28 @@ export function createPolicyEngine(options: {
         if (tenant.rows.length === 0) return deny('TENANT_INACTIVE', { sensitive });
       }
 
-      // 4. resolve the resource to its organization scope, then to ancestry
+      // 4. resolve the acted-on node to its organization ancestry.
+      //    `ancestry === null` means "no organization node was named", which
+      //    is treated as TENANT-WIDE below — never as "anything covers it".
+      //
+      //    Non-enumeration attaches to RESOURCES: an existing row must not be
+      //    distinguishable from a missing one. A scope hint is different — the
+      //    caller supplied a location in their own tenant, so a plain 403 is
+      //    honest and leaks nothing they did not already state.
+      const namedResource = def.resourceType !== null;
       let ancestry: OrganizationNodeRef[] | null = null;
+      if (def.resourceType === null && input.scopeHint !== undefined && input.scopeHint !== null) {
+        // A resource-less action that names where it lands: the hint must
+        // resolve inside this tenant, exactly like a resource would.
+        ancestry = await resolveAncestry(targetTenantId as string, input.scopeHint);
+        if (ancestry === null) {
+          return deny('SCOPE_NOT_FOUND', {
+            resourceVisible: false,
+            scope: input.scopeHint,
+            sensitive,
+          });
+        }
+      }
       if (def.resourceType !== null) {
         if (input.resource === undefined || input.resource === null) {
           // the route forgot to name its resource — a programming error, not
@@ -287,7 +315,13 @@ export function createPolicyEngine(options: {
 
       const covers = (binding: BindingRow): boolean => {
         if (binding.scope_level === 'platform') return false; // never covers tenant data
-        if (ancestry === null) return true; // tenant-context action: any tenant binding
+        if (ancestry === null) {
+          // Nothing narrower was named, so the action reaches the whole
+          // tenant. Only a tenant-scope binding may authorize that: a
+          // rooftop or department binding must NEVER widen to tenant-wide
+          // reach (the same rule sessionCovers applies to support sessions).
+          return binding.scope_level === 'tenant' && binding.scope_id === targetTenantId;
+        }
         return ancestry.some(
           (node) => node.level === binding.scope_level && node.id === binding.scope_id,
         );
@@ -320,7 +354,8 @@ export function createPolicyEngine(options: {
           };
         }
         return deny('NO_MATCHING_BINDING', {
-          resourceVisible: ancestry === null,
+          // Only a RESOURCE denial hides behind the not-found envelope.
+          resourceVisible: !namedResource,
           sensitive,
         });
       }
@@ -409,7 +444,7 @@ export function createPolicyEngine(options: {
         };
       }
       return deny('NO_MATCHING_BINDING', {
-        resourceVisible: ancestry === null,
+        resourceVisible: !namedResource,
         sensitive,
       });
     },

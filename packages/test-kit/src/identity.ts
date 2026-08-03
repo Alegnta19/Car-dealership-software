@@ -30,6 +30,7 @@ export async function startIdentityTestEnv(): Promise<IdentityTestEnv> {
   process.env.WORKOS_ISSUER = issuer.issuer;
   process.env.WORKOS_JWKS_URI = issuer.jwksUri;
   process.env.WORKOS_REDIRECT_URI = 'http://127.0.0.1:3000/auth/callback';
+  process.env.WORKOS_REAUTH_REDIRECT_URI = 'http://127.0.0.1:3000/auth/reauth/callback';
   process.env.WORKOS_LOGOUT_REDIRECT_URI = 'http://127.0.0.1:3000/';
   process.env.WORKOS_COOKIE_PASSWORD = cookiePassword;
   process.env.OIDC_AUDIENCE = issuer.audience;

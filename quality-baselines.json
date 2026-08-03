@@ -29,10 +29,9 @@
     }
   },
   "format": {
-    "total": 2,
+    "total": 1,
     "byFile": {
-      "eslint.config.mjs": 1,
-      "README.md": 1
+      "eslint.config.mjs": 1
     }
   }
 }

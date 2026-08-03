@@ -451,17 +451,16 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     });
     assert.equal(first.status, 200);
 
-    // Same token, same action, same resource, same user: the ONLY thing stopping this
-    // is the consumption ledger.
-    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'in_repair' });
-    await call(advisor, 'POST', `/ros/${roId}/transition`, { to_status: 'qc' });
-    await call(advisor, 'PATCH', `/ros/${roId}/line-items/${lineId}`, { status: 'completed' });
-    const replay = await call(advisor, 'POST', `/ros/${roId}/transition`, {
-      to_status: 'ready_for_pickup',
-      step_up_token: reusable,
-    });
-    // ready_for_pickup needs no step-up, so prove the replay directly on a gated action:
-    assert.equal(replay.status, 200);
+    // The grant is now spent. (A second `authorized` transition on the SAME
+    // repair order is impossible — the state machine rejects it before the
+    // grant is even looked at — so the replay proof lives in the
+    // authorization-record test below, on the one gated path that repeats.)
+    const spentRow = await query(
+      'SELECT consumed_at FROM reauthentication_grants WHERE resource_id=$1',
+      [roId],
+    );
+    assert.equal(spentRow.rows.length, 1);
+    assert.ok(spentRow.rows[0].consumed_at, 'the authorizing request spent the grant');
 
     const cancelToken = await mintReauthGrant({
       tenantId: tenant,
@@ -481,36 +480,62 @@ describe('route layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run'
     );
   });
 
-  test('a spent step-up token cannot authorise a second repair order transition', async () => {
+  test('a REPLAYED reauthentication grant is refused over the wire', async () => {
+    // Staff-attested authorization recording is the one gated path that can be
+    // repeated on the same resource, so it is where single-use consumption is
+    // actually observable through HTTP. Deleting `AND consumed_at IS NULL`
+    // from the conditional UPDATE makes this test fail.
     const { roId, lineId } = await pricedRO();
     const est = await call(advisor, 'POST', `/ros/${roId}/estimates/generate`, {});
     await call(advisor, 'POST', `/ros/${roId}/estimates/${est.body.data.estimate_id}/send`, {});
-    await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
-      estimate_id: est.body.data.estimate_id,
-      method: 'portal',
-      approved_items: [lineId],
-      evidence_refs: { portal_submission_id: randomUUID() },
-    });
 
-    const tok = await mintReauthGrant({
+    const second = await call(advisor, 'POST', `/ros/${roId}/line-items`, {
+      line_type: 'labor',
+      description: 'Cabin filter',
+      estimated_hours: 0.5,
+    });
+    assert.equal(second.status, 201);
+
+    const grant = await mintReauthGrant({
       tenantId: tenant,
       userLinkId: advisor.userId,
-      action: 'service.ro.transition:canceled',
+      action: 'service.ro.authorization.record:staff_attestation',
       resourceId: roId,
     });
-    const cancelled = await call(advisor, 'POST', `/ros/${roId}/transition`, {
-      to_status: 'canceled',
-      step_up_token: tok,
-    });
-    assert.equal(cancelled.status, 200);
 
-    // The consumed grant is the only thing that makes a second use fail.
+    const first = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
+      estimate_id: est.body.data.estimate_id,
+      method: 'staff_attestation',
+      approved_items: [lineId],
+    });
+    assert.equal(first.status, 403, 'no grant supplied at all is refused');
+    assert.equal(first.body.error.code, 'step_up_required');
+
+    const withGrant = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
+      estimate_id: est.body.data.estimate_id,
+      method: 'staff_attestation',
+      approved_items: [lineId],
+      step_up_token: grant,
+    });
+    assert.equal(withGrant.status, 201, JSON.stringify(withGrant.body));
+
+    // THE REPLAY: same grant, same actor, same action, same resource. The only
+    // thing that can refuse it is the consumption guard.
+    const replay = await call(advisor, 'POST', `/ros/${roId}/authorizations/record`, {
+      estimate_id: est.body.data.estimate_id,
+      method: 'staff_attestation',
+      approved_items: [second.body.data.line_item_id],
+      step_up_token: grant,
+    });
+    assert.equal(replay.status, 403, 'a spent grant must never authorize a second action');
+    assert.equal(replay.body.error.code, 'step_up_required');
+
     const spent = await query(
       'SELECT consumed_at FROM reauthentication_grants WHERE resource_id=$1',
       [roId],
     );
     assert.equal(spent.rows.length, 1, 'the grant was recorded');
-    assert.ok(spent.rows[0].consumed_at, 'and it is spent');
+    assert.ok(spent.rows[0].consumed_at, 'and it is spent exactly once');
   });
 
   // ── Billable work added after the estimate went out ─────────

@@ -628,24 +628,24 @@ quantiles at query time and the suffix is misleading.
 
 ### Configuration
 
-| Variable                                            | Required  | Purpose                                                                |
-| --------------------------------------------------- | --------- | ---------------------------------------------------------------------- |
-| `DATABASE_URL`                                      | yes       | Postgres connection string                                             |
-| `IDENTITY_PROVIDER`                                 | no        | `workos` to serve logins; unset/`disabled` for CI and offline work     |
-| `WORKOS_CLIENT_ID`                                  | if workos | AuthKit client id                                                      |
-| `WORKOS_API_KEY`                                    | if workos | AuthKit API key (≥ 32 chars)                                           |
-| `WORKOS_ISSUER`, `WORKOS_JWKS_URI`                  | if workos | Token issuer and key set — the ONLY trust anchors (https in prod)      |
-| `WORKOS_REDIRECT_URI`, `WORKOS_LOGOUT_REDIRECT_URI` | if workos | Exact redirect targets (https in prod)                                 |
-| `WORKOS_COOKIE_PASSWORD`                            | if workos | Seals cookies and derives CSRF tokens (≥ 32 chars)                     |
-| `OIDC_AUDIENCE`                                     | if workos | Audience claim this API accepts                                        |
-| `OIDC_CLOCK_SKEW_SECONDS`                           | no        | Bounded temporal tolerance, default 60, max 300                        |
-| `PORT`                                              | no        | Listen port, default 3000                                              |
-| `LOG_LEVEL`                                         | no        | `debug` / `info` / `warn` / `error`, default `info`                    |
-| `PGSSL`                                             | no        | Set to `require` when the database is reached over the public internet |
-| `PGPOOL_MAX`, `PGPOOL_IDLE_MS`, `PGPOOL_CONNECT_MS` | no        | Pool tuning                                                            |
-| `JSON_BODY_LIMIT`                                   | no        | Request body cap, default `1mb`                                        |
-| `METRICS_INTERVAL_MS`                               | no        | Aggregation period, default 60000                                      |
-| `METRICS_WINDOW_DAYS`                               | no        | Rolling window for rates, default 30                                   |
+| Variable                                                                          | Required  | Purpose                                                                                  |
+| --------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                                                    | yes       | Postgres connection string                                                               |
+| `IDENTITY_PROVIDER`                                                               | no        | `workos` to serve logins; unset/`disabled` for CI and offline work                       |
+| `WORKOS_CLIENT_ID`                                                                | if workos | AuthKit client id                                                                        |
+| `WORKOS_API_KEY`                                                                  | if workos | AuthKit API key (≥ 32 chars)                                                             |
+| `WORKOS_ISSUER`, `WORKOS_JWKS_URI`                                                | if workos | Token issuer and key set — the ONLY trust anchors (https in prod)                        |
+| `WORKOS_REDIRECT_URI`, `WORKOS_REAUTH_REDIRECT_URI`, `WORKOS_LOGOUT_REDIRECT_URI` | if workos | Exact redirect targets — login, reauthentication and logout are DISTINCT (https in prod) |
+| `WORKOS_COOKIE_PASSWORD`                                                          | if workos | Seals cookies and derives CSRF tokens (≥ 32 chars)                                       |
+| `OIDC_AUDIENCE`                                                                   | if workos | Audience claim this API accepts                                                          |
+| `OIDC_CLOCK_SKEW_SECONDS`                                                         | no        | Bounded temporal tolerance, default 60, max 300                                          |
+| `PORT`                                                                            | no        | Listen port, default 3000                                                                |
+| `LOG_LEVEL`                                                                       | no        | `debug` / `info` / `warn` / `error`, default `info`                                      |
+| `PGSSL`                                                                           | no        | Set to `require` when the database is reached over the public internet                   |
+| `PGPOOL_MAX`, `PGPOOL_IDLE_MS`, `PGPOOL_CONNECT_MS`                               | no        | Pool tuning                                                                              |
+| `JSON_BODY_LIMIT`                                                                 | no        | Request body cap, default `1mb`                                                          |
+| `METRICS_INTERVAL_MS`                                                             | no        | Aggregation period, default 60000                                                        |
+| `METRICS_WINDOW_DAYS`                                                             | no        | Rolling window for rates, default 30                                                     |
 
 `server.ts` fails fast if any required variable is missing, rather than accepting traffic it cannot
 authenticate.

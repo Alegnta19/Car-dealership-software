@@ -40,16 +40,22 @@ The CSRF token is an HMAC over the session id keyed by
 ```
 route declares requireAction('service.ro.transition')
    ↓
-policy engine  ── catalog lookup ── resource id from the route param
-   ↓            ── resolve resource → rooftop (Fixed Ops port)
-   ↓            ── resolve ancestry (organization)
+policy engine  ── catalog lookup
+   ↓            ── resource action?  resource id from the route param
+   ↓                                 → resolve resource → rooftop (Fixed Ops port)
+   ↓            ── resource-less?    location_id from body/query, if any
+   ↓                                 → that rooftop IS the scope
+   ↓            ── resolve ancestry — EVERY level must be active and effective
    ↓            ── load ACTIVE RoleBindings for this user (per decision)
    ↓
 allow / deny  → append-only policy_decisions row (always)
 ```
 
 Revocation takes effect on the next request: bindings are read per decision
-and no token carries privilege.
+and no token carries privilege. A resource-less action that names no location
+reaches the whole tenant, so only a **tenant-scope** binding covers it; and
+archiving any node in the chain revokes every binding scoped beneath it
+without touching a `role_bindings` row.
 
 ## 4. Reauthentication (replaces local step-up)
 

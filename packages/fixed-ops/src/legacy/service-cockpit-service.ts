@@ -247,8 +247,14 @@ function requireTimestamp(value: unknown, field: string): string {
   return value;
 }
 
+/**
+ * FBL-020: `platform_admin` is a PLATFORM control role and no longer implies
+ * dealership access (ADR-007). The old short-circuit on ROLES.ADMIN is gone —
+ * a platform actor reaching this code under approved support access carries
+ * only the roles bound in THIS tenant, and these domain guards judge those.
+ */
 function hasAnyRole(ctx: AuthContext, ...roles: Role[]): boolean {
-  return ctx.roles.includes(ROLES.ADMIN) || ctx.roles.some((r) => roles.includes(r));
+  return ctx.roles.some((r) => roles.includes(r));
 }
 
 export interface Page {

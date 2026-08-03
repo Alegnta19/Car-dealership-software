@@ -73,6 +73,7 @@ function provider(): IdentityProviderPort {
       clientId: s.clientId,
       apiKey: s.apiKey,
       redirectUri: s.redirectUri,
+      reauthRedirectUri: s.reauthRedirectUri,
       logoutRedirectUri: s.logoutRedirectUri,
     });
   }
@@ -365,6 +366,9 @@ router.post(
           state,
           codeChallenge: sha256base64url(codeVerifier),
           maxAgeSeconds: 0,
+          // The reauth leg MUST return to /auth/reauth/callback: the login
+          // callback reads a different transaction cookie and would strand it.
+          redirectUri: s.reauthRedirectUri,
         }),
       },
     });

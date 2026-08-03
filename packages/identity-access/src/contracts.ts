@@ -57,6 +57,13 @@ export interface AuthorizationRequest {
   readonly organizationId?: string;
   /** force fresh authentication (reauthentication uses 0) */
   readonly maxAgeSeconds?: number;
+  /**
+   * Which registered callback this leg returns to. Login and
+   * REAUTHENTICATION are different routes, so they need different redirect
+   * URIs — sending the reauth leg to the login callback strands it there and
+   * no grant can ever be minted. Defaults to the login redirect.
+   */
+  readonly redirectUri?: string;
 }
 
 export interface CodeExchangeResult {

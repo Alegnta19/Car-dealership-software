@@ -33,6 +33,7 @@ export interface WorkosIdentitySettings {
   readonly issuer: string;
   readonly jwksUri: string;
   readonly redirectUri: string;
+  readonly reauthRedirectUri: string;
   readonly logoutRedirectUri: string;
   readonly cookiePassword: string;
   readonly oidcAudience: string;
@@ -125,7 +126,13 @@ function url(
 }
 
 function loadIdentityConfig(env: Record<string, string | undefined>): IdentityConfig {
-  const provider = env.IDENTITY_PROVIDER ?? 'disabled';
+  // '' is treated as absent, exactly as every other variable in this file
+  // treats it — docker compose's `${VAR:-}` always SETS the variable, so a
+  // nullish-only check would crash-loop the documented quick start.
+  const provider =
+    env.IDENTITY_PROVIDER === undefined || env.IDENTITY_PROVIDER === ''
+      ? 'disabled'
+      : env.IDENTITY_PROVIDER;
   if (provider === 'disabled') return Object.freeze({ provider: 'disabled' as const });
   if (provider !== 'workos') {
     throw new ConfigError(`IDENTITY_PROVIDER must be "workos" or "disabled"`);
@@ -139,6 +146,7 @@ function loadIdentityConfig(env: Record<string, string | undefined>): IdentityCo
       issuer: url(env, 'WORKOS_ISSUER', { httpsRequired }),
       jwksUri: url(env, 'WORKOS_JWKS_URI', { httpsRequired }),
       redirectUri: url(env, 'WORKOS_REDIRECT_URI', { httpsRequired }),
+      reauthRedirectUri: url(env, 'WORKOS_REAUTH_REDIRECT_URI', { httpsRequired }),
       logoutRedirectUri: url(env, 'WORKOS_LOGOUT_REDIRECT_URI', { httpsRequired }),
       cookiePassword: secret(env, 'WORKOS_COOKIE_PASSWORD'),
       oidcAudience: requireVar(env, 'OIDC_AUDIENCE'),

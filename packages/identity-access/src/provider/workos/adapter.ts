@@ -14,6 +14,7 @@ export interface WorkosAdapterOptions {
   readonly clientId: string;
   readonly apiKey: string;
   readonly redirectUri: string;
+  readonly reauthRedirectUri: string;
   readonly logoutRedirectUri: string;
 }
 
@@ -26,7 +27,7 @@ export function createWorkosProvider(options: WorkosAdapterOptions): IdentityPro
         workos.userManagement.getAuthorizationUrl({
           provider: 'authkit',
           clientId: options.clientId,
-          redirectUri: options.redirectUri,
+          redirectUri: request.redirectUri ?? options.redirectUri,
           state: request.state,
           codeChallenge: request.codeChallenge,
           codeChallengeMethod: 'S256',

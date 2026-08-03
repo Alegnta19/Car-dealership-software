@@ -164,7 +164,28 @@ describe(
       assert.deepEqual(session.body!.data.roles, ['tenant_admin']);
       assert.equal(session.body!.data.tenant_id, tenantId);
 
-      // ── 6. tenant_admin is NOT a service role: deny by default holds ──────
+      // ── 6. The backfilled organization is still PENDING, and pending
+      //       authorizes nothing — migration 055 promises exactly this, so
+      //       nobody can work at that rooftop until it is deliberately
+      //       activated, not even the tenant administrator.
+      const beforeActivation = await call(adminToken, 'POST', '/api/service/appointments', {
+        location_id: legacyLocation,
+        mdm_customer_id: randomUUID(),
+        mdm_vehicle_id: randomUUID(),
+        scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      assert.equal(
+        beforeActivation.status,
+        404,
+        'a pending_configuration rooftop must not resolve as a scope',
+      );
+
+      // The administrator activates the chain the runbook describes.
+      await query(`UPDATE dealer_groups SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
+      await query(`UPDATE legal_entities SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
+      await query(`UPDATE rooftops SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
+
+      // ── 6b. tenant_admin is NOT a service role: deny by default holds ─────
       const adminWrite = await call(adminToken, 'POST', '/api/service/appointments', {
         location_id: legacyLocation,
         mdm_customer_id: randomUUID(),
@@ -190,7 +211,15 @@ describe(
         level: 'rooftop',
         id: legacyLocation,
       });
-      assert.equal((await call(advisorToken, 'GET', '/api/service/home')).status, 200);
+      // A ROOFTOP binding reaches that rooftop — and NOT the whole tenant. An
+      // unfiltered cockpit read spans every rooftop, so it is refused; naming
+      // their own rooftop is allowed. (This is the escalation FBL-020-R0
+      // closed: before the fix the narrowest binding answered tenant-wide.)
+      assert.equal((await call(advisorToken, 'GET', '/api/service/home')).status, 403);
+      assert.equal(
+        (await call(advisorToken, 'GET', `/api/service/home?location_id=${legacyLocation}`)).status,
+        200,
+      );
 
       // ── 9. Real work: appointment → check-in → priced line ────────────────
       const appt = await call(advisorToken, 'POST', '/api/service/appointments', {
@@ -252,6 +281,20 @@ describe(
         'out-of-scope and nonexistent must be indistinguishable',
       );
 
+      // …and the same holds for CREATING at the sibling rooftop: the rooftop
+      // binding does not reach it, so planting work there is refused.
+      const plantElsewhere = await call(advisorToken, 'POST', '/api/service/appointments', {
+        location_id: otherRooftop,
+        mdm_customer_id: randomUUID(),
+        mdm_vehicle_id: randomUUID(),
+        scheduled_start: new Date(Date.now() + 86_400_000).toISOString(),
+      });
+      assert.equal(
+        plantElsewhere.status,
+        403,
+        'a rooftop-scoped advisor cannot create work at another rooftop',
+      );
+
       // ── 11. A sensitive action demands reauthentication ───────────────────
       const est = await call(
         advisorToken,
@@ -286,19 +329,32 @@ describe(
       });
       assert.equal(started.status, 200, JSON.stringify(started.body));
       assert.match(started.body!.data.authorization_url as string, /max_age=0/);
-      // The provider round trip is exercised in the OIDC suite; here the grant
-      // is minted through the same production service the callback calls.
-      const { completeReauthentication } = await import('@dealer/identity-access');
+      // The reauth leg must return to its OWN callback, never the login one.
+      assert.match(
+        started.body!.data.authorization_url as string,
+        /auth%2Freauth%2Fcallback|auth\/reauth\/callback/,
+        'the reauthentication authorization URL must redirect to /auth/reauth/callback',
+      );
       const txn = await query(
         `SELECT reauth_txn_id FROM reauthentication_transactions WHERE reauth_txn_id = $1`,
         [started.body!.data.reauth_txn_id],
       );
       assert.equal(txn.rows.length, 1);
-      const grantResult = await mintGrantForStartedTransaction(
+      // Complete the EXACT transaction the route opened, using the nonce it
+      // sealed into the cookie — the same value /auth/reauth/callback reads.
+      const grantResult = await completeStartedReauthentication(
+        started.headers.get('set-cookie'),
         advisorLink.userLinkId,
         String(started.body!.data.reauth_txn_id),
-        completeReauthentication,
       );
+      // exactly ONE transaction and ONE grant exist — no shadow transaction
+      const txnCount = await query(
+        `SELECT COUNT(*)::int AS n FROM reauthentication_transactions`,
+        [],
+      );
+      assert.equal(Number((txnCount.rows[0] as { n: number }).n), 1);
+      const grantCount = await query(`SELECT COUNT(*)::int AS n FROM reauthentication_grants`, []);
+      assert.equal(Number((grantCount.rows[0] as { n: number }).n), 1);
       const authorized = await call(advisorToken, 'POST', `/api/service/ros/${roId}/transition`, {
         to_status: 'authorized',
         step_up_token: grantResult,
@@ -450,38 +506,39 @@ describe(
     });
 
     /**
-     * Mints the grant for a transaction opened through POST /auth/reauth/start.
-     * The provider leg is proven in the OIDC suite; this drives the same
-     * production completion service the callback route calls, with a verified
-     * auth_time of "now".
+     * Completes the EXACT transaction that POST /auth/reauth/start opened, by
+     * opening the sealed transaction cookie the route set — the same nonce the
+     * real /auth/reauth/callback reads. The only thing stubbed is the provider
+     * code exchange (that needs live WorkOS); the transaction, its nonce, the
+     * auth_time proof and the grant all come from production code.
      */
-    async function mintGrantForStartedTransaction(
+    async function completeStartedReauthentication(
+      setCookieHeader: string | null,
       userLinkId: string,
-      reauthTxnId: string,
-      complete: typeof import('@dealer/identity-access').completeReauthentication,
+      expectedTxnId: string,
     ): Promise<string> {
-      // The route sealed the nonce into a cookie; re-open the transaction the
-      // way the callback does by minting a fresh one bound identically.
-      const { startReauthentication } = await import('@dealer/identity-access');
-      const row = await query(
-        `SELECT tenant_id, action, resource_type, resource_id FROM reauthentication_transactions
-        WHERE reauth_txn_id = $1`,
-        [reauthTxnId],
-      );
-      const t = row.rows[0] as Record<string, unknown>;
-      const restarted = await startReauthentication({
-        tenantId: String(t.tenant_id),
-        userLinkId,
-        action: String(t.action),
-        resourceType: t.resource_type === null ? null : String(t.resource_type),
-        resourceId: t.resource_id === null ? null : String(t.resource_id),
-      });
-      const completed = await complete({
-        nonce: restarted.nonce,
+      const { completeReauthentication, openCookiePayload } =
+        await import('@dealer/identity-access');
+      assert.ok(setCookieHeader, 'the reauth start must seal a transaction cookie');
+      const match = /dealer_reauth_txn=([^;,]+)/.exec(setCookieHeader);
+      assert.ok(match, 'the sealed reauth transaction cookie must be present');
+      const sealed = decodeURIComponent(match[1]!);
+      const payload = openCookiePayload(sealed, env.cookiePassword, { maxAgeSeconds: 600 });
+      assert.ok(payload, 'the sealed cookie must open with the configured cookie password');
+      assert.equal(payload.purpose, 'reauth');
+      const nonce = String(payload.nonce);
+
+      const completed = await completeReauthentication({
+        nonce,
         userLinkId,
         verifiedAuthTime: new Date(),
       });
       assert.ok(completed, 'the reauthentication must complete');
+      assert.equal(
+        completed.transaction.reauthTxnId,
+        expectedTxnId,
+        'the grant must belong to the transaction /auth/reauth/start opened, not a fresh one',
+      );
       return completed.grant;
     }
   },

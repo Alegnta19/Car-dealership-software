@@ -58,10 +58,22 @@ every appointment, repair order and queue item already references.
 The tenant administrator provisions each person:
 
 1. Invite them into the WorkOS organization.
-2. `identity.user.provision` creates a **pending** link (optional — a first
-   login also creates an activated link).
-3. Grant roles explicitly with `identity.role.grant`, at the narrowest scope
-   that fits: a rooftop manager gets a `rooftop`-scope binding, not a tenant one.
+2. Optionally pre-provision a **pending** link (a first login also creates an
+   activated one).
+3. Grant roles explicitly, at the narrowest scope that fits: a rooftop manager
+   gets a `rooftop`-scope binding, not a tenant one.
+
+> **No HTTP administration surface exists yet.** FBL-020 delivers the
+> `identity.*` / `org.unit.*` actions in the catalog and the policy engine that
+> decides them, but no route declares them — steps 2 and 3 are performed today
+> through the database (or a future admin route in a later order). A
+> tenant-scope binding is what the bootstrap command grants; everything
+> narrower is inserted directly:
+>
+> ```sql
+> INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+> VALUES (:tenant, :user_link, 'service_advisor', 'rooftop', :rooftop_id);
+> ```
 
 **A login never grants a role.** A person who logs in with no bindings can see
 nothing.

@@ -176,8 +176,17 @@ Success responses are `{ "success": true, "data": ... }`. Errors are:
 `invalid_transition` / `authorization_required` / `work_incomplete` (422). The full list is in the
 architecture reference appendix.
 
-The token must carry `sub` (user UUID), `tid` (tenant UUID), `roles` (array) and `exp`, signed HS256
-with `JWT_SECRET`. `exp` is mandatory — a token without one would be a permanent credential.
+Authentication is **WorkOS AuthKit** (FBL-020). A request presents EXACTLY ONE credential:
+
+- `Authorization: Bearer <WorkOS access token>` — verified against the CONFIGURED issuer, audience
+  and JWKS with an allowlisted asymmetric algorithm. Locally signed HS256 tokens are no longer
+  accepted anywhere; `JWT_SECRET` and `STEP_UP_SECRET` are gone.
+- the HttpOnly session cookie minted by `GET /auth/callback` — validated server-side, with the
+  session's CSRF token required in `x-csrf-token` on every non-safe method.
+
+Presenting both is ambiguous and refused. Roles in a provider token are display hints only:
+authorization is decided from database RoleBindings by the central policy engine, so revoking a
+binding denies the very next request. See [docs/identity/AUTH-FLOWS.md](docs/identity/AUTH-FLOWS.md).
 
 Endpoint catalog: [docs/PHASE-248-SERVICE-COCKPIT-V2.md](docs/PHASE-248-SERVICE-COCKPIT-V2.md#7-api-surface--39-endpoints).
 

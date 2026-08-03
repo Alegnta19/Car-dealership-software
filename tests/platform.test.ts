@@ -60,6 +60,7 @@ describe('configuration boundary', () => {
           WORKOS_ISSUER: 'https://issuer.example.com',
           WORKOS_JWKS_URI: 'https://issuer.example.com/jwks',
           WORKOS_REDIRECT_URI: 'https://app.example.com/auth/callback',
+          WORKOS_REAUTH_REDIRECT_URI: 'https://app.example.com/auth/reauth/callback',
           WORKOS_LOGOUT_REDIRECT_URI: 'https://app.example.com/',
           WORKOS_COOKIE_PASSWORD: 'c'.repeat(40),
           OIDC_AUDIENCE: 'aud',
