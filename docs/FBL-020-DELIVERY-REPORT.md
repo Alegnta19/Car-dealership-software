@@ -9,8 +9,8 @@ FBL-030 has not been started.
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Base (FBL-010 accepted head) | `7cb1044`                                                                                                               |
 | Delivered head               | see §9 (FBL-020-R0 correction wave)                                                                                     |
-| Commits                      | 10                                                                                                                      |
-| Diff                         | 99 files, +12,608 / −2,799                                                                                              |
+| Commits                      | 11                                                                                                                      |
+| Diff                         | 102 files, +13,543 / −2,814                                                                                             |
 | CI run                       | [30823396770](https://github.com/Alegnta19/Car-dealership-software/actions/runs/30823396770) — **conclusion `success`** |
 
 ## 1. CI evidence (the run's own conclusion, per job)
@@ -50,7 +50,7 @@ From the run's own artifacts:
 
 | Gate                                                            | Windows   | Linux / Node 20.20.2 (WSL parity, real PostgreSQL 16) |
 | --------------------------------------------------------------- | --------- | ----------------------------------------------------- |
-| Full battery                                                    | 204 / 204 | **204 / 204**                                         |
+| Full battery (after FBL-020-R0)                                 | 216 / 216 | **216 / 216**                                         |
 | Build (`tsc -b`)                                                | 0         | 0                                                     |
 | Architecture checks (dependency, app-SQL, manifest, env-access) | 4 / 4 OK  | 4 / 4 OK                                              |
 | Quality ratchet                                                 | OK        | OK                                                    |
