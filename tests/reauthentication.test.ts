@@ -152,7 +152,14 @@ describe(
 
       const otherTenant = await createTenant({ name: 'Other Reauth', status: 'active' });
       const otherUser = await makeUser(tenantId);
-      const attempts: Array<Record<string, unknown>> = [
+      interface ConsumeBinding {
+        tenantId: string;
+        userLinkId: string;
+        action: string;
+        resourceType?: string | null;
+        resourceId?: string | null;
+      }
+      const attempts: ConsumeBinding[] = [
         { ...startInput(), action: 'service.ro.transition' },
         { ...startInput(), resourceId: randomUUID() },
         { ...startInput(), resourceType: 'service_appointment' },
@@ -160,8 +167,8 @@ describe(
         { ...startInput(), tenantId: otherTenant.tenantId },
       ];
       for (const attempt of attempts) {
-        const ok = await withTransaction((tx) =>
-          consumeReauthenticationGrant(tx, { grant: completed.grant, ...(attempt as never) }),
+        const ok: boolean = await withTransaction((tx) =>
+          consumeReauthenticationGrant(tx, { grant: completed.grant, ...attempt }),
         );
         assert.equal(ok, false, `mismatched consumption must fail: ${JSON.stringify(attempt)}`);
       }
