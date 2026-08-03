@@ -38,7 +38,12 @@ describe('enterprise federation is interface-only', () => {
     );
     await assert.rejects(() => scim.deprovisionUser(tenantId, 'ext-1'), FederationNotEnabled);
     await assert.rejects(
-      () => scim.syncGroup(tenantId, { externalId: 'g-1', displayName: 'Advisors', memberExternalIds: [] }),
+      () =>
+        scim.syncGroup(tenantId, {
+          externalId: 'g-1',
+          displayName: 'Advisors',
+          memberExternalIds: [],
+        }),
       FederationNotEnabled,
     );
   });
@@ -51,31 +56,35 @@ describe('enterprise federation is interface-only', () => {
   });
 });
 
-describe('federation cannot be enabled at the database layer', { skip: skipIntegration ? 'set TEST_DATABASE_URL to run' : false }, () => {
-  after(async () => {
-    await closePool();
-  });
+describe(
+  'federation cannot be enabled at the database layer',
+  { skip: skipIntegration ? 'set TEST_DATABASE_URL to run' : false },
+  () => {
+    after(async () => {
+      await closePool();
+    });
 
-  beforeEach(async () => {
-    await resetDatabase();
-  });
+    beforeEach(async () => {
+      await resetDatabase();
+    });
 
-  test('a saml or scim provider connection is rejected by migration 055', async () => {
-    const tenant = await query(
-      `INSERT INTO tenants (name, status) VALUES ('Federation Tenant', 'active') RETURNING tenant_id`,
-    );
-    const tenantId = String((tenant.rows[0] as { tenant_id: unknown }).tenant_id);
-    for (const provider of ['saml', 'scim', 'okta']) {
-      await assert.rejects(
-        () =>
-          query(
-            `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
-             VALUES ('dealership', $1, $2, 'org_x')`,
-            [tenantId, provider],
-          ),
-        (err: unknown) => (err as { code?: string }).code === '23514',
-        `provider ${provider} must be refused by the CHECK constraint`,
+    test('a saml or scim provider connection is rejected by migration 055', async () => {
+      const tenant = await query(
+        `INSERT INTO tenants (name, status) VALUES ('Federation Tenant', 'active') RETURNING tenant_id`,
       );
-    }
-  });
-});
+      const tenantId = String((tenant.rows[0] as { tenant_id: unknown }).tenant_id);
+      for (const provider of ['saml', 'scim', 'okta']) {
+        await assert.rejects(
+          () =>
+            query(
+              `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
+             VALUES ('dealership', $1, $2, 'org_x')`,
+              [tenantId, provider],
+            ),
+          (err: unknown) => (err as { code?: string }).code === '23514',
+          `provider ${provider} must be refused by the CHECK constraint`,
+        );
+      }
+    });
+  },
+);

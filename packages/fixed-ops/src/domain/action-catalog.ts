@@ -197,9 +197,11 @@ export const SERVICE_ACTION_DEFINITIONS: readonly ActionDefinition[] = [
   },
   {
     action: 'service.ro.transition',
-    description: 'Transition repair-order state',
+    description:
+      'Transition repair-order state; the authorized and canceled transitions demand a reauthentication grant',
     resourceType: 'repair_order',
     allowedRoles: ADVISOR_UP,
+    sensitive: true,
   },
   {
     action: 'service.ro.line_item.create',

@@ -43,7 +43,11 @@ export interface SamlPort {
    * Would verify an assertion's signature, conditions, audience, recipient
    * and replay state, then resolve it to a UserLink. Never implemented here.
    */
-  consumeAssertion(input: { tenantId: string; samlResponse: string; relayState: string | null }): Promise<never>;
+  consumeAssertion(input: {
+    tenantId: string;
+    samlResponse: string;
+    relayState: string | null;
+  }): Promise<never>;
 }
 
 export function createSamlPort(): SamlPort {
