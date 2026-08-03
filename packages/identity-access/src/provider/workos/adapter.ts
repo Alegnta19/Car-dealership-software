@@ -40,6 +40,11 @@ export function createWorkosProvider(options: WorkosAdapterOptions): IdentityPro
       if (request.maxAgeSeconds !== undefined) {
         url.searchParams.set('max_age', String(request.maxAgeSeconds));
       }
+      // OIDC nonce: the provider echoes it into the token, and the verifier
+      // requires it to equal the value bound to this single-use transaction.
+      if (request.nonce !== undefined) {
+        url.searchParams.set('nonce', request.nonce);
+      }
       return url.toString();
     },
 

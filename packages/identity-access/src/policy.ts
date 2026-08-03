@@ -108,12 +108,23 @@ export interface PolicyInput {
    */
   readonly scopeHint?: OrganizationNodeRef | null;
   readonly requestId?: string | null;
+  /**
+   * A correlation id distinct from the request id: the request id identifies
+   * ONE HTTP call, the correlation id ties a whole flow together.
+   */
+  readonly correlationId?: string | null;
+  /** Recorded on the decision; classification only, never a token or claim. */
+  readonly freshness?: FreshnessClassification;
+  readonly mfaAssurance?: MfaAssuranceClassification;
+  readonly supportRequestId?: string | null;
 }
 
 export interface PolicyDecisionResult {
   readonly decision: 'allow' | 'deny';
   readonly reasonCode: string;
   readonly decisionId: string;
+  /** Every binding that matched, with the version it matched at. */
+  readonly matchedBindings: ReadonlyArray<{ roleBindingId: string; authorizationVersion: number }>;
   /**
    * false: a resource-scoped denial where unauthorized and nonexistent must
    * stay externally indistinguishable — render the existing not-found
@@ -133,10 +144,18 @@ interface Row {
 }
 
 interface BindingRow {
+  role_binding_id: string;
   role: string;
   scope_level: string;
   scope_id: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
+  authorization_version: string | number;
 }
+
+/** FBL-020-R1 section E/G: assurance facts recorded on every decision. */
+export type FreshnessClassification = 'not_applicable' | 'stale' | 'fresh';
+export type MfaAssuranceClassification = 'not_applicable' | 'uncertified' | 'certified';
 
 export function createPolicyEngine(options: {
   catalog: ActionCatalog;
@@ -157,12 +176,22 @@ export function createPolicyEngine(options: {
     reasonCode: string;
     requestId: string | null;
     supportSessionId: string | null;
+    matched?: ReadonlyArray<{ roleBindingId: string; authorizationVersion: number }> | undefined;
+    correlationId?: string | null | undefined;
+    freshness?: FreshnessClassification | undefined;
+    mfaAssurance?: MfaAssuranceClassification | undefined;
+    supportRequestId?: string | null | undefined;
   }): Promise<string> {
+    // A deny never claims a matched binding (also a database CHECK).
+    const matched = input.decision === 'allow' ? (input.matched ?? []) : [];
     const result = await query(
       `INSERT INTO policy_decisions
          (tenant_id, actor_user_link_id, actor_type, action, resource_type, resource_id,
-          scope_level, scope_id, decision, reason_code, policy_version, request_id, support_session_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          scope_level, scope_id, decision, reason_code, policy_version, request_id,
+          support_session_id, matched_role_binding_ids, matched_authorization_versions,
+          freshness_classification, mfa_assurance_classification, correlation_id,
+          support_request_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING decision_id`,
       [
         input.tenantId,
@@ -178,6 +207,12 @@ export function createPolicyEngine(options: {
         POLICY_VERSION,
         input.requestId,
         input.supportSessionId,
+        matched.map((m) => m.roleBindingId),
+        matched.map((m) => m.authorizationVersion),
+        input.freshness ?? 'not_applicable',
+        input.mfaAssurance ?? 'not_applicable',
+        input.correlationId ?? null,
+        input.supportRequestId ?? null,
       ],
     );
     return String((result.rows[0] as Row).decision_id);
@@ -212,11 +247,16 @@ export function createPolicyEngine(options: {
           reasonCode,
           requestId,
           supportSessionId: null,
+          correlationId: input.correlationId ?? null,
+          freshness: input.freshness,
+          mfaAssurance: input.mfaAssurance,
+          supportRequestId: input.supportRequestId ?? null,
         });
         return {
           decision: 'deny',
           reasonCode,
           decisionId,
+          matchedBindings: [],
           resourceVisible: detail?.resourceVisible ?? true,
           supportSessionId: null,
           sensitive: detail?.sensitive ?? false,
@@ -306,8 +346,12 @@ export function createPolicyEngine(options: {
       // 5. DATABASE-authoritative bindings, loaded per decision
       const bindings = (
         await query(
-          `SELECT role, scope_level, scope_id FROM role_bindings
+          `SELECT role_binding_id, role, scope_level, scope_id, resource_type, resource_id,
+                  authorization_version
+             FROM role_bindings
             WHERE user_link_id = $1 AND status = 'active'
+              AND effective_from <= NOW()
+              AND (effective_to IS NULL OR effective_to > NOW())
               AND tenant_id IS NOT DISTINCT FROM $2`,
           [actor.userLinkId, actor.actorScope === 'platform' ? null : actor.tenantId],
         )
@@ -315,6 +359,16 @@ export function createPolicyEngine(options: {
 
       const covers = (binding: BindingRow): boolean => {
         if (binding.scope_level === 'platform') return false; // never covers tenant data
+        if (binding.scope_level === 'resource') {
+          // EXACT match on tenant, resource type and resource id. A resource
+          // binding grants no descendant and no sibling access, and cannot
+          // satisfy a tenant-wide or organization-scoped request.
+          if (input.resource === undefined || input.resource === null) return false;
+          return (
+            binding.resource_type === input.resource.type &&
+            binding.resource_id === input.resource.id
+          );
+        }
         if (ancestry === null) {
           // Nothing narrower was named, so the action reaches the whole
           // tenant. Only a tenant-scope binding may authorize that: a
@@ -330,6 +384,13 @@ export function createPolicyEngine(options: {
       if (actor.actorScope === 'dealership') {
         const match = bindings.find((b) => def.allowedRoles.includes(b.role) && covers(b));
         if (match !== undefined) {
+          // EVERY matching binding is evidence, not just the first one found.
+          const matched = bindings
+            .filter((b) => def.allowedRoles.includes(b.role) && covers(b))
+            .map((b) => ({
+              roleBindingId: b.role_binding_id,
+              authorizationVersion: Number(b.authorization_version),
+            }));
           const decisionId = await record({
             tenantId: targetTenantId,
             actorUserLinkId: actor.userLinkId,
@@ -343,11 +404,17 @@ export function createPolicyEngine(options: {
             reasonCode: 'ALLOW_ROLE_BINDING',
             requestId,
             supportSessionId: null,
+            matched,
+            correlationId: input.correlationId ?? null,
+            freshness: input.freshness,
+            mfaAssurance: input.mfaAssurance,
+            supportRequestId: input.supportRequestId ?? null,
           });
           return {
             decision: 'allow',
             reasonCode: 'ALLOW_ROLE_BINDING',
             decisionId,
+            matchedBindings: matched,
             resourceVisible: true,
             supportSessionId: null,
             sensitive,
@@ -379,11 +446,26 @@ export function createPolicyEngine(options: {
             reasonCode: 'ALLOW_PLATFORM_ROLE',
             requestId,
             supportSessionId: null,
+            matched: [
+              {
+                roleBindingId: match.role_binding_id,
+                authorizationVersion: Number(match.authorization_version),
+              },
+            ],
+            correlationId: input.correlationId ?? null,
+            freshness: input.freshness,
+            mfaAssurance: input.mfaAssurance,
           });
           return {
             decision: 'allow',
             reasonCode: 'ALLOW_PLATFORM_ROLE',
             decisionId,
+            matchedBindings: [
+              {
+                roleBindingId: match.role_binding_id,
+                authorizationVersion: Number(match.authorization_version),
+              },
+            ],
             resourceVisible: true,
             supportSessionId: null,
             sensitive,
@@ -396,7 +478,7 @@ export function createPolicyEngine(options: {
       // whose request covers this action and whose scope covers the resource.
       const sessions = (
         await query(
-          `SELECT s.support_session_id, r.requested_actions, r.scope_level, r.scope_id
+          `SELECT s.support_session_id, r.request_id, r.requested_actions, r.scope_level, r.scope_id
              FROM support_access_sessions s
              JOIN support_access_requests r ON r.request_id = s.request_id
             WHERE s.actor_user_link_id = $1 AND s.tenant_id = $2
@@ -406,6 +488,7 @@ export function createPolicyEngine(options: {
         )
       ).rows as unknown as Array<{
         support_session_id: string;
+        request_id: string;
         requested_actions: string[];
         scope_level: string;
         scope_id: string | null;
@@ -433,11 +516,20 @@ export function createPolicyEngine(options: {
           reasonCode: 'ALLOW_SUPPORT_SESSION',
           requestId,
           supportSessionId: live.support_session_id,
+          // Support access is authorized by an approved REQUEST, not by a
+          // role binding — so the matched-binding list is truthfully empty
+          // and the request/session ids carry the evidence instead.
+          matched: [],
+          correlationId: input.correlationId ?? null,
+          freshness: input.freshness,
+          mfaAssurance: input.mfaAssurance,
+          supportRequestId: live.request_id,
         });
         return {
           decision: 'allow',
           reasonCode: 'ALLOW_SUPPORT_SESSION',
           decisionId,
+          matchedBindings: [],
           resourceVisible: true,
           supportSessionId: live.support_session_id,
           sensitive,

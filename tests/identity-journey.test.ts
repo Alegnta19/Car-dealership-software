@@ -4,10 +4,12 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import {
+  certifyMfaPolicy,
   resetDatabase,
   seedRooftopIdentity,
   skipIntegration,
   startIdentityTestEnv,
+  testIssuer,
   testOrganizationId,
   type IdentityTestEnv,
 } from '@dealer/test-kit';
@@ -16,7 +18,8 @@ import { ROLES } from '@dealer/contracts';
 import { createRooftop, createDealerGroup, createLegalEntity } from '@dealer/organization';
 import {
   decideSupportAccess,
-  ensureActivatedUserLink,
+  activateUserLink,
+  observeUserLinkOnLogin,
   requestSupportAccess,
   revokeSupportSession,
 } from '@dealer/identity-access';
@@ -136,6 +139,7 @@ describe(
         tenantId,
         tenantName: 'Delta Motors',
         providerOrganizationId: testOrganizationId(tenantId),
+        issuer: testIssuer(),
         adminProviderUserId: 'user_admin',
         adminEmail: 'admin@delta.example',
       };
@@ -195,14 +199,24 @@ describe(
       assert.equal(adminWrite.status, 403, 'administering identities is not doing service work');
 
       // ── 7. A new advisor logs in and receives NO privilege ────────────────
-      const advisorLink = await ensureActivatedUserLink({
+      const advisorLink = await observeUserLinkOnLogin({
         tenantId,
         providerUserId: 'user_advisor',
         email: 'advisor@delta.example',
         displayName: 'Ada Advisor',
       });
       assert.ok(advisorLink);
+      assert.equal(advisorLink.status, 'pending', 'login must NOT activate (R1 section B)');
       const advisorToken = await tokenFor('user_advisor', tenantId);
+      // a pending link carries no session and no access at all
+      assert.equal((await call(advisorToken, 'GET', '/api/service/home')).status, 401);
+      // the administrator activates it explicitly
+      assert.ok(
+        await activateUserLink({
+          userLinkId: advisorLink.userLinkId,
+          activatedByUserLinkId: adminLinkId,
+        }),
+      );
       const beforeRole = await call(advisorToken, 'GET', '/api/service/home');
       assert.equal(beforeRole.status, 403, 'a fresh identity carries no role');
 
@@ -342,17 +356,57 @@ describe(
       assert.equal(txn.rows.length, 1);
       // Complete the EXACT transaction the route opened, using the nonce it
       // sealed into the cookie — the same value /auth/reauth/callback reads.
-      const grantResult = await completeStartedReauthentication(
+      // R1 journey step 7: FRESH authentication alone must NOT mint a
+      // high-assurance grant while the organization's MFA policy is
+      // uncertified. Freshness and policy are separate facts.
+      const connectionRow = await query(
+        `SELECT connection_id, mfa_policy_certified FROM identity_provider_connections
+          WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      const connectionId = String(
+        (connectionRow.rows[0] as { connection_id: unknown }).connection_id,
+      );
+      assert.equal(
+        (connectionRow.rows[0] as { mfa_policy_certified: boolean }).mfa_policy_certified,
+        false,
+        'the connection starts uncertified',
+      );
+      const refusedGrant = await completeStartedReauthentication(
         started.headers.get('set-cookie'),
         advisorLink.userLinkId,
         String(started.body!.data.reauth_txn_id),
+        connectionId,
+        false,
       );
+      assert.equal(refusedGrant, null, 'uncertified MFA policy must fail closed');
+      const noGrantYet = await query(`SELECT COUNT(*)::int AS n FROM reauthentication_grants`, []);
+      assert.equal(Number((noGrantYet.rows[0] as { n: number }).n), 0);
+
+      // R1 journey step 8: certify the policy, start again, and exactly ONE
+      // bound grant is created.
+      await certifyMfaPolicy(tenantId);
+      const started2 = await call(advisorToken, 'POST', '/auth/reauth/start', {
+        action: 'service.ro.transition',
+        qualifier: 'authorized',
+        resource: { type: 'repair_order', id: roId },
+      });
+      assert.equal(started2.status, 200, JSON.stringify(started2.body));
+      assert.equal(started2.body!.data.mfa_policy_certified, true);
+      const grantResult = await completeStartedReauthentication(
+        started2.headers.get('set-cookie'),
+        advisorLink.userLinkId,
+        String(started2.body!.data.reauth_txn_id),
+        connectionId,
+        true,
+      );
+      assert.ok(grantResult, 'certified policy plus freshness mints the grant');
       // exactly ONE transaction and ONE grant exist — no shadow transaction
       const txnCount = await query(
-        `SELECT COUNT(*)::int AS n FROM reauthentication_transactions`,
+        `SELECT COUNT(*)::int AS n FROM reauthentication_transactions WHERE state = 'completed'`,
         [],
       );
-      assert.equal(Number((txnCount.rows[0] as { n: number }).n), 1);
+      assert.equal(Number((txnCount.rows[0] as { n: number }).n), 1, 'exactly one completed');
       const grantCount = await query(`SELECT COUNT(*)::int AS n FROM reauthentication_grants`, []);
       assert.equal(Number((grantCount.rows[0] as { n: number }).n), 1);
       const authorized = await call(advisorToken, 'POST', `/api/service/ros/${roId}/transition`, {
@@ -362,16 +416,24 @@ describe(
       assert.equal(authorized.status, 200, JSON.stringify(authorized.body));
 
       // ── 13. Delegated support access: request, approve, act, indicate ─────
-      const supportLink = await ensureActivatedUserLink({
+      const supportLink = await observeUserLinkOnLogin({
         tenantId: null,
         providerUserId: 'user_support',
         email: 'support@platform.example',
         displayName: 'Sam Support',
       });
       assert.ok(supportLink);
+      assert.ok(
+        await activateUserLink({
+          userLinkId: supportLink.userLinkId,
+          activatedByUserLinkId: adminLinkId,
+        }),
+      );
       await query(
-        `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id, status)
-       VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active')`,
+        `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+       VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active', $1)`,
+        [testIssuer()],
       );
       await query(
         `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
@@ -466,9 +528,54 @@ describe(
         'the advisor loses access on the very next request, same token',
       );
 
+      // ── 14b. R1: a missing nonce and a missing org_id are both rejected ───
+      {
+        const { createAccessTokenVerifier, TokenVerificationError } =
+          await import('@dealer/identity-access');
+        const v = createAccessTokenVerifier({
+          issuer: env.issuer.issuer,
+          audience: env.issuer.audience,
+          jwksUri: env.issuer.jwksUri,
+        });
+        await assert.rejects(
+          v.verify(await env.issuer.signAccessToken({}, { omit: ['org_id'] })),
+          TokenVerificationError,
+          'a token without org_id is rejected by the verifier itself',
+        );
+        await assert.rejects(
+          v.verify(await env.issuer.signAccessToken({}), { requireNonce: 'the-demanded-nonce' }),
+          TokenVerificationError,
+          'a demanded nonce that is absent is rejected',
+        );
+        await assert.rejects(
+          v.verify(await env.issuer.signAccessToken({ nonce: 'some-other-value' }), {
+            requireNonce: 'the-demanded-nonce',
+          }),
+          TokenVerificationError,
+          'a mismatched nonce is rejected',
+        );
+      }
+
+      // ── 14c. R1: disabling the provider connection denies the next request
+      await query(
+        `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      assert.equal(
+        (await call(adminToken, 'GET', '/auth/session')).status,
+        401,
+        'a disabled provider connection denies the very next request',
+      );
+      await query(
+        `UPDATE identity_provider_connections SET status = 'active' WHERE tenant_id = $1`,
+        [tenantId],
+      );
+
       // ── 15. The evidence trail tells the whole story ──────────────────────
       const evidence = await query(
-        `SELECT action, decision, reason_code, actor_user_link_id, support_session_id, details
+        `SELECT action, decision, reason_code, actor_user_link_id, support_session_id, details,
+              matched_role_binding_ids, matched_authorization_versions,
+              freshness_classification, mfa_assurance_classification, correlation_id
          FROM policy_decisions ORDER BY occurred_at`,
         [],
       );
@@ -490,6 +597,33 @@ describe(
       for (const row of rows) {
         assert.equal(JSON.stringify(row.details), '{}');
       }
+      // R1 section G: allows name the bindings they matched, with versions
+      const allowRows = rows.filter((r) => String(r.decision) === 'allow');
+      assert.ok(allowRows.length > 0);
+      const roleAllows = allowRows.filter((r) => String(r.reason_code) === 'ALLOW_ROLE_BINDING');
+      assert.ok(roleAllows.length > 0, 'at least one role-binding allow exists');
+      for (const row of roleAllows) {
+        const ids = row.matched_role_binding_ids as string[];
+        const versions = row.matched_authorization_versions as unknown[];
+        assert.ok(ids.length > 0, 'a role-binding allow names its binding');
+        assert.equal(ids.length, versions.length, 'ids and versions stay aligned');
+      }
+      // …and denies never claim one
+      for (const row of rows.filter((r) => String(r.decision) === 'deny')) {
+        assert.equal((row.matched_role_binding_ids as string[]).length, 0);
+      }
+      // assurance classification is recorded, never invented
+      for (const row of rows) {
+        assert.ok(
+          ['not_applicable', 'stale', 'fresh'].includes(String(row.freshness_classification)),
+        );
+        assert.ok(
+          ['not_applicable', 'uncertified', 'certified'].includes(
+            String(row.mfa_assurance_classification),
+          ),
+        );
+      }
+
       // and it is append-only
       await assert.rejects(
         query(`UPDATE policy_decisions SET decision = 'allow' WHERE decision = 'deny'`),
@@ -516,7 +650,9 @@ describe(
       setCookieHeader: string | null,
       userLinkId: string,
       expectedTxnId: string,
-    ): Promise<string> {
+      connectionId: string | null,
+      mfaCertified: boolean,
+    ): Promise<string | null> {
       const { completeReauthentication, openCookiePayload } =
         await import('@dealer/identity-access');
       assert.ok(setCookieHeader, 'the reauth start must seal a transaction cookie');
@@ -528,12 +664,15 @@ describe(
       assert.equal(payload.purpose, 'reauth');
       const nonce = String(payload.nonce);
 
+      const connection =
+        connectionId === null ? null : { connectionId, mfaPolicyCertified: mfaCertified };
       const completed = await completeReauthentication({
         nonce,
         userLinkId,
         verifiedAuthTime: new Date(),
+        connection,
       });
-      assert.ok(completed, 'the reauthentication must complete');
+      if (completed === null) return null;
       assert.equal(
         completed.transaction.reauthTxnId,
         expectedTxnId,

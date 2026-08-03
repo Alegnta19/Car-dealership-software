@@ -17,7 +17,8 @@ import { ROLES } from '@dealer/contracts';
 import {
   createSession,
   csrfTokenForSession,
-  ensureActivatedUserLink,
+  activateUserLink,
+  observeUserLinkOnLogin,
   revokeSessionByToken,
 } from '@dealer/identity-access';
 import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } from '@dealer/api';
@@ -146,9 +147,11 @@ describe(
         tenantId: tenant,
         roles: [ROLES.SERVICE_ADVISOR],
       });
-      await query(`UPDATE user_links SET status = 'deactivated' WHERE user_link_id = $1`, [
-        advisor.userLinkId,
-      ]);
+      await query(
+        `UPDATE user_links SET status = 'deactivated', deactivated_at = NOW()
+          WHERE user_link_id = $1`,
+        [advisor.userLinkId],
+      );
       const res = await get('/api/service/home', { authorization: `Bearer ${advisor.token}` });
       assert.equal(res.status, 401);
     });
@@ -166,13 +169,19 @@ describe(
     });
 
     async function sessionFor(roles: string[]) {
-      const link = await ensureActivatedUserLink({
+      const link = await observeUserLinkOnLogin({
         tenantId: tenant,
         providerUserId: 'user_session_' + randomUUID().slice(0, 8),
         email: null,
         displayName: null,
       });
       assert.ok(link);
+      // R1 §B: login left it PENDING. An administrator activates it explicitly.
+      const activated = await activateUserLink({
+        userLinkId: link.userLinkId,
+        activatedByUserLinkId: link.userLinkId,
+      });
+      assert.ok(activated, 'explicit activation must succeed');
       for (const role of roles) {
         await query(
           `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
@@ -331,6 +340,72 @@ describe(
       );
       // the SAME still-valid token now fails: nothing to outlive the binding
       assert.equal((await post('/api/service/appointments', auth, body)).status, 403);
+    });
+
+    test('R1 section C: disabling ANY link in the chain denies the very next request', async () => {
+      // One otherwise-valid bearer token, four independent kill switches.
+      for (const kill of [
+        {
+          label: 'provider connection disabled',
+          sql: `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
+        },
+        {
+          label: 'provider connection expired',
+          sql: `UPDATE identity_provider_connections
+                   SET effective_from = NOW() - INTERVAL '2 hours',
+                       effective_to = NOW() - INTERVAL '1 minute'
+                 WHERE tenant_id = $1`,
+        },
+        {
+          label: 'tenant suspended',
+          sql: `UPDATE tenants SET status = 'suspended' WHERE tenant_id = $1`,
+        },
+        {
+          label: 'user link expired',
+          sql: `UPDATE user_links
+                   SET effective_from = NOW() - INTERVAL '2 hours',
+                       effective_to = NOW() - INTERVAL '1 minute'
+                 WHERE tenant_id = $1`,
+        },
+      ]) {
+        await resetDatabase();
+        tenant = randomUUID();
+        location = randomUUID();
+        await seedTenantIdentity(tenant);
+        await seedRooftopIdentity(tenant, location);
+        const advisor = await seedActor(env.issuer, {
+          tenantId: tenant,
+          roles: [ROLES.SERVICE_ADVISOR],
+        });
+        const auth = { authorization: `Bearer ${advisor.token}` };
+
+        assert.equal((await get('/api/service/home', auth)).status, 200, kill.label);
+        await query(kill.sql, [tenant]);
+        // SAME token, no restart, no expiry
+        assert.equal(
+          (await get('/api/service/home', auth)).status,
+          401,
+          `${kill.label} must deny the next request`,
+        );
+      }
+    });
+
+    test('R1 section C: a connection whose issuer disagrees with configuration is refused', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const auth = { authorization: `Bearer ${advisor.token}` };
+      assert.equal((await get('/api/service/home', auth)).status, 200);
+
+      // The provider identifier still maps, but the trust anchor no longer
+      // agrees — mapping inputs are not authorization evidence.
+      await query(
+        `UPDATE identity_provider_connections SET issuer = 'https://someone-elses-issuer.example'
+          WHERE tenant_id = $1`,
+        [tenant],
+      );
+      assert.equal((await get('/api/service/home', auth)).status, 401);
     });
 
     test('the tenant a request operates on comes from the identity, never the body', async () => {

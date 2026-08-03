@@ -22,7 +22,8 @@ export const PLATFORM_SUPPORT_ROLE = 'platform_support' as const;
 export interface VerifiedAccessToken {
   readonly providerUserId: string;
   readonly providerSessionId: string;
-  readonly organizationId: string | null;
+  /** Always present: the verifier requires a bounded non-empty org_id. */
+  readonly organizationId: string;
   readonly authTime: Date;
   readonly issuedAt: Date;
   readonly expiresAt: Date;
@@ -57,6 +58,11 @@ export interface AuthorizationRequest {
   readonly organizationId?: string;
   /** force fresh authentication (reauthentication uses 0) */
   readonly maxAgeSeconds?: number;
+  /**
+   * The OIDC nonce the provider must echo back in the id/access token. Bound
+   * to ONE single-use transaction; never logged, never reused as state.
+   */
+  readonly nonce?: string;
   /**
    * Which registered callback this leg returns to. Login and
    * REAUTHENTICATION are different routes, so they need different redirect

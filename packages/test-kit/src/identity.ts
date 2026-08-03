@@ -7,7 +7,12 @@
 import { randomUUID } from 'node:crypto';
 import { query } from '@dealer/database';
 import { resetConfigForTests } from '@dealer/platform';
-import { completeReauthentication, startReauthentication } from '@dealer/identity-access';
+import {
+  activateUserLink,
+  completeReauthentication,
+  observeUserLinkOnLogin,
+  startReauthentication,
+} from '@dealer/identity-access';
 import { startLocalIssuer, type LocalIssuer } from './local-issuer';
 import type { TestWorld } from './db';
 
@@ -40,6 +45,19 @@ export async function startIdentityTestEnv(): Promise<IdentityTestEnv> {
 
 export function testOrganizationId(tenantId: string): string {
   return `org_test_${tenantId}`;
+}
+
+/**
+ * The issuer a seeded connection records. Migration 056 requires a non-empty
+ * issuer and the middleware requires it to AGREE with the configured one, so
+ * suites that start the local issuer get its value and suites that never
+ * authenticate get an obviously-fake placeholder.
+ */
+export function testIssuer(): string {
+  const configured = process.env.WORKOS_ISSUER;
+  return configured !== undefined && configured.length > 0
+    ? configured
+    : 'https://issuer.invalid.test';
 }
 
 /**
@@ -83,12 +101,13 @@ export async function seedTenantIdentity(tenantId: string, name?: string): Promi
     [tenantId, groupId],
   );
   await query(
-    `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id, status)
-     SELECT 'dealership', $1, 'workos', $2, 'active'
+    `INSERT INTO identity_provider_connections
+       (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+     SELECT 'dealership', $1, 'workos', $2, 'active', $3
       WHERE NOT EXISTS (
         SELECT 1 FROM identity_provider_connections WHERE provider = 'workos' AND provider_organization_id = $2
       )`,
-    [tenantId, testOrganizationId(tenantId)],
+    [tenantId, testOrganizationId(tenantId), testIssuer()],
   );
 }
 
@@ -155,8 +174,11 @@ export async function seedActor(
 ): Promise<SeededActor> {
   const userLinkId = randomUUID();
   const providerUserId = 'user_actor_' + userLinkId.slice(0, 12);
+  // Direct insert of an ALREADY-ACTIVATED link: this is the fixture standing
+  // in for an administrator having activated it, never a login side effect.
   await query(
-    `INSERT INTO user_links (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
+    `INSERT INTO user_links
+       (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
      VALUES ($1, 'dealership', $2, 'workos', $3, 'activated', NOW())`,
     [userLinkId, input.tenantId, providerUserId],
   );
@@ -206,4 +228,42 @@ export async function mintReauthGrant(input: {
   });
   if (completed === null) throw new Error('test grant minting failed');
   return completed.grant;
+}
+
+/**
+ * FBL-020-R1: the explicit two-step a test must now perform, because login
+ * no longer activates anything. Observing creates/keeps a PENDING link; an
+ * administrator then activates it. Returns the ACTIVATED link.
+ */
+export async function observeThenActivate(input: {
+  tenantId: string | null;
+  providerUserId: string;
+  email?: string | null;
+  displayName?: string | null;
+  activatedByUserLinkId: string;
+}): Promise<{ userLinkId: string }> {
+  const pending = await observeUserLinkOnLogin({
+    tenantId: input.tenantId,
+    providerUserId: input.providerUserId,
+    email: input.email ?? null,
+    displayName: input.displayName ?? null,
+  });
+  if (pending === null) throw new Error('login observation refused the identity');
+  const activated = await activateUserLink({
+    userLinkId: pending.userLinkId,
+    activatedByUserLinkId: input.activatedByUserLinkId,
+  });
+  if (activated === null) throw new Error('activation refused');
+  return { userLinkId: activated.userLinkId };
+}
+
+/** Certifies the tenant's provider connection as MFA-required (R1 §E). */
+export async function certifyMfaPolicy(tenantId: string, certified = true): Promise<void> {
+  await query(
+    `UPDATE identity_provider_connections
+        SET mfa_policy_certified = $2,
+            mfa_policy_certified_at = CASE WHEN $2 THEN NOW() ELSE NULL END
+      WHERE tenant_id = $1`,
+    [tenantId, certified],
+  );
 }

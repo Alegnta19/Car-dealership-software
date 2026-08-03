@@ -36,7 +36,10 @@ import {
   createAccessTokenVerifier,
   createIdentityActionCatalog,
   createPolicyEngine,
+  findActiveConnectionById,
   findUserLinkByProviderIdentity,
+  isTenantEffective,
+  isUserLinkUsable,
   mergeActionCatalogs,
   resolveActiveConnection,
   rolesForUserLink,
@@ -60,6 +63,8 @@ export interface RequestIdentity {
   tenantId: string | null;
   authTime: Date | null;
   sessionId: string | null;
+  /** The provider connection this credential was resolved through (R1 §C/§E). */
+  connectionId: string | null;
   credential: 'bearer' | 'session';
 }
 
@@ -193,15 +198,27 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       }
       throw err;
     }
-    if (verified.organizationId === null) {
-      // No organization context — this platform admits organization members
-      // only. (Platform staff belong to the platform-scope organization.)
-      throw new UnauthorizedError('Invalid access token');
-    }
+    // FBL-020-R1 section C: the whole chain is re-checked on EVERY request —
+    // connection, issuer agreement, tenant, link. Disabling any link in that
+    // chain denies the very next request with the same otherwise-valid token;
+    // no restart and no waiting for expiry.
     const connection = await resolveActiveConnection(verified.organizationId);
     if (connection === null) throw new UnauthorizedError('Invalid access token');
+    // The connection's CONFIGURED issuer must agree with the verified token
+    // issuer. Provider identifiers are mapping inputs, not authorization
+    // evidence.
+    if (connection.issuer !== identitySettings().issuer) {
+      throw new UnauthorizedError('Invalid access token');
+    }
+    if (connection.tenantId !== null && !(await isTenantEffective(connection.tenantId))) {
+      throw new UnauthorizedError('Invalid access token');
+    }
     const link = await findUserLinkByProviderIdentity(connection.tenantId, verified.providerUserId);
-    if (link === null || link.status !== 'activated') {
+    if (
+      link === null ||
+      link.status !== 'activated' ||
+      !(await isUserLinkUsable(link.userLinkId))
+    ) {
       throw new UnauthorizedError('Invalid access token');
     }
     return {
@@ -210,6 +227,7 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       tenantId: connection.tenantId,
       authTime: verified.authTime,
       sessionId: verified.providerSessionId,
+      connectionId: connection.connectionId,
       credential: 'bearer',
     };
   }
@@ -217,6 +235,20 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
   if (sessionCookie !== undefined) {
     const session = await validateSessionToken(sessionCookie);
     if (session === null) throw new UnauthorizedError('Invalid or expired session');
+    // The same chain a bearer walks: an existing session must die the moment
+    // its tenant, provider connection or user link stops being effective.
+    if (session.tenantId !== null && !(await isTenantEffective(session.tenantId))) {
+      throw new UnauthorizedError('Invalid or expired session');
+    }
+    if (session.connectionId !== null) {
+      const connection = await findActiveConnectionById(session.connectionId);
+      if (connection === null || connection.issuer !== identitySettings().issuer) {
+        throw new UnauthorizedError('Invalid or expired session');
+      }
+    }
+    if (!(await isUserLinkUsable(session.userLinkId))) {
+      throw new UnauthorizedError('Invalid or expired session');
+    }
     if (!SAFE_METHODS.has(req.method)) {
       const presented = req.headers['x-csrf-token'];
       const settings = identitySettings();
@@ -233,6 +265,7 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       tenantId: session.tenantId,
       authTime: session.authTime,
       sessionId: session.sessionId,
+      connectionId: session.connectionId,
       credential: 'session',
     };
   }
@@ -320,6 +353,7 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     targetTenantId,
     resource,
     scopeHint,
+    correlationId: safeCorrelationId(req),
     // The evidence row records the SANITIZED correlation id — the same one
     // the response header echoes. A hostile header value must never reach an
     // append-only table (nor violate its CHECK and 500 the request).
@@ -361,6 +395,15 @@ const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
 function safeRequestId(req: Request): string | null {
   const raw = req.headers['x-request-id'];
+  return typeof raw === 'string' && SAFE_REQUEST_ID.test(raw) ? raw : null;
+}
+
+/**
+ * The correlation id ties a whole flow together and is deliberately distinct
+ * from the per-call request id. Screened the same way.
+ */
+function safeCorrelationId(req: Request): string | null {
+  const raw = req.headers['x-correlation-id'];
   return typeof raw === 'string' && SAFE_REQUEST_ID.test(raw) ? raw : null;
 }
 

@@ -512,15 +512,17 @@ describe(
       const other = await createTenant({ name: 'Other Group', status: 'active' });
 
       await query(
-        `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
-       VALUES ('dealership', $1, 'workos', 'org_alpha')`,
+        `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, issuer)
+       VALUES ('dealership', $1, 'workos', 'org_alpha', 'https://issuer.test.local')`,
         [tenant.tenantId],
       );
       // an external organization maps to exactly one internal home
       await assertSqlState(
         query(
-          `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
-         VALUES ('dealership', $1, 'workos', 'org_alpha')`,
+          `INSERT INTO identity_provider_connections
+           (connection_scope, tenant_id, provider, provider_organization_id, issuer)
+         VALUES ('dealership', $1, 'workos', 'org_alpha', 'https://issuer.test.local')`,
           [other.tenantId],
         ),
         UNIQUE_VIOLATION,
@@ -529,8 +531,9 @@ describe(
       // a second ACTIVE connection for the same tenant is rejected
       await assertSqlState(
         query(
-          `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
-         VALUES ('dealership', $1, 'workos', 'org_beta')`,
+          `INSERT INTO identity_provider_connections
+           (connection_scope, tenant_id, provider, provider_organization_id, issuer)
+         VALUES ('dealership', $1, 'workos', 'org_beta', 'https://issuer.test.local')`,
           [tenant.tenantId],
         ),
         UNIQUE_VIOLATION,
@@ -538,8 +541,9 @@ describe(
       );
       // ...but a DISABLED one can coexist (history preserved, no hard delete)
       await query(
-        `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id, status)
-       VALUES ('dealership', $1, 'workos', 'org_beta', 'disabled')`,
+        `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+       VALUES ('dealership', $1, 'workos', 'org_beta', 'disabled', 'https://issuer.test.local')`,
         [tenant.tenantId],
       );
     });

@@ -9,7 +9,8 @@ import {
   createSession,
   csrfTokenForSession,
   deactivateUserLink,
-  ensureActivatedUserLink,
+  activateUserLink,
+  observeUserLinkOnLogin,
   findUserLink,
   resolveConnectionByOrganization,
   revokeSessionByToken,
@@ -34,9 +35,10 @@ describe(
     async function seedTenantWithConnection(orgId: string) {
       const tenant = await createTenant({ name: 'Identity Tenant ' + orgId, status: 'active' });
       await query(
-        `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id, status)
-       VALUES ('dealership', $1, 'workos', $2, 'active')`,
-        [tenant.tenantId, orgId],
+        `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+       VALUES ('dealership', $1, 'workos', $2, 'active', $3)`,
+        [tenant.tenantId, orgId, 'https://issuer.test.local'],
       );
       return tenant;
     }
@@ -55,37 +57,35 @@ describe(
       assert.equal(await resolveConnectionByOrganization(pool, 'workos', 'org_resolve'), null);
     });
 
-    test('first login creates an ACTIVATED link with ZERO role bindings, audited', async () => {
+    test('first login creates a PENDING link, grants NOTHING, and never activates', async () => {
       const tenant = await seedTenantWithConnection('org_first');
-      const link = await ensureActivatedUserLink({
+      const link = await observeUserLinkOnLogin({
         tenantId: tenant.tenantId,
         providerUserId: 'user_first',
         email: 'first@example.com',
         displayName: 'First User',
       });
       assert.ok(link);
-      assert.equal(link.status, 'activated');
-      assert.ok(link.activatedAt instanceof Date);
+      // R1 section B: login OBSERVES. It does not activate.
+      assert.equal(link.status, 'pending');
+      assert.equal(link.activatedAt, null);
 
       const bindings = await query(
         `SELECT COUNT(*)::int AS n FROM role_bindings WHERE user_link_id = $1`,
         [link.userLinkId],
       );
-      assert.equal(
-        Number((bindings.rows[0] as { n: number }).n),
-        0,
-        'no default role — deny-by-default holds',
-      );
+      assert.equal(Number((bindings.rows[0] as { n: number }).n), 0);
 
       const audit = await query(
         `SELECT COUNT(*)::int AS n FROM audit_events
-        WHERE entity_type = 'user_link' AND entity_id = $1 AND event_type = 'identity.user_link.created'`,
+          WHERE entity_type = 'user_link' AND entity_id = $1
+            AND event_type = 'identity.user_link.pending_created'`,
         [link.userLinkId],
       );
       assert.equal(Number((audit.rows[0] as { n: number }).n), 1);
 
-      // idempotent: a second login refreshes metadata, mints nothing new
-      const again = await ensureActivatedUserLink({
+      // a second login refreshes bounded identifiers and STILL does not activate
+      const again = await observeUserLinkOnLogin({
         tenantId: tenant.tenantId,
         providerUserId: 'user_first',
         email: 'renamed@example.com',
@@ -94,12 +94,27 @@ describe(
       assert.ok(again);
       assert.equal(again.userLinkId, link.userLinkId);
       assert.equal(again.email, 'renamed@example.com');
+      assert.equal(again.status, 'pending', 'repeated login must never activate');
       const count = await query(`SELECT COUNT(*)::int AS n FROM user_links`, []);
       assert.equal(Number((count.rows[0] as { n: number }).n), 1);
+
+      // the attempted pending login left policy/audit evidence
+      const refusalAudit = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE entity_id = $1 AND event_type = 'identity.user_link.pending_login_refused'`,
+        [link.userLinkId],
+      );
+      assert.ok(Number((refusalAudit.rows[0] as { n: number }).n) >= 1);
     });
 
-    test('pre-provisioned pending links activate on first login; deactivated links refuse login', async () => {
-      const tenant = await seedTenantWithConnection('org_pending');
+    test('activation is an explicit, attributable administrative act that grants no role', async () => {
+      const tenant = await seedTenantWithConnection('org_activate');
+      const admin = await createPendingUserLink({
+        tenantId: tenant.tenantId,
+        providerUserId: 'user_admin_actor',
+        email: null,
+        createdByUserLinkId: null,
+      });
       const pending = await createPendingUserLink({
         tenantId: tenant.tenantId,
         providerUserId: 'user_pending',
@@ -107,37 +122,80 @@ describe(
         createdByUserLinkId: null,
       });
       assert.equal(pending.status, 'pending');
-      assert.equal(pending.activatedAt, null);
 
-      const activated = await ensureActivatedUserLink({
-        tenantId: tenant.tenantId,
-        providerUserId: 'user_pending',
-        email: 'pending@example.com',
-        displayName: 'Pending Person',
+      const activated = await activateUserLink({
+        userLinkId: pending.userLinkId,
+        activatedByUserLinkId: admin.userLinkId,
       });
       assert.ok(activated);
-      assert.equal(activated.userLinkId, pending.userLinkId);
       assert.equal(activated.status, 'activated');
+      assert.ok(activated.activatedAt instanceof Date);
 
+      // attributable, versioned, and role-free
+      const row = await query(
+        `SELECT activated_by_user_link_id, authorization_version FROM user_links WHERE user_link_id = $1`,
+        [pending.userLinkId],
+      );
+      const r = row.rows[0] as {
+        activated_by_user_link_id: unknown;
+        authorization_version: unknown;
+      };
+      assert.equal(String(r.activated_by_user_link_id), admin.userLinkId);
+      assert.ok(
+        Number(r.authorization_version) > 1,
+        'activation increments the authorization version',
+      );
+      const bindings = await query(
+        `SELECT COUNT(*)::int AS n FROM role_bindings WHERE user_link_id = $1`,
+        [pending.userLinkId],
+      );
+      assert.equal(Number((bindings.rows[0] as { n: number }).n), 0, 'activation grants no role');
+
+      // activating twice is a no-op, not a second activation
+      assert.equal(
+        await activateUserLink({
+          userLinkId: pending.userLinkId,
+          activatedByUserLinkId: admin.userLinkId,
+        }),
+        null,
+      );
+
+      // a deactivated identity is refused at login and cannot be re-activated
       assert.ok(
         await deactivateUserLink({ userLinkId: pending.userLinkId, deactivatedByUserLinkId: null }),
       );
-      const refused = await ensureActivatedUserLink({
-        tenantId: tenant.tenantId,
-        providerUserId: 'user_pending',
-        email: 'pending@example.com',
-        displayName: 'Pending Person',
-      });
-      assert.equal(refused, null, 'a deactivated identity must not re-enter through login');
+      assert.equal(
+        await observeUserLinkOnLogin({
+          tenantId: tenant.tenantId,
+          providerUserId: 'user_pending',
+          email: null,
+          displayName: null,
+        }),
+        null,
+        'a deactivated identity must not re-enter through login',
+      );
+      assert.equal(
+        await activateUserLink({
+          userLinkId: pending.userLinkId,
+          activatedByUserLinkId: admin.userLinkId,
+        }),
+        null,
+        'deactivated links are not re-activated by the activation path either',
+      );
     });
 
     test('sessions: opaque token round trip, revocation, expiry, and read-time kill on deactivation', async () => {
       const tenant = await seedTenantWithConnection('org_sessions');
-      const link = await ensureActivatedUserLink({
+      const linkPending = await observeUserLinkOnLogin({
         tenantId: tenant.tenantId,
         providerUserId: 'user_sessions',
         email: null,
         displayName: null,
+      });
+      assert.ok(linkPending);
+      const link = await activateUserLink({
+        userLinkId: linkPending.userLinkId,
+        activatedByUserLinkId: linkPending.userLinkId,
       });
       assert.ok(link);
 
@@ -196,11 +254,16 @@ describe(
 
     test('revokeSessionsForUserLink sweeps every live session', async () => {
       const tenant = await seedTenantWithConnection('org_sweep');
-      const link = await ensureActivatedUserLink({
+      const linkPending = await observeUserLinkOnLogin({
         tenantId: tenant.tenantId,
         providerUserId: 'user_sweep',
         email: null,
         displayName: null,
+      });
+      assert.ok(linkPending);
+      const link = await activateUserLink({
+        userLinkId: linkPending.userLinkId,
+        activatedByUserLinkId: linkPending.userLinkId,
       });
       assert.ok(link);
       await createSession({
@@ -238,6 +301,7 @@ describe(
         tenantId,
         tenantName: 'Bootstrap Motors',
         providerOrganizationId: 'org_bootstrap',
+        issuer: 'https://issuer.test.local',
         adminProviderUserId: 'user_admin',
         adminEmail: 'admin@example.com',
       };

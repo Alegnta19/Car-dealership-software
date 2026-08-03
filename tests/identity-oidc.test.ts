@@ -71,11 +71,54 @@ describe('OIDC access-token verification', () => {
     assert.deepEqual(verified.roleHints, ['admin_hint', 'widgets:manage']);
   });
 
-  test('a token without org_id verifies with organizationId null (platform shape)', async () => {
+  test('a token WITHOUT org_id is rejected by the verifier itself', async () => {
+    // FBL-020-R1 section D: this platform admits organization members only,
+    // and the rejection happens in the verifier — not in a later, softer
+    // check that a new caller could forget to perform.
     const verifier = makeVerifier();
-    const token = await issuer.signAccessToken({}, { omit: ['org_id'] });
-    const verified = await verifier.verify(token);
-    assert.equal(verified.organizationId, null);
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({}, { omit: ['org_id'] })),
+      'missing org_id',
+    );
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({ org_id: '' })),
+      'empty org_id',
+    );
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({ org_id: 'x'.repeat(201) })),
+      'over-long org_id',
+    );
+  });
+
+  test('the OIDC nonce is required, exact, and never optional once demanded', async () => {
+    const verifier = makeVerifier();
+    const nonce = 'nonce-' + 'a'.repeat(26);
+
+    // present and equal: accepted
+    const ok = await verifier.verify(await issuer.signAccessToken({ nonce }), {
+      requireNonce: nonce,
+    });
+    assert.equal(ok.providerUserId.length > 0, true);
+
+    // missing, mismatched, and near-miss all fail closed
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({}), { requireNonce: nonce }),
+      'missing nonce',
+    );
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({ nonce: 'a-different-nonce-value-here' }), {
+        requireNonce: nonce,
+      }),
+      'mismatched nonce',
+    );
+    await assertRejected(
+      verifier.verify(await issuer.signAccessToken({ nonce: nonce + 'x' }), {
+        requireNonce: nonce,
+      }),
+      'near-miss nonce',
+    );
+    // a token carrying a nonce still verifies when none is demanded
+    await verifier.verify(await issuer.signAccessToken({ nonce }));
   });
 
   test('HS256 tokens are rejected — symmetric signing can never verify', async () => {

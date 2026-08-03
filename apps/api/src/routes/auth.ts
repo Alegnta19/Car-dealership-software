@@ -25,7 +25,8 @@ import {
   createSession,
   createWorkosProvider,
   csrfTokenForSession,
-  ensureActivatedUserLink,
+  observeUserLinkOnLogin,
+  findActiveConnectionById,
   findUserLinkByProviderIdentity,
   listActiveSupportSessions,
   openCookiePayload,
@@ -148,11 +149,16 @@ router.get(
     const s = settings();
     const state = randomBytes(32).toString('base64url');
     const codeVerifier = randomBytes(32).toString('base64url');
+    // The OIDC nonce is distinct from state, from the PKCE verifier and from
+    // any internal grant identifier. Sealed, never logged, and the provider
+    // must echo it into the token (R1 §D).
+    const oidcNonce = randomBytes(32).toString('base64url');
     const sealed = sealCookiePayload(
       {
         purpose: 'login',
         state,
         code_verifier: codeVerifier,
+        oidc_nonce: oidcNonce,
         return_to: safeReturnTo(req.query.return_to),
       },
       s.cookiePassword,
@@ -162,7 +168,11 @@ router.get(
       path: '/auth',
     });
     res.redirect(
-      provider().buildAuthorizationUrl({ state, codeChallenge: sha256base64url(codeVerifier) }),
+      provider().buildAuthorizationUrl({
+        state,
+        codeChallenge: sha256base64url(codeVerifier),
+        nonce: oidcNonce,
+      }),
     );
   }),
 );
@@ -196,25 +206,31 @@ router.get(
     });
     let verified;
     try {
-      verified = await verifier().verify(exchanged.accessToken);
+      // The nonce bound to THIS single-use transaction must come back in the
+      // token: missing, mismatched, expired or replayed all fail closed.
+      verified = await verifier().verify(exchanged.accessToken, {
+        requireNonce: String(txn.oidc_nonce),
+      });
     } catch (err) {
       if (err instanceof TokenVerificationError)
         throw new UnauthorizedError('Authentication failed');
       throw err;
     }
-    if (verified.organizationId === null) throw new UnauthorizedError('Authentication failed');
     const connection = await resolveActiveConnection(verified.organizationId);
     if (connection === null) throw new UnauthorizedError('Authentication failed');
 
-    const link = await ensureActivatedUserLink({
+    // FBL-020-R1 section B: login OBSERVES the identity. It may create or
+    // refresh a PENDING link, and it never activates one. Only an already
+    // activated link receives a session; everything else is a neutral 401,
+    // so pending, deactivated and unknown are externally indistinguishable.
+    const link = await observeUserLinkOnLogin({
       tenantId: connection.tenantId,
       provider: IDENTITY_PROVIDER_WORKOS,
       providerUserId: verified.providerUserId,
       email: exchanged.email,
       displayName: exchanged.displayName,
     });
-    if (link === null) {
-      // deactivated identity — neutral refusal, no detail
+    if (link === null || link.status !== 'activated') {
       throw new UnauthorizedError('Authentication failed');
     }
 
@@ -224,6 +240,8 @@ router.get(
       providerSessionId: verified.providerSessionId,
       authTime: verified.authTime,
       ttlSeconds: SESSION_TTL_SECONDS,
+      connectionId: connection.connectionId,
+      issuer: connection.issuer,
     });
     setCookie(res, SESSION_COOKIE, created.sessionToken, {
       maxAgeSeconds: SESSION_TTL_SECONDS,
@@ -340,18 +358,35 @@ router.post(
 
     const boundAction =
       typeof qualifier === 'string' && qualifier.length > 0 ? `${action}:${qualifier}` : action;
+
+    // A sensitive action demands HIGH assurance: a fresh provider
+    // authentication AND a connection certifying the organization's MFA
+    // policy. The two are separate facts and both are required (R1 §E).
+    const connection =
+      identity.connectionId === null ? null : await findActiveConnectionById(identity.connectionId);
+    const requiredAssurance = 'fresh_and_mfa_policy' as const;
+
+    const oidcNonce = randomBytes(32).toString('base64url');
     const started = await startReauthentication({
       tenantId: identity.tenantId,
       userLinkId: identity.userLinkId,
       action: boundAction,
       resourceType: resourceInput?.type ?? null,
       resourceId: resourceInput?.id ?? null,
+      requiredAssurance,
+      oidcNonce,
     });
 
     const state = randomBytes(32).toString('base64url');
     const codeVerifier = randomBytes(32).toString('base64url');
     const sealed = sealCookiePayload(
-      { purpose: 'reauth', state, code_verifier: codeVerifier, nonce: started.nonce },
+      {
+        purpose: 'reauth',
+        state,
+        code_verifier: codeVerifier,
+        nonce: started.nonce,
+        oidc_nonce: oidcNonce,
+      },
       s.cookiePassword,
     );
     setCookie(res, REAUTH_TXN_COOKIE, sealed, {
@@ -362,10 +397,13 @@ router.post(
       data: {
         reauth_txn_id: started.transaction.reauthTxnId,
         expires_at: started.transaction.expiresAt.toISOString(),
+        required_assurance: requiredAssurance,
+        mfa_policy_certified: connection?.mfaPolicyCertified === true,
         authorization_url: provider().buildAuthorizationUrl({
           state,
           codeChallenge: sha256base64url(codeVerifier),
           maxAgeSeconds: 0,
+          nonce: oidcNonce,
           // The reauth leg MUST return to /auth/reauth/callback: the login
           // callback reads a different transaction cookie and would strand it.
           redirectUri: s.reauthRedirectUri,
@@ -404,13 +442,14 @@ router.get(
     });
     let verified;
     try {
-      verified = await verifier().verify(exchanged.accessToken);
+      verified = await verifier().verify(exchanged.accessToken, {
+        requireNonce: String(txn.oidc_nonce),
+      });
     } catch (err) {
       if (err instanceof TokenVerificationError)
         throw new UnauthorizedError('Reauthentication failed');
       throw err;
     }
-    if (verified.organizationId === null) throw new UnauthorizedError('Reauthentication failed');
     const connection = await resolveActiveConnection(verified.organizationId);
     if (connection === null) throw new UnauthorizedError('Reauthentication failed');
     const link = await findUserLinkByProviderIdentity(connection.tenantId, verified.providerUserId);
@@ -418,11 +457,17 @@ router.get(
       throw new UnauthorizedError('Reauthentication failed');
     }
 
+    // Freshness comes from auth_time; the MFA policy fact comes from the
+    // connection. A high-assurance transaction fails closed without both.
     const completed = await completeReauthentication({
       nonce: String(txn.nonce),
       userLinkId: link.userLinkId,
       verifiedAuthTime: verified.authTime,
       clockSkewSeconds: s.oidcClockSkewSeconds,
+      connection: {
+        connectionId: connection.connectionId,
+        mfaPolicyCertified: connection.mfaPolicyCertified,
+      },
     });
     if (completed === null) throw new UnauthorizedError('Reauthentication failed');
     res.json({

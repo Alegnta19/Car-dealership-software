@@ -12,6 +12,7 @@
  * Failure model: ONE error type, fail closed. Internal detail rides on the
  * error object for structured logs; callers must never echo it outward.
  */
+import { timingSafeEqual } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { TokenVerificationError, type VerifiedAccessToken } from '../contracts';
 
@@ -34,6 +35,12 @@ export interface VerifyOptions {
    * (minus the bounded skew). Used with provider max_age=0 flows.
    */
   readonly requireAuthTimeAtOrAfter?: Date;
+  /**
+   * FBL-020-R1 section D: the OIDC nonce this transaction demands back. The
+   * token's `nonce` claim must be present and equal. Missing, mismatched or
+   * replayed values fail closed, and the value is never logged.
+   */
+  readonly requireNonce?: string;
 }
 
 export interface AccessTokenVerifier {
@@ -83,7 +90,10 @@ export function createAccessTokenVerifier(
           audience: options.audience,
           algorithms,
           clockTolerance,
-          requiredClaims: ['exp', 'iat', 'sub', 'sid', 'auth_time'],
+          // org_id is REQUIRED here, in the verifier itself: this platform
+          // admits organization members only, and a token without an
+          // organization must never reach a later, softer check.
+          requiredClaims: ['exp', 'iat', 'sub', 'sid', 'auth_time', 'org_id'],
         }));
       } catch (err) {
         if (err instanceof TokenVerificationError) throw err;
@@ -97,10 +107,24 @@ export function createAccessTokenVerifier(
       const authTime = claimEpochSeconds(payload.auth_time, 'auth_time');
       const issuedAt = claimEpochSeconds(payload.iat, 'iat');
       const expiresAt = claimEpochSeconds(payload.exp, 'exp');
-      const organizationId =
-        payload.org_id === undefined || payload.org_id === null
-          ? null
-          : claimString(payload.org_id, 'org_id');
+      // Bounded, non-empty, and mandatory.
+      const organizationId = claimString(payload.org_id, 'org_id');
+      if (organizationId.length > 200) {
+        throw new TokenVerificationError('claim org_id exceeds the bounded length');
+      }
+
+      if (verifyOptions?.requireNonce !== undefined) {
+        const presented = payload.nonce;
+        if (typeof presented !== 'string' || presented.length === 0) {
+          throw new TokenVerificationError('claim nonce missing');
+        }
+        // constant-time compare; the value itself never reaches a log line
+        const expected = Buffer.from(verifyOptions.requireNonce, 'utf8');
+        const actual = Buffer.from(presented, 'utf8');
+        if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+          throw new TokenVerificationError('claim nonce mismatch');
+        }
+      }
 
       if (verifyOptions?.requireAuthTimeAtOrAfter !== undefined) {
         const earliest = verifyOptions.requireAuthTimeAtOrAfter.getTime() - clockTolerance * 1000;

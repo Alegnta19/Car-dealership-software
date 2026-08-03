@@ -18,6 +18,24 @@ function sha256hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+/**
+ * FBL-020-R1 section E. Fresh authentication and certified MFA policy are
+ * SEPARATE facts:
+ *
+ *   - `fresh_only`            — max_age=0 plus an auth_time after the
+ *                               transaction start proves a fresh provider
+ *                               authentication event, and nothing more.
+ *   - `fresh_and_mfa_policy`  — additionally requires that the ACTIVE
+ *                               provider connection certifies the mapped
+ *                               WorkOS organization as MFA-required.
+ *
+ * WorkOS documents organization MFA policy separately from max_age
+ * reauthentication, so a fresh auth_time cannot stand in for the policy. An
+ * uncertified, false, expired or inactive certification fails CLOSED. No AMR
+ * value is fabricated and no specific authentication method is claimed.
+ */
+export type AssuranceLevel = 'fresh_only' | 'fresh_and_mfa_policy';
+
 export interface ReauthenticationTransaction {
   readonly reauthTxnId: string;
   readonly tenantId: string;
@@ -65,12 +83,16 @@ export async function startReauthentication(input: {
   resourceType?: string | null;
   resourceId?: string | null;
   ttlSeconds?: number;
+  requiredAssurance?: AssuranceLevel;
+  /** The OIDC nonce this transaction will demand back from the provider. */
+  oidcNonce?: string;
 }): Promise<StartedReauthentication> {
   const nonce = randomBytes(32).toString('base64url');
   const result = await query(
     `INSERT INTO reauthentication_transactions
-       (tenant_id, user_link_id, action, resource_type, resource_id, nonce_hash, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(secs => $7))
+       (tenant_id, user_link_id, action, resource_type, resource_id, nonce_hash,
+        expires_at, required_assurance, oidc_nonce_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(secs => $7), $8, $9)
      RETURNING *`,
     [
       input.tenantId,
@@ -80,6 +102,8 @@ export async function startReauthentication(input: {
       input.resourceId ?? null,
       sha256hex(nonce),
       input.ttlSeconds ?? 300,
+      input.requiredAssurance ?? 'fresh_only',
+      input.oidcNonce === undefined ? null : sha256hex(input.oidcNonce),
     ],
   );
   return { transaction: mapTxn(result.rows[0] as Row), nonce };
@@ -106,6 +130,12 @@ export async function completeReauthentication(input: {
   verifiedAuthTime: Date;
   clockSkewSeconds?: number;
   grantTtlSeconds?: number;
+  /**
+   * The ACTIVE connection this reauthentication ran through. Required to mint
+   * a `fresh_and_mfa_policy` grant: without a connection that certifies the
+   * organization's MFA policy, the high-assurance path fails closed.
+   */
+  connection?: { connectionId: string; mfaPolicyCertified: boolean } | null;
 }): Promise<CompletedReauthentication | null> {
   const skewMs = (input.clockSkewSeconds ?? 60) * 1000;
   return withTransaction(async (executor) => {
@@ -127,11 +157,25 @@ export async function completeReauthentication(input: {
       return null;
     }
 
+    // Assurance: freshness alone never satisfies a high-assurance action.
+    const required = String(
+      (found.rows[0] as Row).required_assurance ?? 'fresh_only',
+    ) as AssuranceLevel;
+    const certified = input.connection?.mfaPolicyCertified === true;
+    if (required === 'fresh_and_mfa_policy' && !certified) {
+      await executor.query(
+        `UPDATE reauthentication_transactions SET state = 'failed' WHERE reauth_txn_id = $1`,
+        [txn.reauthTxnId],
+      );
+      return null;
+    }
+
     const grant = randomBytes(32).toString('base64url');
     const grantResult = await executor.query(
       `INSERT INTO reauthentication_grants
-         (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id, grant_hash, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8))
+         (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id, grant_hash,
+          expires_at, assurance_level, connection_id, mfa_policy_certified_at_issue)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + make_interval(secs => $8), $9, $10, $11)
        RETURNING expires_at`,
       [
         txn.reauthTxnId,
@@ -142,6 +186,9 @@ export async function completeReauthentication(input: {
         txn.resourceId,
         sha256hex(grant),
         input.grantTtlSeconds ?? 120,
+        required,
+        input.connection?.connectionId ?? null,
+        certified,
       ],
     );
     await executor.query(
@@ -156,7 +203,13 @@ export async function completeReauthentication(input: {
         txn.tenantId,
         txn.reauthTxnId,
         txn.userLinkId,
-        JSON.stringify({ action: txn.action, resource_type: txn.resourceType }),
+        JSON.stringify({
+          action: txn.action,
+          resource_type: txn.resourceType,
+          assurance_level: required,
+          mfa_policy_certified: certified,
+          freshness: 'fresh',
+        }),
       ],
     );
     return {

@@ -118,7 +118,20 @@ export async function findUserLink(
  * RoleBindings). A deactivated link stays deactivated — reactivation is an
  * explicit administrative act, not a side effect of logging in.
  */
-export async function ensureActivatedUserLink(input: {
+/**
+ * FBL-020-R1 (section B): the LOGIN path. It never activates anything.
+ *
+ * A first login may create ONE idempotent PENDING link so an administrator
+ * has something to activate; a subsequent login may refresh bounded provider
+ * identifiers on that pending record. Neither grants access: the caller must
+ * check `status === 'activated'` before minting a session, and a pending,
+ * deactivated or ineffective link yields no session and no dealership access.
+ *
+ * Activation is an explicit, attributable administrative act
+ * (`activateUserLink`) or the auditable bootstrap command — never a side
+ * effect of presenting a valid token.
+ */
+export async function observeUserLinkOnLogin(input: {
   tenantId: string | null;
   provider?: IdentityProviderKind;
   providerUserId: string;
@@ -126,10 +139,10 @@ export async function ensureActivatedUserLink(input: {
   displayName: string | null;
 }): Promise<UserLink | null> {
   const provider = input.provider ?? IDENTITY_PROVIDER_WORKOS;
-  return withTransaction((executor) => ensureWithinTransaction(executor, provider, input, 0));
+  return withTransaction((executor) => observeWithinTransaction(executor, provider, input, 0));
 }
 
-async function ensureWithinTransaction(
+async function observeWithinTransaction(
   executor: Executor,
   provider: IdentityProviderKind,
   input: {
@@ -140,68 +153,112 @@ async function ensureWithinTransaction(
   },
   attempt: number,
 ): Promise<UserLink | null> {
-  {
-    const existing = await findUserLink(executor, provider, input.tenantId, input.providerUserId);
-    if (existing !== null && existing.status === 'deactivated') return null;
-    if (existing !== null && existing.status === 'activated') {
-      // refresh display metadata only; ids and privilege are untouched
-      const updated = await executor.query(
-        `UPDATE user_links SET email = $2, display_name = $3
-          WHERE user_link_id = $1 RETURNING *`,
-        [existing.userLinkId, input.email, input.displayName],
-      );
-      return mapUserLink(updated.rows[0] as Row);
+  const existing = await findUserLink(executor, provider, input.tenantId, input.providerUserId);
+
+  if (existing !== null) {
+    if (existing.status === 'deactivated') {
+      // A deactivated identity is refused outright; login never resurrects it.
+      await writeAudit(executor, {
+        tenantId: existing.tenantId,
+        eventType: 'identity.user_link.login_refused',
+        entityId: existing.userLinkId,
+        actorUserId: existing.userLinkId,
+        details: { provider, reason: 'deactivated' },
+      });
+      return null;
     }
-    if (existing !== null) {
-      const activated = await executor.query(
-        `UPDATE user_links
-            SET status = 'activated', activated_at = NOW(), email = $2, display_name = $3
+    if (existing.status === 'pending') {
+      // Bounded identifier refresh ONLY. Status is untouched.
+      const refreshed = await executor.query(
+        `UPDATE user_links SET email = $2, display_name = $3
           WHERE user_link_id = $1 AND status = 'pending' RETURNING *`,
         [existing.userLinkId, input.email, input.displayName],
       );
-      if (activated.rows.length === 0) return null;
-      const link = mapUserLink(activated.rows[0] as Row);
+      if (refreshed.rows.length === 0) return null;
       await writeAudit(executor, {
-        tenantId: link.tenantId,
-        eventType: 'identity.user_link.activated',
-        entityId: link.userLinkId,
-        actorUserId: link.userLinkId,
-        details: { provider, transition: 'pending->activated' },
+        tenantId: existing.tenantId,
+        eventType: 'identity.user_link.pending_login_refused',
+        entityId: existing.userLinkId,
+        actorUserId: existing.userLinkId,
+        details: { provider, status: 'pending' },
       });
-      return link;
+      return mapUserLink(refreshed.rows[0] as Row);
     }
-    // Concurrent first logins race on the unique link claim; DO NOTHING plus
-    // one bounded re-read keeps the loser correct instead of erroring.
-    const created = await executor.query(
-      `INSERT INTO user_links
-         (user_link_id, actor_scope, tenant_id, provider, provider_user_id, email, display_name, status, activated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'activated', NOW())
-       ON CONFLICT DO NOTHING
-       RETURNING *`,
-      [
-        randomUUID(),
-        input.tenantId === null ? 'platform' : 'dealership',
-        input.tenantId,
-        provider,
-        input.providerUserId,
-        input.email,
-        input.displayName,
-      ],
+    // activated: refresh display metadata only; privilege is untouched
+    const updated = await executor.query(
+      `UPDATE user_links SET email = $2, display_name = $3
+        WHERE user_link_id = $1 RETURNING *`,
+      [existing.userLinkId, input.email, input.displayName],
     );
-    if (created.rows.length === 0) {
-      if (attempt >= 1) throw new Error('user link claim raced twice — refusing to loop');
-      return ensureWithinTransaction(executor, provider, input, attempt + 1);
-    }
-    const link = mapUserLink(created.rows[0] as Row);
+    return mapUserLink(updated.rows[0] as Row);
+  }
+
+  // Unknown provider identity: record it as PENDING so an administrator can
+  // act on it. Concurrent first logins race on the unique claim; DO NOTHING
+  // plus one bounded re-read keeps the loser correct.
+  const created = await executor.query(
+    `INSERT INTO user_links
+       (user_link_id, actor_scope, tenant_id, provider, provider_user_id, email, display_name, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+     ON CONFLICT DO NOTHING
+     RETURNING *`,
+    [
+      randomUUID(),
+      input.tenantId === null ? 'platform' : 'dealership',
+      input.tenantId,
+      provider,
+      input.providerUserId,
+      input.email,
+      input.displayName,
+    ],
+  );
+  if (created.rows.length === 0) {
+    if (attempt >= 1) throw new Error('user link claim raced twice — refusing to loop');
+    return observeWithinTransaction(executor, provider, input, attempt + 1);
+  }
+  const link = mapUserLink(created.rows[0] as Row);
+  await writeAudit(executor, {
+    tenantId: link.tenantId,
+    eventType: 'identity.user_link.pending_created',
+    entityId: link.userLinkId,
+    actorUserId: link.userLinkId,
+    details: { provider, status: 'pending', granted_roles: 0 },
+  });
+  return link;
+}
+
+/**
+ * The EXPLICIT activation path (section B.4). Requires an attributable
+ * administrator, activates only a pending link, and creates NO RoleBinding —
+ * an activated identity with no bindings can still do nothing.
+ */
+export async function activateUserLink(input: {
+  userLinkId: string;
+  activatedByUserLinkId: string;
+}): Promise<UserLink | null> {
+  return withTransaction(async (executor) => {
+    const activated = await executor.query(
+      `UPDATE user_links
+          SET status = 'activated',
+              activated_at = NOW(),
+              activated_by_user_link_id = $2,
+              updated_by_user_link_id = $2,
+              authorization_version = authorization_version + 1
+        WHERE user_link_id = $1 AND status = 'pending'
+        RETURNING *`,
+      [input.userLinkId, input.activatedByUserLinkId],
+    );
+    if (activated.rows.length === 0) return null;
+    const link = mapUserLink(activated.rows[0] as Row);
     await writeAudit(executor, {
       tenantId: link.tenantId,
-      eventType: 'identity.user_link.created',
+      eventType: 'identity.user_link.activated',
       entityId: link.userLinkId,
-      actorUserId: link.userLinkId,
-      details: { provider, transition: 'none->activated', granted_roles: 0 },
+      actorUserId: input.activatedByUserLinkId,
+      details: { transition: 'pending->activated', granted_roles: 0 },
     });
     return link;
-  }
+  });
 }
 
 /** Pre-provisioning path used by administrators: creates a PENDING link. */
@@ -247,9 +304,14 @@ export async function deactivateUserLink(input: {
 }): Promise<boolean> {
   return withTransaction(async (executor) => {
     const updated = await executor.query(
-      `UPDATE user_links SET status = 'deactivated'
+      `UPDATE user_links
+          SET status = 'deactivated',
+              deactivated_at = NOW(),
+              deactivated_by_user_link_id = $2,
+              updated_by_user_link_id = $2,
+              authorization_version = authorization_version + 1
         WHERE user_link_id = $1 AND status <> 'deactivated' RETURNING tenant_id`,
-      [input.userLinkId],
+      [input.userLinkId, input.deactivatedByUserLinkId],
     );
     if (updated.rows.length === 0) return false;
     const row = updated.rows[0] as Row;

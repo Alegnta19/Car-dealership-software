@@ -13,6 +13,8 @@ export interface IdentitySession {
   readonly sessionId: string;
   readonly tenantId: string | null;
   readonly userLinkId: string;
+  /** The provider connection this session was established through (R1 §C). */
+  readonly connectionId: string | null;
   readonly providerSessionId: string | null;
   readonly authTime: Date;
   readonly issuedAt: Date;
@@ -32,6 +34,8 @@ function mapSession(r: Row): IdentitySession {
     sessionId: String(r.session_id),
     tenantId: r.tenant_id === null ? null : String(r.tenant_id),
     userLinkId: String(r.user_link_id),
+    connectionId:
+      r.connection_id === null || r.connection_id === undefined ? null : String(r.connection_id),
     providerSessionId: r.provider_session_id === null ? null : String(r.provider_session_id),
     authTime: ts(r.auth_time),
     issuedAt: ts(r.issued_at),
@@ -55,12 +59,15 @@ export async function createSession(input: {
   providerSessionId: string | null;
   authTime: Date;
   ttlSeconds: number;
+  connectionId?: string | null;
+  issuer?: string | null;
 }): Promise<CreatedSession> {
   const sessionToken = randomBytes(32).toString('base64url');
   const result = await query(
     `INSERT INTO identity_sessions
-       (tenant_id, user_link_id, session_token_hash, provider_session_id, auth_time, expires_at)
-     VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6))
+       (tenant_id, user_link_id, session_token_hash, provider_session_id, auth_time,
+        expires_at, connection_id, issuer)
+     VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6), $7, $8)
      RETURNING *`,
     [
       input.tenantId,
@@ -69,6 +76,8 @@ export async function createSession(input: {
       input.providerSessionId,
       input.authTime,
       input.ttlSeconds,
+      input.connectionId ?? null,
+      input.issuer ?? null,
     ],
   );
   return { session: mapSession(result.rows[0] as Row), sessionToken };
@@ -89,6 +98,8 @@ export async function validateSessionToken(sessionToken: string): Promise<Identi
         AND s.expires_at > NOW()
         AND ul.user_link_id = s.user_link_id
         AND ul.status = 'activated'
+        AND ul.effective_from <= NOW()
+        AND (ul.effective_to IS NULL OR ul.effective_to > NOW())
       RETURNING s.*`,
     [hashSessionToken(sessionToken)],
   );

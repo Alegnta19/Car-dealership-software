@@ -683,7 +683,7 @@ Three invariants a new endpoint must preserve:
 
 ## 14. Appendix — Quick Reference
 
-**Migrations:** `000_platform_core`, `049_phase248_service_cockpit`, `050_phase248_hardening`, `051_phase248_metrics_support`, `052_phase248_authorization_binding`, `053_phase248_estimate_line_association`, `054_phase248_waitlist`, `055_identity_organization`
+**Migrations:** `000_platform_core`, `049_phase248_service_cockpit`, `050_phase248_hardening`, `051_phase248_metrics_support`, `052_phase248_authorization_binding`, `053_phase248_estimate_line_association`, `054_phase248_waitlist`, `055_identity_organization`, `056_identity_contract_completion`
 
 **Tables (24 domain):** `service_appointments`, `service_appointment_events`, `service_waitlist_entries`, `repair_orders`, `ro_events`, `ro_line_items`, `mpi_templates`, `mpi_sessions`, `mpi_results`, `service_recommendations`, `ro_estimates`, `ro_authorizations`, `ro_parts_lines`, `ro_sublet_jobs`, `tech_profiles`, `tech_work_tickets`, `tech_time_entries`, `warranty_claims`, `comeback_cases`, `service_queue_items`, `service_portal_tasks`, `first_service_offers`, `service_sla_defaults`, `step_up_token_uses` — plus `audit_events` and `schema_migrations`, giving 26 in the database.
 

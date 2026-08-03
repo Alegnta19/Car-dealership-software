@@ -24,6 +24,12 @@ export interface BootstrapOptions {
   tenantId: string;
   tenantName: string;
   providerOrganizationId: string;
+  /**
+   * The token issuer this connection trusts (R1 section C). Every request is
+   * refused unless the verified token issuer agrees with it, so bootstrap
+   * must record it explicitly rather than leave it to be guessed.
+   */
+  issuer: string;
   adminProviderUserId: string;
   adminEmail: string | null;
   apply: boolean;
@@ -157,9 +163,10 @@ async function planConnection(
   });
   if (options.apply) {
     await executor.query(
-      `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id, status)
-       VALUES ('dealership', $1, 'workos', $2, 'active')`,
-      [options.tenantId, options.providerOrganizationId],
+      `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+       VALUES ('dealership', $1, 'workos', $2, 'active', $3)`,
+      [options.tenantId, options.providerOrganizationId, options.issuer],
     );
   }
 }
@@ -274,9 +281,10 @@ function parseArgs(argv: readonly string[]): BootstrapOptions {
   const tenantName = get('--tenant-name');
   const providerOrganizationId = get('--provider-org');
   const adminProviderUserId = get('--admin-user');
-  if (!tenantId || !tenantName || !providerOrganizationId || !adminProviderUserId) {
+  const issuer = get('--issuer');
+  if (!tenantId || !tenantName || !providerOrganizationId || !adminProviderUserId || !issuer) {
     console.error(
-      'usage: bootstrap-identity.ts --tenant-id <uuid> --tenant-name <name> --provider-org <org> --admin-user <user> [--admin-email <email>] [--apply]',
+      'usage: bootstrap-identity.ts --tenant-id <uuid> --tenant-name <name> --provider-org <org> --issuer <url> --admin-user <user> [--admin-email <email>] [--apply]',
     );
     process.exit(2);
   }
@@ -284,6 +292,7 @@ function parseArgs(argv: readonly string[]): BootstrapOptions {
     tenantId,
     tenantName,
     providerOrganizationId,
+    issuer,
     adminProviderUserId,
     adminEmail: get('--admin-email') ?? null,
     apply: argv.includes('--apply'),

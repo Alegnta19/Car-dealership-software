@@ -321,6 +321,122 @@ describe(
       assert.equal(decision.resourceVisible, false);
     });
 
+    test('an exact resource binding permits ONLY its typed resource', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      // no organization binding at all — one exact resource binding
+      const result = await query(
+        `INSERT INTO role_bindings
+         (tenant_id, user_link_id, role, scope_level, resource_type, resource_id)
+       VALUES ($1, $2, 'service_advisor', 'resource', 'repair_order', $3)
+       RETURNING role_binding_id, authorization_version`,
+        [world.tenantId, user, world.roA],
+      );
+      const bindingId = String((result.rows[0] as { role_binding_id: unknown }).role_binding_id);
+      const actor = {
+        userLinkId: user,
+        actorScope: 'dealership' as const,
+        tenantId: world.tenantId,
+      };
+
+      // the exact resource: allowed, and the evidence names the binding
+      const allowed = await engine.decide({
+        actor,
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roA },
+      });
+      assert.equal(allowed.decision, 'allow');
+      assert.deepEqual(
+        allowed.matchedBindings.map((m) => m.roleBindingId),
+        [bindingId],
+      );
+
+      // a SIBLING resource: denied, invisibly
+      const sibling = await engine.decide({
+        actor,
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roB },
+      });
+      assert.equal(sibling.decision, 'deny');
+      assert.equal(sibling.resourceVisible, false);
+
+      // the wrong TYPE with the same id: denied
+      const wrongType = await engine.decide({
+        actor,
+        action: 'service.appointment.confirm',
+        resource: { type: 'service_appointment', id: world.roA },
+      });
+      assert.equal(wrongType.decision, 'deny');
+
+      // a tenant-wide action: a resource binding never widens to it
+      const tenantWide = await engine.decide({ actor, action: 'service.ro.create' });
+      assert.equal(tenantWide.decision, 'deny');
+      assert.equal(tenantWide.reasonCode, 'NO_MATCHING_BINDING');
+
+      // a nonexistent resource stays indistinguishable from an inaccessible one
+      const ghost = await engine.decide({
+        actor,
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: randomUUID() },
+      });
+      assert.equal(ghost.decision, 'deny');
+      assert.equal(ghost.resourceVisible, sibling.resourceVisible);
+
+      // revoking it denies the very next decision
+      await query(
+        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW(),
+              authorization_version = authorization_version + 1
+        WHERE role_binding_id = $1`,
+        [bindingId],
+      );
+      const afterRevoke = await engine.decide({
+        actor,
+        action: 'service.ro.transition',
+        resource: { type: 'repair_order', id: world.roA },
+      });
+      assert.equal(afterRevoke.decision, 'deny');
+    });
+
+    test('the database refuses ambiguous and incomplete resource scope', async () => {
+      const world = await buildWorld();
+      const user = await makeUser(world.tenantId);
+      const attempts: Array<[string, string, unknown[]]> = [
+        [
+          'resource level without a resource',
+          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level)
+         VALUES ($1, $2, 'service_advisor', 'resource')`,
+          [world.tenantId, user],
+        ],
+        [
+          'resource level with only a type',
+          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, resource_type)
+         VALUES ($1, $2, 'service_advisor', 'resource', 'repair_order')`,
+          [world.tenantId, user],
+        ],
+        [
+          'resource level ALSO claiming an organization node',
+          `INSERT INTO role_bindings
+           (tenant_id, user_link_id, role, scope_level, scope_id, resource_type, resource_id)
+         VALUES ($1, $2, 'service_advisor', 'resource', $3, 'repair_order', $4)`,
+          [world.tenantId, user, world.rooftopA, world.roA],
+        ],
+        [
+          'an organization level carrying a resource',
+          `INSERT INTO role_bindings
+           (tenant_id, user_link_id, role, scope_level, scope_id, resource_type, resource_id)
+         VALUES ($1, $2, 'service_advisor', 'rooftop', $3, 'repair_order', $4)`,
+          [world.tenantId, user, world.rooftopA, world.roA],
+        ],
+      ];
+      for (const [label, sql, params] of attempts) {
+        await assert.rejects(
+          () => query(sql, params as never[]),
+          (err: unknown) => (err as { code?: string }).code === '23514',
+          `${label} must be refused by a CHECK`,
+        );
+      }
+    });
+
     test('revocation denies the VERY NEXT decision — no token to outlive it', async () => {
       const world = await buildWorld();
       const user = await makeUser(world.tenantId);

@@ -77,8 +77,9 @@ describe(
         await assert.rejects(
           () =>
             query(
-              `INSERT INTO identity_provider_connections (connection_scope, tenant_id, provider, provider_organization_id)
-             VALUES ('dealership', $1, $2, 'org_x')`,
+              `INSERT INTO identity_provider_connections
+               (connection_scope, tenant_id, provider, provider_organization_id, issuer)
+             VALUES ('dealership', $1, $2, 'org_x', 'https://issuer.test.local')`,
               [tenantId, provider],
             ),
           (err: unknown) => (err as { code?: string }).code === '23514',
