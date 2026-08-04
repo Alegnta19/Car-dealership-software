@@ -91,3 +91,87 @@ every outstanding sealed transaction. Announce it; users re-login.
 SAML SSO and SCIM directory sync are **interfaces only** (ADR-006, §Federation).
 The database refuses any provider other than `workos`, so there is no
 configuration that turns them on. Enabling them is a separate order.
+
+---
+
+## R2 corrections (FBL-020-R2, Blueprint §14.3)
+
+### Issuer binding is mandatory
+
+Every provider connection records the **issuer** its tokens must carry, and
+every request compares the verified token issuer against it. A connection
+whose issuer you cannot state is not a connection — migration 057 disabled
+any that existed and stamped a sentinel issuer, so they authorize nothing
+until an operator sets the real value and re-enables them.
+
+```sql
+UPDATE identity_provider_connections
+   SET issuer = 'https://<your-env>.authkit.app', status = 'active'
+ WHERE tenant_id = :tenant AND issuer = 'urn:fbl-020-r1:issuer-unset';
+```
+
+### Both redirect URIs
+
+Register **both**, exactly as deployed:
+
+| Leg              | URI                                   |
+| ---------------- | ------------------------------------- |
+| Login            | `https://<host>/auth/callback`        |
+| Reauthentication | `https://<host>/auth/reauth/callback` |
+
+Registering only the first strands every `max_age=0` leg at the wrong route.
+
+### Explicit link activation
+
+Login **never** activates an identity. A first login records a PENDING link
+and issues no session. An administrator activates it explicitly, and
+activation binds the link to exactly one active connection — if the tenant
+has zero or more than one, activation is refused rather than guessing.
+
+### MFA certification lifecycle
+
+`mfa_policy_certified` is an operator assertion that the mapped WorkOS
+organization is configured MFA-required. It is dated and attributable, and it
+is **not** implied by a fresh `auth_time`.
+
+```sql
+UPDATE identity_provider_connections
+   SET mfa_policy_certified = TRUE,
+       mfa_policy_certified_at = NOW(),
+       mfa_policy_certified_by_user_link_id = :operator
+ WHERE tenant_id = :tenant;
+```
+
+Withdrawing it (`FALSE`) immediately stops new high-assurance grants:
+money-affecting Fixed Ops operations and support approvals both require
+`fresh_and_mfa_policy`, and a `fresh_only` grant is refused at consumption.
+
+**Re-certify whenever the WorkOS organization policy changes.** The platform
+cannot observe that change on its own.
+
+### Impersonation is disabled by design
+
+WorkOS impersonation is not used and must stay off. If a refresh or token
+verification ever returns a different subject, organization or issuer than
+the session was established with, the local session is revoked immediately —
+there is no degraded mode.
+
+### Refresh rotation
+
+Refresh state is stored only as a digest and rotates on every successful
+refresh. A replayed refresh token changes nothing. Rotating
+`WORKOS_COOKIE_PASSWORD` still invalidates live cookie sessions and
+outstanding transactions.
+
+### Logout and revocation
+
+`POST /auth/logout` revokes the server-side session and returns the provider
+logout URL. Local revocation is authoritative: disabling the tenant, the
+connection, or the user link denies the very next request with the same
+credential — no restart, no waiting for expiry.
+
+### Sanitized evidence
+
+Policy evidence carries ids, codes and versions only. Support reason text
+lives in the request row and never enters ordinary logs. Do not paste tokens,
+nonces, cookies or authorization codes into tickets when reporting an issue.

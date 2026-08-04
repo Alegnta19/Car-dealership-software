@@ -103,3 +103,27 @@ Then have the administrator log in through `/auth/login` and confirm
 Set the tenant `suspended` (denies everything immediately) or `archived`.
 Never delete: the hierarchy, the links, the bindings and the policy evidence
 are the record of who could do what, and when.
+
+---
+
+## R2 changes (FBL-020-R2)
+
+`scripts/bootstrap-identity.ts` now requires `--issuer` and binds the
+administrator link to the connection it maps:
+
+```bash
+DATABASE_URL=... npx tsx scripts/bootstrap-identity.ts   --tenant-id <uuid> --tenant-name "Delta Motors"   --provider-org org_... --issuer https://<env>.authkit.app   --admin-user user_... --admin-email admin@dealer.com
+```
+
+Still dry-run by default; still refuses ambiguous mappings; still prints no
+credentials.
+
+**Ordering now matters.** A provider connection must exist and be active
+_before_ any identity in that tenant can be activated, because activation
+binds the link to exactly one connection. The bootstrap does this in the
+right order; a manual sequence must too.
+
+**Support approvals need high assurance.** A tenant administrator approving
+platform-support access must have freshly re-authenticated under a certified
+MFA policy, and the approval records the grant that backed it. Separation of
+duty alone no longer approves.
