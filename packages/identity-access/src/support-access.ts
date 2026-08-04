@@ -6,7 +6,7 @@
  * capped at 60 minutes and revocable at any instant. The reason text lives
  * in the request row ONLY — it is never copied into ordinary logs.
  */
-import { query, withTransaction } from '@dealer/database';
+import { query, withTransaction, type Executor } from '@dealer/database';
 
 export interface SupportAccessRequest {
   readonly requestId: string;
@@ -62,6 +62,62 @@ function mapSession(r: Row): SupportAccessSession {
   };
 }
 
+
+/**
+ * FBL-020-R3 section I. R2 validated the approver's GRANT but never their
+ * AUTHORITY, so any identity holding a high-assurance grant could approve
+ * support access into a tenant it had no standing in — and revocation
+ * checked nothing at all. Both now require a current, effective tenant
+ * administrator OF THE TARGET TENANT.
+ */
+async function isTenantAdmin(
+  executor: Executor,
+  tenantId: string,
+  userLinkId: string,
+): Promise<boolean> {
+  const r = await executor.query(
+    `SELECT 1
+       FROM role_bindings rb
+       JOIN user_links ul ON ul.user_link_id = rb.user_link_id
+      WHERE rb.user_link_id = $1
+        AND rb.tenant_id = $2
+        AND rb.role = 'tenant_admin'
+        AND rb.status = 'active'
+        AND rb.effective_from <= NOW()
+        AND (rb.effective_to IS NULL OR rb.effective_to > NOW())
+        AND ul.tenant_id = $2
+        AND ul.status = 'activated'
+        AND ul.effective_from <= NOW()
+        AND (ul.effective_to IS NULL OR ul.effective_to > NOW())
+      LIMIT 1`,
+    [userLinkId, tenantId],
+  );
+  return r.rows.length > 0;
+}
+
+/** A requester must be a CURRENT active platform-support actor. */
+async function isPlatformSupportActor(
+  executor: Executor,
+  userLinkId: string,
+): Promise<boolean> {
+  const r = await executor.query(
+    `SELECT 1
+       FROM role_bindings rb
+       JOIN user_links ul ON ul.user_link_id = rb.user_link_id
+      WHERE rb.user_link_id = $1
+        AND rb.scope_level = 'platform'
+        AND rb.role IN ('platform_support', 'platform_admin')
+        AND rb.status = 'active'
+        AND ul.actor_scope = 'platform'
+        AND ul.status = 'activated'
+        AND ul.effective_from <= NOW()
+        AND (ul.effective_to IS NULL OR ul.effective_to > NOW())
+      LIMIT 1`,
+    [userLinkId],
+  );
+  return r.rows.length > 0;
+}
+
 export async function requestSupportAccess(input: {
   tenantId: string;
   requesterUserLinkId: string;
@@ -72,6 +128,10 @@ export async function requestSupportAccess(input: {
   requestedDurationMinutes: number;
 }): Promise<SupportAccessRequest> {
   return withTransaction(async (executor) => {
+    // R3 section I: only a current active platform-support actor may file.
+    if (!(await isPlatformSupportActor(executor, input.requesterUserLinkId))) {
+      throw new Error('support access may only be requested by an active platform-support actor');
+    }
     const result = await executor.query(
       `INSERT INTO support_access_requests
          (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason, requested_duration_minutes)
@@ -125,6 +185,24 @@ export async function decideSupportAccess(input: {
   approvalGrantId?: string | null;
 }): Promise<SupportAccessSession | null> {
   return withTransaction(async (executor) => {
+    // R3 section I: AUTHORITY first. The approver must be a current,
+    // effective tenant administrator of the TARGET tenant — checked before
+    // any grant is considered, and required for a denial too, so an outsider
+    // cannot dispose of a tenant's pending request either.
+    const pending = await executor.query(
+      `SELECT tenant_id, requester_user_link_id FROM support_access_requests
+        WHERE request_id = $1 AND status = 'pending'`,
+      [input.requestId],
+    );
+    if (pending.rows.length === 0) return null;
+    const targetTenantId = String((pending.rows[0] as Row).tenant_id);
+    if (String((pending.rows[0] as Row).requester_user_link_id) === input.decidedByUserLinkId) {
+      return null; // requester/approver separation, enforced before anything else
+    }
+    if (!(await isTenantAdmin(executor, targetTenantId, input.decidedByUserLinkId))) {
+      return null;
+    }
+
     if (input.approve) {
       // The grant must exist, be consumed, belong to the approver, and have
       // been minted at fresh_and_mfa_policy. Anything less cannot approve.
@@ -191,6 +269,21 @@ export async function revokeSupportSession(input: {
   revokedByUserLinkId: string;
 }): Promise<boolean> {
   return withTransaction(async (executor) => {
+    // R3 section I: revocation is an authorized, scoped, attributable act.
+    // R2 checked nothing here at all.
+    const target = await executor.query(
+      `SELECT tenant_id, actor_user_link_id FROM support_access_sessions
+        WHERE support_session_id = $1 AND revoked_at IS NULL`,
+      [input.supportSessionId],
+    );
+    if (target.rows.length === 0) return false;
+    const sessionTenantId = String((target.rows[0] as Row).tenant_id);
+    const isAdmin = await isTenantAdmin(executor, sessionTenantId, input.revokedByUserLinkId);
+    // the support actor may always end their OWN session early
+    const isOwnActor =
+      String((target.rows[0] as Row).actor_user_link_id) === input.revokedByUserLinkId;
+    if (!isAdmin && !isOwnActor) return false;
+
     const updated = await executor.query(
       `UPDATE support_access_sessions
           SET revoked_at = NOW(),

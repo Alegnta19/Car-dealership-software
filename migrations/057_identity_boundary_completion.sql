@@ -38,17 +38,6 @@ ALTER TABLE user_links
   ADD COLUMN provider_organization_id TEXT,
   ADD COLUMN issuer                   TEXT;
 
-ALTER TABLE user_links
-  ADD CONSTRAINT ul_org_shape CHECK (
-    provider_organization_id IS NULL OR length(provider_organization_id) BETWEEN 1 AND 200
-  ),
-  ADD CONSTRAINT ul_issuer_shape CHECK (issuer IS NULL OR length(issuer) BETWEEN 1 AND 400),
-  -- an ACTIVATED link must be fully bound; a pending one need not be yet
-  ADD CONSTRAINT ul_activated_is_bound CHECK (
-    status <> 'activated'
-    OR (connection_id IS NOT NULL AND provider_organization_id IS NOT NULL AND issuer IS NOT NULL)
-  );
-
 -- Deterministic binding of EXISTING links: a link binds only when its tenant
 -- has EXACTLY ONE active connection. Anything else is ambiguous.
 UPDATE user_links ul
@@ -77,6 +66,21 @@ UPDATE user_links
        updated_at = NOW()
  WHERE status = 'activated'
    AND (connection_id IS NULL OR provider_organization_id IS NULL OR issuer IS NULL);
+
+-- Constraints are installed ONLY after the rows above are reconciled. R2
+-- added them first, which would abort this migration on any populated
+-- database that still held an unbound activated link.
+ALTER TABLE user_links
+  ADD CONSTRAINT ul_org_shape CHECK (
+    provider_organization_id IS NULL OR length(provider_organization_id) BETWEEN 1 AND 200
+  ),
+  ADD CONSTRAINT ul_issuer_shape CHECK (issuer IS NULL OR length(issuer) BETWEEN 1 AND 400),
+  -- an ACTIVATED link must be fully bound; a pending one need not be yet
+  ADD CONSTRAINT ul_activated_is_bound CHECK (
+    status <> 'activated'
+    OR (connection_id IS NOT NULL AND provider_organization_id IS NOT NULL AND issuer IS NOT NULL)
+  );
+
 
 -- ──────────────────────────────────────────────────────────────
 -- Section 2 — locally revocable sessions with NO nullable-connection bypass
@@ -179,6 +183,15 @@ ALTER TABLE reauthentication_transactions
   ADD COLUMN provider_organization_id TEXT,
   ADD COLUMN provider_subject         TEXT;
 
+-- Any transaction still 'started' from before R2 cannot satisfy the new
+-- binding rule; expire it rather than leave it usable.
+UPDATE reauthentication_transactions
+   SET state = 'expired'
+ WHERE state = 'started'
+   AND (connection_id IS NULL OR issuer IS NULL
+        OR provider_organization_id IS NULL OR provider_subject IS NULL);
+
+-- Constraints follow reconciliation, never precede it.
 ALTER TABLE reauthentication_transactions
   ADD CONSTRAINT rat_issuer_shape CHECK (issuer IS NULL OR length(issuer) BETWEEN 1 AND 400),
   ADD CONSTRAINT rat_org_shape CHECK (
@@ -194,13 +207,6 @@ ALTER TABLE reauthentication_transactions
         AND provider_organization_id IS NOT NULL AND provider_subject IS NOT NULL)
   );
 
--- Any transaction still 'started' from before R2 cannot satisfy the new
--- binding rule; expire it rather than leave it usable.
-UPDATE reauthentication_transactions
-   SET state = 'expired'
- WHERE state = 'started'
-   AND (connection_id IS NULL OR issuer IS NULL
-        OR provider_organization_id IS NULL OR provider_subject IS NULL);
 
 -- ──────────────────────────────────────────────────────────────
 -- Section 5 — support access authority and high-assurance approval
@@ -209,8 +215,59 @@ UPDATE reauthentication_transactions
 ALTER TABLE support_access_requests
   ADD COLUMN approver_assurance TEXT NOT NULL DEFAULT 'fresh_and_mfa_policy'
                                 CHECK (approver_assurance IN ('fresh_only', 'fresh_and_mfa_policy')),
-  ADD COLUMN approval_grant_id  UUID REFERENCES reauthentication_grants (grant_id),
-  -- an APPROVED request must record the high-assurance grant that approved it
+  ADD COLUMN approval_grant_id  UUID REFERENCES reauthentication_grants (grant_id);
+
+-- Historical support evidence is PRESERVED; only LIVE approvals that cannot
+-- name an approving grant are converted to an auditable terminal state, and
+-- their sessions ended. No approval is invented and no row is deleted.
+UPDATE support_access_sessions s
+   SET revoked_at = COALESCE(s.revoked_at, NOW()),
+       revoked_by_user_link_id = NULL
+  FROM support_access_requests r
+ WHERE r.request_id = s.request_id
+   AND s.revoked_at IS NULL
+   AND r.status = 'approved'
+   AND r.approval_grant_id IS NULL;
+
+-- Migration 055 ties decided_at to the approved/denied statuses, so the
+-- terminal conversion cannot simply overwrite status and strand the original
+-- decision. The prior decision is PRESERVED in dedicated columns (and in an
+-- audit row below) before the live fields are cleared — history is retained,
+-- authority is not.
+ALTER TABLE support_access_requests
+  ADD COLUMN superseded_decided_by_user_link_id UUID REFERENCES user_links (user_link_id),
+  ADD COLUMN superseded_decided_at              TIMESTAMPTZ,
+  ADD COLUMN superseded_reason                  TEXT
+    CHECK (superseded_reason IS NULL OR length(superseded_reason) BETWEEN 1 AND 100);
+
+INSERT INTO audit_events (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+SELECT tenant_id,
+       'identity.support.approval_superseded',
+       'support_access_request',
+       request_id,
+       decided_by_user_link_id,
+       jsonb_build_object(
+         'reason', 'fbl_020_r3_no_approving_grant',
+         'previous_status', status,
+         'previous_decided_at', decided_at
+       )
+  FROM support_access_requests
+ WHERE status = 'approved' AND approval_grant_id IS NULL;
+
+UPDATE support_access_requests
+   SET superseded_decided_by_user_link_id = decided_by_user_link_id,
+       superseded_decided_at = decided_at,
+       superseded_reason = 'fbl_020_r3_no_approving_grant',
+       status = 'expired',
+       decided_by_user_link_id = NULL,
+       decided_at = NULL,
+       authorization_version = authorization_version + 1,
+       updated_at = NOW()
+ WHERE status = 'approved'
+   AND approval_grant_id IS NULL;
+
+-- Now the constraint can land: every remaining approved row names its grant.
+ALTER TABLE support_access_requests
   ADD CONSTRAINT sar_approval_is_high_assurance CHECK (
     status <> 'approved' OR approval_grant_id IS NOT NULL
   );

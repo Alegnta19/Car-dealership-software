@@ -21,6 +21,7 @@ import {
   decideSupportAccess,
   requestSupportAccess,
   revokeForIdentityBreach,
+  revokeSupportSession,
   rotateSessionRefresh,
   startLoginTransaction,
   startReauthentication,
@@ -328,10 +329,169 @@ describe(
       );
     });
 
+    // ── R3 section I: support APPROVER AUTHORITY (test-gate item 16) ──────
+    test('only a current tenant admin of the TARGET tenant may approve support access', async () => {
+      const requester = await makeLink('user_r3_req');
+      // the requester must be a platform-support actor
+      await query(
+        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
+        [requester],
+      );
+      await query(
+        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+         VALUES (NULL, $1, 'platform_support', 'platform', NULL)`,
+        [requester],
+      );
+
+      const request = await requestSupportAccess({
+        tenantId,
+        requesterUserLinkId: requester,
+        requestedActions: ['service.ro.view'],
+        reason: 'ticket 55: authority matrix',
+        requestedDurationMinutes: 30,
+      });
+
+      // (a) a NON-ADMIN in the tenant cannot approve, even holding a grant
+      const nonAdmin = await makeLink('user_r3_nonadmin');
+      assert.equal(
+        await decideSupportAccess({
+          requestId: request.requestId,
+          decidedByUserLinkId: nonAdmin,
+          approve: true,
+        }),
+        null,
+        'a tenant member without tenant_admin cannot approve',
+      );
+
+      // (b) an admin of ANOTHER tenant cannot approve
+      const otherTenant = randomUUID();
+      await seedTenantIdentity(otherTenant);
+      const foreignAdmin = await (async () => {
+        const r = await query(
+          `INSERT INTO user_links
+             (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+              connection_id, issuer, provider_organization_id)
+           SELECT 'dealership', $1, 'workos', 'user_foreign_admin', 'activated', NOW(),
+                  c.connection_id, c.issuer, c.provider_organization_id
+             FROM identity_provider_connections c
+            WHERE c.tenant_id = $1 AND c.status = 'active' LIMIT 1
+           RETURNING user_link_id`,
+          [otherTenant],
+        );
+        const id = String((r.rows[0] as { user_link_id: unknown }).user_link_id);
+        await query(
+          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+           VALUES ($1, $2, 'tenant_admin', 'tenant', $1)`,
+          [otherTenant, id],
+        );
+        return id;
+      })();
+      assert.equal(
+        await decideSupportAccess({
+          requestId: request.requestId,
+          decidedByUserLinkId: foreignAdmin,
+          approve: true,
+        }),
+        null,
+        'a tenant_admin of another tenant cannot approve',
+      );
+
+      // (c) an INACTIVE admin of the right tenant cannot approve
+      const admin = await makeLink('user_r3_admin');
+      await query(
+        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id, status,
+                                    revoked_at)
+         VALUES ($1, $2, 'tenant_admin', 'tenant', $1, 'revoked', NOW())`,
+        [tenantId, admin],
+      );
+      assert.equal(
+        await decideSupportAccess({
+          requestId: request.requestId,
+          decidedByUserLinkId: admin,
+          approve: true,
+        }),
+        null,
+        'a revoked tenant_admin binding cannot approve',
+      );
+
+      // (d) the request is STILL pending — no unauthorized attempt disposed of it
+      const still = await query(
+        `SELECT status FROM support_access_requests WHERE request_id = $1`,
+        [request.requestId],
+      );
+      assert.equal(String((still.rows[0] as { status: string }).status), 'pending');
+    });
+
+    test('support revocation is authorized, scoped and attributable', async () => {
+      const requester = await makeLink('user_r3_rev_req');
+      await query(
+        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
+        [requester],
+      );
+      const outsider = await makeLink('user_r3_outsider');
+      const request = await query(
+        `INSERT INTO support_access_requests
+           (tenant_id, requester_user_link_id, requested_actions, reason,
+            requested_duration_minutes, status)
+         VALUES ($1, $2, ARRAY['service.ro.view'], 'ticket 56', 30, 'pending')
+         RETURNING request_id`,
+        [tenantId, requester],
+      );
+      const session = await query(
+        `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+         RETURNING support_session_id`,
+        [String((request.rows[0] as { request_id: unknown }).request_id), tenantId, requester],
+      );
+      const sessionId = String(
+        (session.rows[0] as { support_session_id: unknown }).support_session_id,
+      );
+
+      // an unauthorized tenant member cannot revoke
+      assert.equal(
+        await revokeSupportSession({
+          supportSessionId: sessionId,
+          revokedByUserLinkId: outsider,
+        }),
+        false,
+        'a non-admin cannot revoke a support session',
+      );
+      const live = await query(
+        `SELECT revoked_at FROM support_access_sessions WHERE support_session_id = $1`,
+        [sessionId],
+      );
+      assert.equal((live.rows[0] as { revoked_at: unknown }).revoked_at, null);
+
+      // the support actor may end their OWN session
+      assert.equal(
+        await revokeSupportSession({
+          supportSessionId: sessionId,
+          revokedByUserLinkId: requester,
+        }),
+        true,
+      );
+    });
+
     // ── Obligation 10: support approval needs high assurance ──────────────
     test('support approval without a high-assurance grant is refused', async () => {
+      // R3: the requester must be a current active platform-support actor,
+      // and the approver a current tenant administrator of this tenant.
       const requester = await makeLink('user_support_req');
+      await query(
+        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
+        [requester],
+      );
+      await query(
+        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+         VALUES (NULL, $1, 'platform_support', 'platform', NULL)`,
+        [requester],
+      );
       const approver = await makeLink('user_support_appr');
+      await query(
+        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
+         VALUES ($1, $2, 'tenant_admin', 'tenant', $1)`,
+        [tenantId, approver],
+      );
       const request = await requestSupportAccess({
         tenantId,
         requesterUserLinkId: requester,
