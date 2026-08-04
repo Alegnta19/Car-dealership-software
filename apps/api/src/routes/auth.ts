@@ -125,7 +125,12 @@ function setCookie(
 }
 
 function clearCookie(res: Response, name: string, path: string): void {
-  res.append('Set-Cookie', `${name}=; Max-Age=0; Path=${path}; HttpOnly; SameSite=Lax`);
+  // R3 section J: a clearing cookie must carry the SAME attributes as the one
+  // it replaces. Dropping Secure makes the clear a no-op for a __Secure-style
+  // cookie and can leave the original live over a plaintext downgrade.
+  const parts = [`${name}=`, 'Max-Age=0', `Path=${path}`, 'HttpOnly', 'SameSite=Lax'];
+  if (secureCookies()) parts.push('Secure');
+  res.append('Set-Cookie', parts.join('; '));
 }
 
 /** Relative-path allowlist: same-origin navigation only, never an open redirect. */

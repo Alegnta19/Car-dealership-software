@@ -29,10 +29,11 @@ export interface IdentityTestEnv {
 export async function startIdentityTestEnv(): Promise<IdentityTestEnv> {
   const issuer = await startLocalIssuer();
   const cookiePassword = 'test-cookie-password-0123456789abcdef!!';
-  // FBL-020-R2: the deterministic harness runs a plain-http local issuer, so
-  // it must DECLARE itself as local development. Without this the config
-  // correctly refuses http identity URLs — which is the point of the rule.
-  process.env.ALLOW_INSECURE_LOCAL_IDENTITY = '1';
+  // FBL-020-R3 section J: the harness runs a plain-http LOOPBACK issuer. It
+  // qualifies only because NODE_ENV is explicitly 'test' AND every identity
+  // URL is 127.0.0.1 — there is no longer an override that would let a
+  // remote or staging host use http.
+  process.env.NODE_ENV = 'test';
   process.env.IDENTITY_PROVIDER = 'workos';
   process.env.WORKOS_CLIENT_ID = 'client_test_local';
   process.env.WORKOS_API_KEY = 'sk_test_local_0123456789abcdef0123456789abcdef';

@@ -62,7 +62,6 @@ function mapSession(r: Row): SupportAccessSession {
   };
 }
 
-
 /**
  * FBL-020-R3 section I. R2 validated the approver's GRANT but never their
  * AUTHORITY, so any identity holding a high-assurance grant could approve
@@ -96,10 +95,7 @@ async function isTenantAdmin(
 }
 
 /** A requester must be a CURRENT active platform-support actor. */
-async function isPlatformSupportActor(
-  executor: Executor,
-  userLinkId: string,
-): Promise<boolean> {
+async function isPlatformSupportActor(executor: Executor, userLinkId: string): Promise<boolean> {
   const r = await executor.query(
     `SELECT 1
        FROM role_bindings rb

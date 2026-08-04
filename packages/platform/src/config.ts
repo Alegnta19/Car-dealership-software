@@ -128,8 +128,12 @@ function url(
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     throw new ConfigError(`${name} must use http or https`);
   }
-  if (httpsRequired && parsed.protocol !== 'https:') {
-    throw new ConfigError(`${name} must use https in production`);
+  if (parsed.protocol !== 'https:') {
+    // http is permitted ONLY in explicit local development/test AND only for
+    // a loopback host. A remote or staging host is refused either way.
+    if (httpsRequired || !isLoopbackHost(raw)) {
+      throw new ConfigError(`${name} must use https outside local development`);
+    }
   }
   return raw;
 }
@@ -140,9 +144,22 @@ function url(
  * — staging, preview, production — is treated as remote and secured.
  */
 function isLocalDevelopment(env: Record<string, string | undefined>): boolean {
-  const nodeEnv = env.NODE_ENV ?? 'development';
-  if (nodeEnv === 'production') return false;
-  return env.ALLOW_INSECURE_LOCAL_IDENTITY === '1' || nodeEnv === 'test';
+  // FBL-020-R3 section J: BOTH conditions are required. R2 accepted an
+  // ALLOW_INSECURE_LOCAL_IDENTITY override on any host, which permitted
+  // remote and staging HTTP — the override is gone. NODE_ENV must be
+  // explicitly development or test; the host check is applied per-URL below.
+  const nodeEnv = env.NODE_ENV;
+  return nodeEnv === 'development' || nodeEnv === 'test';
+}
+
+/** Loopback only: localhost, 127.0.0.1, ::1. Nothing else is "local". */
+function isLoopbackHost(raw: string): boolean {
+  try {
+    const h = new URL(raw).hostname.replace(/^\[|\]$/g, '');
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return false;
+  }
 }
 
 function loadIdentityConfig(env: Record<string, string | undefined>): IdentityConfig {

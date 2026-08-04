@@ -78,7 +78,7 @@ describe('identity configuration (FBL-020)', () => {
       const env = { ...WORKOS, NODE_ENV: 'production', [name]: 'http://plain.example.com/x' };
       assert.throws(
         () => loadConfig(env),
-        /https in production/,
+        /https outside local development/,
         `${name} must demand https in production`,
       );
     }
@@ -88,16 +88,25 @@ describe('identity configuration (FBL-020)', () => {
     // must DECLARE itself.
     assert.throws(
       () => loadConfig({ ...WORKOS, WORKOS_ISSUER: 'http://127.0.0.1:39999' }),
-      /https in production/,
+      /https outside local development/,
       'http is refused without an explicit local-development declaration',
     );
     // …and is permitted once declared, which is what the test harness does.
+    // R3 section J: the ALLOW_INSECURE_LOCAL_IDENTITY override is GONE — it
+    // permitted http on any host, including staging.
+    assert.throws(
+      () =>
+        loadConfig({
+          ...WORKOS,
+          WORKOS_ISSUER: 'http://issuer.staging.example.com',
+          NODE_ENV: 'development',
+        }),
+      /https outside local development/,
+      'a REMOTE host may not use http even in development',
+    );
     assert.equal(
-      loadConfig({
-        ...WORKOS,
-        WORKOS_ISSUER: 'http://127.0.0.1:39999',
-        ALLOW_INSECURE_LOCAL_IDENTITY: '1',
-      }).identity.provider,
+      loadConfig({ ...WORKOS, WORKOS_ISSUER: 'http://localhost:39999', NODE_ENV: 'development' })
+        .identity.provider,
       'workos',
     );
     assert.equal(
