@@ -86,13 +86,35 @@ export async function startReauthentication(input: {
   requiredAssurance?: AssuranceLevel;
   /** The OIDC nonce this transaction will demand back from the provider. */
   oidcNonce?: string;
+  /**
+   * FBL-020-R2: the EXACT identity this reauthentication starts from. The
+   * completion must come back through the same connection, issuer,
+   * organization and subject — a fresh authentication as somebody else, or
+   * through another organization, is not a reauthentication of this actor.
+   */
+  connectionId?: string | null;
+  issuer?: string | null;
+  providerOrganizationId?: string | null;
+  providerSubject?: string | null;
 }): Promise<StartedReauthentication> {
   const nonce = randomBytes(32).toString('base64url');
   const result = await query(
     `INSERT INTO reauthentication_transactions
        (tenant_id, user_link_id, action, resource_type, resource_id, nonce_hash,
-        expires_at, required_assurance, oidc_nonce_hash)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW() + make_interval(secs => $7), $8, $9)
+        expires_at, required_assurance, oidc_nonce_hash,
+        connection_id, issuer, provider_organization_id, provider_subject)
+     SELECT $1, $2, $3, $4, $5, $6, NOW() + make_interval(secs => $7), $8, $9,
+            COALESCE($10::uuid, c.connection_id),
+            COALESCE($11::text, c.issuer),
+            COALESCE($12::text, c.provider_organization_id),
+            COALESCE($13::text, ul.provider_user_id)
+       FROM user_links ul
+       LEFT JOIN identity_provider_connections c
+         ON c.tenant_id IS NOT DISTINCT FROM ul.tenant_id
+        AND c.provider = ul.provider
+        AND c.status = 'active'
+      WHERE ul.user_link_id = $2
+      LIMIT 1
      RETURNING *`,
     [
       input.tenantId,
@@ -104,6 +126,10 @@ export async function startReauthentication(input: {
       input.ttlSeconds ?? 300,
       input.requiredAssurance ?? 'fresh_only',
       input.oidcNonce === undefined ? null : sha256hex(input.oidcNonce),
+      input.connectionId ?? null,
+      input.issuer ?? null,
+      input.providerOrganizationId ?? null,
+      input.providerSubject ?? null,
     ],
   );
   return { transaction: mapTxn(result.rows[0] as Row), nonce };
@@ -136,6 +162,14 @@ export async function completeReauthentication(input: {
    * organization's MFA policy, the high-assurance path fails closed.
    */
   connection?: { connectionId: string; mfaPolicyCertified: boolean } | null;
+  /**
+   * R2: what the RETURNING token actually proved. Each must equal what the
+   * transaction started from, or this is not a reauthentication of that
+   * actor and nothing is minted.
+   */
+  verifiedIssuer?: string;
+  verifiedOrganizationId?: string;
+  verifiedProviderSubject?: string;
 }): Promise<CompletedReauthentication | null> {
   const skewMs = (input.clockSkewSeconds ?? 60) * 1000;
   return withTransaction(async (executor) => {
@@ -150,6 +184,31 @@ export async function completeReauthentication(input: {
 
     if (input.verifiedAuthTime.getTime() < txn.startedAt.getTime() - skewMs) {
       // stale authentication — the person did NOT freshly re-authenticate
+      await executor.query(
+        `UPDATE reauthentication_transactions SET state = 'failed' WHERE reauth_txn_id = $1`,
+        [txn.reauthTxnId],
+      );
+      return null;
+    }
+
+    // R2 exact-binding revalidation: the completion must return through the
+    // SAME connection, issuer, organization and subject the transaction
+    // started from. Any mismatch fails the transaction and mints nothing.
+    const startRow = found.rows[0] as Row;
+    const bindingMismatch =
+      (startRow.connection_id !== null &&
+        input.connection != null &&
+        String(startRow.connection_id) !== input.connection.connectionId) ||
+      (startRow.issuer !== null &&
+        input.verifiedIssuer !== undefined &&
+        String(startRow.issuer) !== input.verifiedIssuer) ||
+      (startRow.provider_organization_id !== null &&
+        input.verifiedOrganizationId !== undefined &&
+        String(startRow.provider_organization_id) !== input.verifiedOrganizationId) ||
+      (startRow.provider_subject !== null &&
+        input.verifiedProviderSubject !== undefined &&
+        String(startRow.provider_subject) !== input.verifiedProviderSubject);
+    if (bindingMismatch) {
       await executor.query(
         `UPDATE reauthentication_transactions SET state = 'failed' WHERE reauth_txn_id = $1`,
         [txn.reauthTxnId],
@@ -236,9 +295,17 @@ export async function consumeReauthenticationGrant(
     action: string;
     resourceType?: string | null;
     resourceId?: string | null;
+    /**
+     * FBL-020-R2: the assurance the OPERATION demands. A `fresh_only` grant
+     * must never authorize a `fresh_and_mfa_policy` operation — the
+     * predicate below refuses it in the same atomic UPDATE that spends it,
+     * so there is no window in which a weaker grant is briefly accepted.
+     */
+    requiredAssurance?: AssuranceLevel;
   },
 ): Promise<boolean> {
   if (typeof input.grant !== 'string' || input.grant.length === 0) return false;
+  const required: AssuranceLevel = input.requiredAssurance ?? 'fresh_only';
   const result = await executor.query(
     `UPDATE reauthentication_grants
         SET consumed_at = NOW()
@@ -249,7 +316,15 @@ export async function consumeReauthenticationGrant(
         AND resource_type IS NOT DISTINCT FROM $5
         AND resource_id IS NOT DISTINCT FROM $6
         AND consumed_at IS NULL
-        AND expires_at > NOW()`,
+        AND expires_at > NOW()
+        -- ASSURANCE FLOOR: a fresh_only grant satisfies only a fresh_only
+        -- operation. Requiring fresh_and_mfa_policy admits only a grant
+        -- minted at that level, and the grant must still have been issued
+        -- against a connection that certified the policy at issue time.
+        AND (
+          $7 = 'fresh_only'
+          OR (assurance_level = 'fresh_and_mfa_policy' AND mfa_policy_certified_at_issue = TRUE)
+        )`,
     [
       sha256hex(input.grant),
       input.tenantId,
@@ -257,6 +332,7 @@ export async function consumeReauthenticationGrant(
       input.action,
       input.resourceType ?? null,
       input.resourceId ?? null,
+      required,
     ],
   );
   return (result.rowCount ?? 0) === 1;

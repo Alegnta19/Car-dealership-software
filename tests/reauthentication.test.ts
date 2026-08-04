@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, skipIntegration } from '@dealer/test-kit';
+import {
+  ensureActiveConnection,
+  resetDatabase,
+  skipIntegration,
+  mintReauthGrant,
+} from '@dealer/test-kit';
 import { closePool, query, withTransaction } from '@dealer/database';
 import { createTenant } from '@dealer/organization';
 import {
@@ -39,9 +44,17 @@ describe(
     });
 
     async function makeUser(tenant: string | null): Promise<string> {
+      await ensureActiveConnection(tenant);
       const result = await query(
-        `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
-       VALUES ($1, $2, 'workos', $3, 'activated', NOW()) RETURNING user_link_id`,
+        `INSERT INTO user_links
+         (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+          connection_id, issuer, provider_organization_id)
+       SELECT $1, $2, 'workos', $3, 'activated', NOW(),
+              c.connection_id, c.issuer, c.provider_organization_id
+         FROM identity_provider_connections c
+        WHERE c.tenant_id IS NOT DISTINCT FROM $2 AND c.provider = 'workos' AND c.status = 'active'
+        LIMIT 1
+       RETURNING user_link_id`,
         [tenant === null ? 'platform' : 'dealership', tenant, 'user_' + randomUUID()],
       );
       return String((result.rows[0] as { user_link_id: unknown }).user_link_id);
@@ -270,19 +283,49 @@ describe(
         !JSON.stringify((audits.rows[0] as { details: unknown }).details).includes('ticket 7710'),
       );
 
-      // self-approval is impossible (schema CHECK)
-      await assert.rejects(
-        decideSupportAccess({
+      // R2: self-approval is refused BEFORE the database CHECK is reached,
+      // because the approver's own high-assurance grant is validated first.
+      // (The requester<>approver CHECK from 055 remains as the backstop.)
+      assert.equal(
+        await decideSupportAccess({
           requestId: request.requestId,
           decidedByUserLinkId: supportActor,
           approve: true,
+          approvalGrantId: null,
         }),
+        null,
+        'self-approval is refused',
       );
 
+      // R2: an approval requires a HIGH-ASSURANCE grant belonging to the
+      // approver. Separation of duty alone no longer suffices.
+      assert.equal(
+        await decideSupportAccess({
+          requestId: request.requestId,
+          decidedByUserLinkId: approver,
+          approve: true,
+        }),
+        null,
+        'approval without a high-assurance grant is refused',
+      );
+
+      await mintReauthGrant({
+        tenantId,
+        userLinkId: approver,
+        action: 'identity.support.approve',
+        resourceId: randomUUID(),
+      });
+      const grantRow = await query(
+        `UPDATE reauthentication_grants SET consumed_at = NOW()
+          WHERE user_link_id = $1 AND action = 'identity.support.approve'
+          RETURNING grant_id`,
+        [approver],
+      );
       const session = await decideSupportAccess({
         requestId: request.requestId,
         decidedByUserLinkId: approver,
         approve: true,
+        approvalGrantId: String((grantRow.rows[0] as { grant_id: unknown }).grant_id),
       });
       assert.ok(session);
       assert.ok(session.expiresAt.getTime() - session.grantedAt.getTime() <= 60 * 60_000);

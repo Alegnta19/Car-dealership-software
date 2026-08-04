@@ -65,6 +65,8 @@ export interface RequestIdentity {
   sessionId: string | null;
   /** The provider connection this credential was resolved through (R1 §C/§E). */
   connectionId: string | null;
+  /** R2: the provider subject this credential proved. */
+  providerSubject: string | null;
   credential: 'bearer' | 'session';
 }
 
@@ -213,6 +215,16 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
     if (connection.tenantId !== null && !(await isTenantEffective(connection.tenantId))) {
       throw new UnauthorizedError('Invalid access token');
     }
+    // The token's organization must be the connection's organization: a
+    // provider identifier is a mapping input, never authorization evidence.
+    if (connection.providerOrganizationId !== verified.organizationId) {
+      throw new UnauthorizedError('Invalid access token');
+    }
+    // Impossible token times: an auth_time in the future beyond the bounded
+    // skew is not a fact this platform accepts.
+    if (verified.authTime.getTime() > Date.now() + identitySettings().oidcClockSkewSeconds * 1000) {
+      throw new UnauthorizedError('Invalid access token');
+    }
     const link = await findUserLinkByProviderIdentity(connection.tenantId, verified.providerUserId);
     if (
       link === null ||
@@ -228,6 +240,7 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       authTime: verified.authTime,
       sessionId: verified.providerSessionId,
       connectionId: connection.connectionId,
+      providerSubject: verified.providerUserId,
       credential: 'bearer',
     };
   }
@@ -240,11 +253,27 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
     if (session.tenantId !== null && !(await isTenantEffective(session.tenantId))) {
       throw new UnauthorizedError('Invalid or expired session');
     }
-    if (session.connectionId !== null) {
-      const connection = await findActiveConnectionById(session.connectionId);
-      if (connection === null || connection.issuer !== identitySettings().issuer) {
-        throw new UnauthorizedError('Invalid or expired session');
-      }
+    // FBL-020-R2: NO nullable-connection bypass. R1 checked the connection
+    // only when the session named one, so a session with a NULL connection
+    // skipped the check entirely. A session that cannot prove the connection,
+    // issuer, organization and subject it was established through is
+    // unprovable and is refused.
+    if (
+      session.connectionId === null ||
+      session.issuer === null ||
+      session.providerSubject === null ||
+      session.providerOrganizationId === null
+    ) {
+      throw new UnauthorizedError('Invalid or expired session');
+    }
+    const connection = await findActiveConnectionById(session.connectionId);
+    if (
+      connection === null ||
+      connection.issuer !== identitySettings().issuer ||
+      connection.issuer !== session.issuer ||
+      connection.providerOrganizationId !== session.providerOrganizationId
+    ) {
+      throw new UnauthorizedError('Invalid or expired session');
     }
     if (!(await isUserLinkUsable(session.userLinkId))) {
       throw new UnauthorizedError('Invalid or expired session');
@@ -266,6 +295,7 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       authTime: session.authTime,
       sessionId: session.sessionId,
       connectionId: session.connectionId,
+      providerSubject: session.providerSubject,
       credential: 'session',
     };
   }
@@ -354,6 +384,11 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     resource,
     scopeHint,
     correlationId: safeCorrelationId(req),
+    // R2 §8: identity facts from the generated request context
+    authTime: identity.authTime,
+    connectionId: identity.connectionId,
+    sessionId: identity.credential === 'session' ? identity.sessionId : null,
+    actorProviderSubject: identity.providerSubject,
     // The evidence row records the SANITIZED correlation id — the same one
     // the response header echoes. A hostile header value must never reach an
     // append-only table (nor violate its CHECK and 500 the request).

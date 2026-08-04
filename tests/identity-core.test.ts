@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, skipIntegration } from '@dealer/test-kit';
+import { resetDatabase, sessionBindingFor, skipIntegration } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import { createTenant } from '@dealer/organization';
 import {
@@ -200,6 +200,7 @@ describe(
       assert.ok(link);
 
       const created = await createSession({
+        ...(await sessionBindingFor(tenant.tenantId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: 'sid_abc',
@@ -242,6 +243,7 @@ describe(
 
       // deactivating the user kills remaining sessions at READ time
       const second = await createSession({
+        ...(await sessionBindingFor(tenant.tenantId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,
@@ -267,6 +269,7 @@ describe(
       });
       assert.ok(link);
       await createSession({
+        ...(await sessionBindingFor(tenant.tenantId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,
@@ -274,6 +277,7 @@ describe(
         ttlSeconds: 3600,
       });
       await createSession({
+        ...(await sessionBindingFor(tenant.tenantId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,

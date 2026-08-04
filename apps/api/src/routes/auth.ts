@@ -20,7 +20,9 @@ import { NotFoundError, UnauthorizedError, ValidationError, getConfig } from '@d
 import {
   IDENTITY_PROVIDER_WORKOS,
   TokenVerificationError,
+  claimLoginTransactionAtomically,
   completeReauthentication,
+  failLoginTransaction,
   createAccessTokenVerifier,
   createSession,
   createWorkosProvider,
@@ -34,8 +36,8 @@ import {
   revokeSessionByToken,
   rolesForUserLink,
   sealCookiePayload,
+  startLoginTransaction,
   startReauthentication,
-  validateSessionToken,
   type AccessTokenVerifier,
   type IdentityProviderPort,
 } from '@dealer/identity-access';
@@ -45,7 +47,6 @@ import {
   authenticate,
   policyEngine,
   readCookie,
-  requireContext,
 } from '../middleware/auth';
 
 const router = Router();
@@ -101,7 +102,9 @@ export function resetAuthRoutesForTests(): void {
 }
 
 function secureCookies(): boolean {
-  return getConfig().isProduction;
+  // Secure everywhere except explicit local development/test — staging is
+  // NOT a place to drop the flag.
+  return !getConfig().isLocalDevelopment;
 }
 
 function setCookie(
@@ -147,15 +150,23 @@ router.get(
   '/login',
   asyncRoute(async (req, res) => {
     const s = settings();
-    const state = randomBytes(32).toString('base64url');
-    const codeVerifier = randomBytes(32).toString('base64url');
-    // The OIDC nonce is distinct from state, from the PKCE verifier and from
-    // any internal grant identifier. Sealed, never logged, and the provider
-    // must echo it into the token (R1 §D).
-    const oidcNonce = randomBytes(32).toString('base64url');
+    // FBL-020-R2: the AUTHORITY for state, nonce, PKCE and redirect is a
+    // server row that expires and is consumed exactly once. The cookie below
+    // is only the pointer that carries the plaintext back for comparison, so
+    // a replayed callback loses an atomic UPDATE rather than being trusted.
+    const txn = await startLoginTransaction({
+      purpose: 'login',
+      redirectUri: s.redirectUri,
+      returnTo: safeReturnTo(req.query.return_to),
+      ttlSeconds: TXN_COOKIE_TTL_SECONDS,
+    });
+    const state = txn.state;
+    const codeVerifier = txn.codeVerifier;
+    const oidcNonce = txn.nonce;
     const sealed = sealCookiePayload(
       {
         purpose: 'login',
+        login_txn_id: txn.loginTxnId,
         state,
         code_verifier: codeVerifier,
         oidc_nonce: oidcNonce,
@@ -200,10 +211,28 @@ router.get(
     }
     clearCookie(res, AUTH_TXN_COOKIE, '/auth');
 
-    const exchanged = await provider().exchangeCode({
-      code,
+    // Atomically claim the SERVER transaction. A replay, an expired row, an
+    // unknown state and a tampered cookie are one indistinguishable failure.
+    const claimed = await claimLoginTransactionAtomically({
+      state: String(txn.state),
+      purpose: 'login',
+      nonce: String(txn.oidc_nonce),
       codeVerifier: String(txn.code_verifier),
     });
+    if (claimed === null) throw new UnauthorizedError('Authentication failed');
+
+    let exchanged;
+    try {
+      exchanged = await provider().exchangeCode({
+        code,
+        codeVerifier: String(txn.code_verifier),
+      });
+    } catch {
+      // The provider exchange failed: burn the claimed transaction so its
+      // state can never be presented again, and answer neutrally.
+      await failLoginTransaction(claimed.loginTxnId);
+      throw new UnauthorizedError('Authentication failed');
+    }
     let verified;
     try {
       // The nonce bound to THIS single-use transaction must come back in the
@@ -242,6 +271,9 @@ router.get(
       ttlSeconds: SESSION_TTL_SECONDS,
       connectionId: connection.connectionId,
       issuer: connection.issuer,
+      providerSubject: verified.providerUserId,
+      providerOrganizationId: connection.providerOrganizationId,
+      refreshToken: exchanged.refreshToken,
     });
     setCookie(res, SESSION_COOKIE, created.sessionToken, {
       maxAgeSeconds: SESSION_TTL_SECONDS,
@@ -366,6 +398,10 @@ router.post(
       identity.connectionId === null ? null : await findActiveConnectionById(identity.connectionId);
     const requiredAssurance = 'fresh_and_mfa_policy' as const;
 
+    if (connection === null) {
+      // No provable connection means no reauthentication can be bound.
+      throw new UnauthorizedError('Reauthentication is unavailable');
+    }
     const oidcNonce = randomBytes(32).toString('base64url');
     const started = await startReauthentication({
       tenantId: identity.tenantId,
@@ -375,6 +411,11 @@ router.post(
       resourceId: resourceInput?.id ?? null,
       requiredAssurance,
       oidcNonce,
+      // R2: the exact identity this reauthentication starts from
+      connectionId: connection.connectionId,
+      issuer: connection.issuer,
+      providerOrganizationId: connection.providerOrganizationId,
+      providerSubject: identity.providerSubject,
     });
 
     const state = randomBytes(32).toString('base64url');
@@ -468,6 +509,11 @@ router.get(
         connectionId: connection.connectionId,
         mfaPolicyCertified: connection.mfaPolicyCertified,
       },
+      // R2: what the returning token actually proved, revalidated against
+      // what the transaction started from.
+      verifiedIssuer: connection.issuer,
+      verifiedOrganizationId: verified.organizationId,
+      verifiedProviderSubject: verified.providerUserId,
     });
     if (completed === null) throw new UnauthorizedError('Reauthentication failed');
     res.json({

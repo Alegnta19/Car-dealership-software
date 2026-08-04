@@ -237,15 +237,36 @@ export async function activateUserLink(input: {
   activatedByUserLinkId: string;
 }): Promise<UserLink | null> {
   return withTransaction(async (executor) => {
+    // FBL-020-R2: activation BINDS the link to exactly one active provider
+    // connection. The join supplies connection, issuer and organization; if
+    // the tenant has zero or more than one active connection the join yields
+    // nothing and activation is refused, because guessing which organization
+    // a person belongs to is precisely what R2 forbids.
     const activated = await executor.query(
-      `UPDATE user_links
+      `UPDATE user_links ul
           SET status = 'activated',
               activated_at = NOW(),
               activated_by_user_link_id = $2,
               updated_by_user_link_id = $2,
-              authorization_version = authorization_version + 1
-        WHERE user_link_id = $1 AND status = 'pending'
-        RETURNING *`,
+              authorization_version = ul.authorization_version + 1,
+              connection_id = c.connection_id,
+              issuer = c.issuer,
+              provider_organization_id = c.provider_organization_id
+         FROM identity_provider_connections c
+        WHERE ul.user_link_id = $1
+          AND ul.status = 'pending'
+          AND c.tenant_id IS NOT DISTINCT FROM ul.tenant_id
+          AND c.provider = ul.provider
+          AND c.status = 'active'
+          AND c.effective_from <= NOW()
+          AND (c.effective_to IS NULL OR c.effective_to > NOW())
+          AND (
+            SELECT COUNT(*) FROM identity_provider_connections c2
+             WHERE c2.tenant_id IS NOT DISTINCT FROM ul.tenant_id
+               AND c2.provider = ul.provider
+               AND c2.status = 'active'
+          ) = 1
+        RETURNING ul.*`,
       [input.userLinkId, input.activatedByUserLinkId],
     );
     if (activated.rows.length === 0) return null;

@@ -17,6 +17,8 @@ import { ForbiddenError } from '@dealer/platform';
 import { consumeReauthenticationGrant } from '@dealer/identity-access';
 
 export interface SensitiveActionBinding {
+  /** Defaults to fresh_and_mfa_policy: these are money-affecting actions. */
+  requiredAssurance?: 'fresh_only' | 'fresh_and_mfa_policy';
   tenantId: string;
   /** the actor's user_link_id */
   userId: string;
@@ -46,6 +48,9 @@ export async function consumeSensitiveActionGrant(
     action: expected.action,
     resourceType: 'repair_order',
     resourceId: expected.resourceId,
+    // FBL-020-R2: money-affecting Fixed Ops operations are high assurance.
+    // A fresh_only grant is refused in the same statement that would spend it.
+    requiredAssurance: expected.requiredAssurance ?? 'fresh_and_mfa_policy',
   });
   if (!consumed) refuse('grant_invalid_expired_or_spent');
 }

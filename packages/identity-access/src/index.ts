@@ -19,3 +19,4 @@ export * from './support-access';
 export * from './actor';
 export * from './sealed-cookie';
 export * from './federation';
+export * from './login-transaction';

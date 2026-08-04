@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, skipIntegration } from '@dealer/test-kit';
+import { ensureActiveConnection, resetDatabase, skipIntegration } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
   createDealerGroup,
@@ -112,9 +112,17 @@ describe(
     }
 
     async function makeUser(tenantId: string | null): Promise<string> {
+      await ensureActiveConnection(tenantId);
       const result = await query(
-        `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
-       VALUES ($1, $2, 'workos', $3, 'activated', NOW()) RETURNING user_link_id`,
+        `INSERT INTO user_links
+         (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+          connection_id, issuer, provider_organization_id)
+       SELECT $1, $2, 'workos', $3, 'activated', NOW(),
+              c.connection_id, c.issuer, c.provider_organization_id
+         FROM identity_provider_connections c
+        WHERE c.tenant_id IS NOT DISTINCT FROM $2 AND c.provider = 'workos' AND c.status = 'active'
+        LIMIT 1
+       RETURNING user_link_id`,
         [tenantId === null ? 'platform' : 'dealership', tenantId, 'user_' + randomUUID()],
       );
       return String((result.rows[0] as { user_link_id: unknown }).user_link_id);
@@ -562,10 +570,40 @@ describe(
       const approver = await makeUser(world.tenantId);
 
       // approved request restricted to rooftop A, one read action + one write action
+      // R2: an approved support request must name the high-assurance grant that
+      // backed the approval, so the fixture creates one first.
+      const txn = await query(
+        `INSERT INTO reauthentication_transactions
+         (tenant_id, user_link_id, action, nonce_hash, expires_at, required_assurance,
+          connection_id, issuer, provider_organization_id, provider_subject)
+       SELECT $1, $2, 'identity.support.approve', $3, NOW() + INTERVAL '5 minutes',
+              'fresh_and_mfa_policy', c.connection_id, c.issuer,
+              c.provider_organization_id, 'approver'
+         FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
+       RETURNING reauth_txn_id`,
+        [world.tenantId, approver, 'b'.repeat(64)],
+      );
+      await query(
+        `INSERT INTO reauthentication_grants
+         (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
+          assurance_level, mfa_policy_certified_at_issue, consumed_at)
+       VALUES ($1, $2, $3, 'identity.support.approve', $4,
+               NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())`,
+        [
+          String((txn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
+          world.tenantId,
+          approver,
+          'c'.repeat(64),
+        ],
+      );
+
       const request = await query(
         `INSERT INTO support_access_requests
-         (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason, requested_duration_minutes, status, decided_by_user_link_id, decided_at)
-       VALUES ($1, $2, ARRAY['service.ro.view','service.ro.transition'], 'rooftop', $3, 'ticket 9: verify stuck RO', 30, 'approved', $4, NOW())
+         (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
+          requested_duration_minutes, status, decided_by_user_link_id, decided_at, approval_grant_id)
+       SELECT $1, $2, ARRAY['service.ro.view','service.ro.transition'], 'rooftop', $3,
+              'ticket 9: verify stuck RO', 30, 'approved', $4, NOW(), g.grant_id
+         FROM reauthentication_grants g WHERE g.tenant_id = $1 LIMIT 1
        RETURNING request_id`,
         [world.tenantId, supportActor, world.rooftopA, approver],
       );

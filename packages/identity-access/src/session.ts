@@ -15,6 +15,10 @@ export interface IdentitySession {
   readonly userLinkId: string;
   /** The provider connection this session was established through (R1 §C). */
   readonly connectionId: string | null;
+  /** R2: the exact issuer, organization and subject this session is bound to. */
+  readonly issuer: string | null;
+  readonly providerSubject: string | null;
+  readonly providerOrganizationId: string | null;
   readonly providerSessionId: string | null;
   readonly authTime: Date;
   readonly issuedAt: Date;
@@ -36,6 +40,15 @@ function mapSession(r: Row): IdentitySession {
     userLinkId: String(r.user_link_id),
     connectionId:
       r.connection_id === null || r.connection_id === undefined ? null : String(r.connection_id),
+    issuer: r.issuer === null || r.issuer === undefined ? null : String(r.issuer),
+    providerSubject:
+      r.provider_subject === null || r.provider_subject === undefined
+        ? null
+        : String(r.provider_subject),
+    providerOrganizationId:
+      r.provider_organization_id === null || r.provider_organization_id === undefined
+        ? null
+        : String(r.provider_organization_id),
     providerSessionId: r.provider_session_id === null ? null : String(r.provider_session_id),
     authTime: ts(r.auth_time),
     issuedAt: ts(r.issued_at),
@@ -61,13 +74,17 @@ export async function createSession(input: {
   ttlSeconds: number;
   connectionId?: string | null;
   issuer?: string | null;
+  providerSubject?: string | null;
+  providerOrganizationId?: string | null;
+  refreshToken?: string | null;
 }): Promise<CreatedSession> {
   const sessionToken = randomBytes(32).toString('base64url');
   const result = await query(
     `INSERT INTO identity_sessions
        (tenant_id, user_link_id, session_token_hash, provider_session_id, auth_time,
-        expires_at, connection_id, issuer)
-     VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6), $7, $8)
+        expires_at, connection_id, issuer, provider_subject, provider_organization_id,
+        refresh_token_hash)
+     VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(secs => $6), $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       input.tenantId,
@@ -78,6 +95,11 @@ export async function createSession(input: {
       input.ttlSeconds,
       input.connectionId ?? null,
       input.issuer ?? null,
+      input.providerSubject ?? null,
+      input.providerOrganizationId ?? null,
+      input.refreshToken === undefined || input.refreshToken === null
+        ? null
+        : hashSessionToken(input.refreshToken),
     ],
   );
   return { session: mapSession(result.rows[0] as Row), sessionToken };
@@ -148,4 +170,77 @@ export function verifyCsrfToken(
   const actual = Buffer.from(presented, 'utf8');
   if (expected.length !== actual.length) return false;
   return timingSafeEqual(expected, actual);
+}
+
+// ── FBL-020-R2: provider session refresh with rotating sealed state ────────
+
+export interface RefreshOutcome {
+  readonly session: IdentitySession;
+  /** The NEW opaque refresh token. Returned once; stored only as a digest. */
+  readonly refreshToken: string;
+  readonly rotationCount: number;
+}
+
+/**
+ * Rotates a session's refresh state after a successful provider refresh.
+ *
+ * The rotation is a conditional UPDATE keyed on the CURRENT digest, so a
+ * replayed old refresh token loses the race and changes nothing. The caller
+ * must have already re-verified the provider's response; identity mismatch,
+ * refresh failure and impersonation are handled by `revokeForIdentityBreach`
+ * below, which kills the session immediately rather than degrading it.
+ */
+export async function rotateSessionRefresh(input: {
+  sessionId: string;
+  presentedRefreshToken: string;
+  newRefreshToken: string;
+  authTime: Date;
+  ttlSeconds: number;
+}): Promise<RefreshOutcome | null> {
+  const result = await query(
+    `UPDATE identity_sessions
+        SET refresh_token_hash = $3,
+            refresh_rotation_count = refresh_rotation_count + 1,
+            last_refreshed_at = NOW(),
+            auth_time = $4,
+            expires_at = NOW() + make_interval(secs => $5)
+      WHERE session_id = $1
+        AND refresh_token_hash = $2
+        AND revoked_at IS NULL
+        AND expires_at > NOW()
+      RETURNING *`,
+    [
+      input.sessionId,
+      hashSessionToken(input.presentedRefreshToken),
+      hashSessionToken(input.newRefreshToken),
+      input.authTime,
+      input.ttlSeconds,
+    ],
+  );
+  if (result.rows.length === 0) return null;
+  const row = result.rows[0] as Row;
+  return {
+    session: mapSession(row),
+    refreshToken: input.newRefreshToken,
+    rotationCount: Number(row.refresh_rotation_count),
+  };
+}
+
+/**
+ * An identity breach during refresh — the provider returned a different
+ * subject, organization or issuer, the refresh failed, or an impersonation
+ * was detected — revokes the local session immediately. There is no
+ * "degraded" state: the session dies.
+ */
+export async function revokeForIdentityBreach(
+  sessionId: string,
+  reason: 'identity_mismatch' | 'refresh_failed' | 'impersonation_detected',
+): Promise<boolean> {
+  const result = await query(
+    `UPDATE identity_sessions
+        SET revoked_at = NOW(), revoked_reason = $2
+      WHERE session_id = $1 AND revoked_at IS NULL`,
+    [sessionId, reason],
+  );
+  return (result.rowCount ?? 0) > 0;
 }

@@ -117,6 +117,11 @@ export interface PolicyInput {
   readonly freshness?: FreshnessClassification;
   readonly mfaAssurance?: MfaAssuranceClassification;
   readonly supportRequestId?: string | null;
+  /** R2: identity facts drawn from the generated request context. */
+  readonly authTime?: Date | null;
+  readonly connectionId?: string | null;
+  readonly sessionId?: string | null;
+  readonly actorProviderSubject?: string | null;
 }
 
 export interface PolicyDecisionResult {
@@ -181,6 +186,10 @@ export function createPolicyEngine(options: {
     freshness?: FreshnessClassification | undefined;
     mfaAssurance?: MfaAssuranceClassification | undefined;
     supportRequestId?: string | null | undefined;
+    authTime?: Date | null | undefined;
+    connectionId?: string | null | undefined;
+    sessionId?: string | null | undefined;
+    actorProviderSubject?: string | null | undefined;
   }): Promise<string> {
     // A deny never claims a matched binding (also a database CHECK).
     const matched = input.decision === 'allow' ? (input.matched ?? []) : [];
@@ -190,8 +199,8 @@ export function createPolicyEngine(options: {
           scope_level, scope_id, decision, reason_code, policy_version, request_id,
           support_session_id, matched_role_binding_ids, matched_authorization_versions,
           freshness_classification, mfa_assurance_classification, correlation_id,
-          support_request_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          support_request_id, auth_time, connection_id, session_id, actor_provider_subject)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING decision_id`,
       [
         input.tenantId,
@@ -213,6 +222,10 @@ export function createPolicyEngine(options: {
         input.mfaAssurance ?? 'not_applicable',
         input.correlationId ?? null,
         input.supportRequestId ?? null,
+        input.authTime ?? null,
+        input.connectionId ?? null,
+        input.sessionId ?? null,
+        input.actorProviderSubject ?? null,
       ],
     );
     return String((result.rows[0] as Row).decision_id);
@@ -251,6 +264,10 @@ export function createPolicyEngine(options: {
           freshness: input.freshness,
           mfaAssurance: input.mfaAssurance,
           supportRequestId: input.supportRequestId ?? null,
+          authTime: input.authTime ?? null,
+          connectionId: input.connectionId ?? null,
+          sessionId: input.sessionId ?? null,
+          actorProviderSubject: input.actorProviderSubject ?? null,
         });
         return {
           decision: 'deny',
@@ -409,6 +426,10 @@ export function createPolicyEngine(options: {
             freshness: input.freshness,
             mfaAssurance: input.mfaAssurance,
             supportRequestId: input.supportRequestId ?? null,
+            authTime: input.authTime ?? null,
+            connectionId: input.connectionId ?? null,
+            sessionId: input.sessionId ?? null,
+            actorProviderSubject: input.actorProviderSubject ?? null,
           });
           return {
             decision: 'allow',
@@ -455,6 +476,10 @@ export function createPolicyEngine(options: {
             correlationId: input.correlationId ?? null,
             freshness: input.freshness,
             mfaAssurance: input.mfaAssurance,
+            authTime: input.authTime ?? null,
+            connectionId: input.connectionId ?? null,
+            sessionId: input.sessionId ?? null,
+            actorProviderSubject: input.actorProviderSubject ?? null,
           });
           return {
             decision: 'allow',
@@ -524,6 +549,10 @@ export function createPolicyEngine(options: {
           freshness: input.freshness,
           mfaAssurance: input.mfaAssurance,
           supportRequestId: live.request_id,
+          authTime: input.authTime ?? null,
+          connectionId: input.connectionId ?? null,
+          sessionId: input.sessionId ?? null,
+          actorProviderSubject: input.actorProviderSubject ?? null,
         });
         return {
           decision: 'allow',

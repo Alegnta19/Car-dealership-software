@@ -29,6 +29,10 @@ export interface IdentityTestEnv {
 export async function startIdentityTestEnv(): Promise<IdentityTestEnv> {
   const issuer = await startLocalIssuer();
   const cookiePassword = 'test-cookie-password-0123456789abcdef!!';
+  // FBL-020-R2: the deterministic harness runs a plain-http local issuer, so
+  // it must DECLARE itself as local development. Without this the config
+  // correctly refuses http identity URLs — which is the point of the rule.
+  process.env.ALLOW_INSECURE_LOCAL_IDENTITY = '1';
   process.env.IDENTITY_PROVIDER = 'workos';
   process.env.WORKOS_CLIENT_ID = 'client_test_local';
   process.env.WORKOS_API_KEY = 'sk_test_local_0123456789abcdef0123456789abcdef';
@@ -130,8 +134,14 @@ export async function seedRooftopIdentity(
 /** Creates an activated user link with a SPECIFIC user_link_id. */
 export async function seedUserLinkRow(tenantId: string | null, userLinkId: string): Promise<void> {
   await query(
-    `INSERT INTO user_links (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
-     VALUES ($1, $2, $3, 'workos', $4, 'activated', NOW())
+    `INSERT INTO user_links
+       (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+        connection_id, issuer, provider_organization_id)
+     SELECT $1, $2, $3, 'workos', $4, 'activated', NOW(),
+            c.connection_id, c.issuer, c.provider_organization_id
+       FROM identity_provider_connections c
+      WHERE c.tenant_id IS NOT DISTINCT FROM $3 AND c.provider = 'workos' AND c.status = 'active'
+      LIMIT 1
      ON CONFLICT (user_link_id) DO NOTHING`,
     [
       userLinkId,
@@ -176,10 +186,17 @@ export async function seedActor(
   const providerUserId = 'user_actor_' + userLinkId.slice(0, 12);
   // Direct insert of an ALREADY-ACTIVATED link: this is the fixture standing
   // in for an administrator having activated it, never a login side effect.
+  // R2: an ACTIVATED link must be exactly bound to its connection, issuer and
+  // organization — the schema refuses anything less.
   await query(
     `INSERT INTO user_links
-       (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
-     VALUES ($1, 'dealership', $2, 'workos', $3, 'activated', NOW())`,
+       (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+        connection_id, issuer, provider_organization_id)
+     SELECT $1, 'dealership', $2, 'workos', $3, 'activated', NOW(),
+            c.connection_id, c.issuer, c.provider_organization_id
+       FROM identity_provider_connections c
+      WHERE c.tenant_id = $2 AND c.provider = 'workos' AND c.status = 'active'
+      LIMIT 1`,
     [userLinkId, input.tenantId, providerUserId],
   );
   for (const role of input.roles) {
@@ -213,18 +230,32 @@ export async function mintReauthGrant(input: {
   action: string;
   resourceId: string;
   resourceType?: string;
+  /** Defaults to the HIGH assurance Fixed Ops operations now demand (R2). */
+  assurance?: 'fresh_only' | 'fresh_and_mfa_policy';
 }): Promise<string> {
+  const assurance = input.assurance ?? 'fresh_and_mfa_policy';
+  const binding = await sessionBindingFor(input.tenantId);
+  if (assurance === 'fresh_and_mfa_policy') await certifyMfaPolicy(input.tenantId);
   const started = await startReauthentication({
     tenantId: input.tenantId,
     userLinkId: input.userLinkId,
     action: input.action,
     resourceType: input.resourceType ?? 'repair_order',
     resourceId: input.resourceId,
+    requiredAssurance: assurance,
+    connectionId: binding.connectionId,
+    issuer: binding.issuer,
+    providerOrganizationId: binding.providerOrganizationId,
+    providerSubject: binding.providerSubject,
   });
   const completed = await completeReauthentication({
     nonce: started.nonce,
     userLinkId: input.userLinkId,
     verifiedAuthTime: new Date(),
+    connection: {
+      connectionId: binding.connectionId,
+      mfaPolicyCertified: assurance === 'fresh_and_mfa_policy',
+    },
   });
   if (completed === null) throw new Error('test grant minting failed');
   return completed.grant;
@@ -265,5 +296,59 @@ export async function certifyMfaPolicy(tenantId: string, certified = true): Prom
             mfa_policy_certified_at = CASE WHEN $2 THEN NOW() ELSE NULL END
       WHERE tenant_id = $1`,
     [tenantId, certified],
+  );
+}
+
+/**
+ * FBL-020-R2: the binding every LIVE session must carry. The schema refuses a
+ * live session that cannot name its connection, issuer, organization and
+ * subject, so tests fetch the real values rather than inventing them.
+ */
+export async function sessionBindingFor(
+  tenantId: string | null,
+  providerSubject = 'user_test_subject',
+): Promise<{
+  connectionId: string;
+  issuer: string;
+  providerOrganizationId: string;
+  providerSubject: string;
+}> {
+  const r = await query(
+    `SELECT connection_id, issuer, provider_organization_id
+       FROM identity_provider_connections
+      WHERE tenant_id IS NOT DISTINCT FROM $1 AND provider = 'workos' AND status = 'active'
+      LIMIT 1`,
+    [tenantId],
+  );
+  if (r.rows.length === 0) throw new Error('no active connection to bind a session to');
+  const row = r.rows[0] as Record<string, unknown>;
+  return {
+    connectionId: String(row.connection_id),
+    issuer: String(row.issuer),
+    providerOrganizationId: String(row.provider_organization_id),
+    providerSubject,
+  };
+}
+
+/**
+ * R2: an ACTIVATED user link must name its connection, so a suite that builds
+ * tenants directly (rather than through seedTenantIdentity) still needs one.
+ * Idempotent, and safe for the NULL-tenant platform scope.
+ */
+export async function ensureActiveConnection(tenantId: string | null): Promise<void> {
+  await query(
+    `INSERT INTO identity_provider_connections
+       (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+     SELECT $1, $2, 'workos', $3, 'active', $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM identity_provider_connections
+         WHERE tenant_id IS NOT DISTINCT FROM $2 AND provider = 'workos' AND status = 'active'
+      )`,
+    [
+      tenantId === null ? 'platform' : 'dealership',
+      tenantId,
+      tenantId === null ? 'org_platform_fixture' : testOrganizationId(tenantId),
+      testIssuer(),
+    ],
   );
 }

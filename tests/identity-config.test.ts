@@ -82,9 +82,29 @@ describe('identity configuration (FBL-020)', () => {
         `${name} must demand https in production`,
       );
     }
-    // outside production the local issuer harness may use http
-    const env = { ...WORKOS, WORKOS_ISSUER: 'http://127.0.0.1:39999' };
-    assert.equal(loadConfig(env).identity.provider, 'workos');
+    // FBL-020-R2: http is no longer permitted merely by "not production".
+    // Staging commonly runs NODE_ENV=production, and a shared host with
+    // NODE_ENV=development must not silently downgrade. Local development
+    // must DECLARE itself.
+    assert.throws(
+      () => loadConfig({ ...WORKOS, WORKOS_ISSUER: 'http://127.0.0.1:39999' }),
+      /https in production/,
+      'http is refused without an explicit local-development declaration',
+    );
+    // …and is permitted once declared, which is what the test harness does.
+    assert.equal(
+      loadConfig({
+        ...WORKOS,
+        WORKOS_ISSUER: 'http://127.0.0.1:39999',
+        ALLOW_INSECURE_LOCAL_IDENTITY: '1',
+      }).identity.provider,
+      'workos',
+    );
+    assert.equal(
+      loadConfig({ ...WORKOS, WORKOS_ISSUER: 'http://127.0.0.1:39999', NODE_ENV: 'test' }).identity
+        .provider,
+      'workos',
+    );
   });
 
   test('clock skew is bounded', () => {

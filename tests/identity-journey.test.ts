@@ -12,6 +12,7 @@ import {
   testIssuer,
   testOrganizationId,
   type IdentityTestEnv,
+  mintReauthGrant,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import { ROLES } from '@dealer/contracts';
@@ -416,6 +417,15 @@ describe(
       assert.equal(authorized.status, 200, JSON.stringify(authorized.body));
 
       // ── 13. Delegated support access: request, approve, act, indicate ─────
+      // R2: the platform connection must exist BEFORE the platform support
+      // identity can be activated — activation binds a link to exactly one
+      // active connection, and there is nothing to bind to otherwise.
+      await query(
+        `INSERT INTO identity_provider_connections
+         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+       VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active', $1)`,
+        [testIssuer()],
+      );
       const supportLink = await observeUserLinkOnLogin({
         tenantId: null,
         providerUserId: 'user_support',
@@ -428,12 +438,6 @@ describe(
           userLinkId: supportLink.userLinkId,
           activatedByUserLinkId: adminLinkId,
         }),
-      );
-      await query(
-        `INSERT INTO identity_provider_connections
-         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
-       VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active', $1)`,
-        [testIssuer()],
       );
       await query(
         `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
@@ -468,10 +472,34 @@ describe(
         reason: 'ticket 4821: customer disputes the authorized total',
         requestedDurationMinutes: 30,
       });
+      // R2 obligation 10: approval requires the APPROVER's own high-assurance
+      // reauthentication. Separation of duty alone no longer suffices.
+      assert.equal(
+        await decideSupportAccess({
+          requestId: supportRequest.requestId,
+          decidedByUserLinkId: adminLinkId,
+          approve: true,
+        }),
+        null,
+        'approval without a high-assurance grant is refused',
+      );
+      await mintReauthGrant({
+        tenantId,
+        userLinkId: adminLinkId,
+        action: 'identity.support.approve',
+        resourceId: randomUUID(),
+      });
+      const approvalGrantRow = await query(
+        `UPDATE reauthentication_grants SET consumed_at = NOW()
+          WHERE user_link_id = $1 AND action = 'identity.support.approve'
+          RETURNING grant_id`,
+        [adminLinkId],
+      );
       const supportSession = await decideSupportAccess({
         requestId: supportRequest.requestId,
         decidedByUserLinkId: adminLinkId,
         approve: true,
+        approvalGrantId: String((approvalGrantRow.rows[0] as { grant_id: unknown }).grant_id),
       });
       assert.ok(supportSession);
 

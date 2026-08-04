@@ -64,6 +64,15 @@ export interface AppConfig {
    * configuration, never process.env.
    */
   readonly isProduction: boolean;
+  /**
+   * FBL-020-R2: HTTP identity endpoints and non-Secure cookies are permitted
+   * ONLY in explicit local development/test. Anything else — staging
+   * included — requires HTTPS and Secure cookies. `NODE_ENV` alone is not
+   * the switch: staging commonly runs with NODE_ENV=production, and a
+   * developer running NODE_ENV=development against a shared host must not
+   * silently downgrade the deployment.
+   */
+  readonly isLocalDevelopment: boolean;
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -125,6 +134,17 @@ function url(
   return raw;
 }
 
+/**
+ * Local development/test must be declared, not inferred. Both conditions are
+ * required: a non-production NODE_ENV AND an explicit opt-in. Everything else
+ * — staging, preview, production — is treated as remote and secured.
+ */
+function isLocalDevelopment(env: Record<string, string | undefined>): boolean {
+  const nodeEnv = env.NODE_ENV ?? 'development';
+  if (nodeEnv === 'production') return false;
+  return env.ALLOW_INSECURE_LOCAL_IDENTITY === '1' || nodeEnv === 'test';
+}
+
 function loadIdentityConfig(env: Record<string, string | undefined>): IdentityConfig {
   // '' is treated as absent, exactly as every other variable in this file
   // treats it — docker compose's `${VAR:-}` always SETS the variable, so a
@@ -137,7 +157,8 @@ function loadIdentityConfig(env: Record<string, string | undefined>): IdentityCo
   if (provider !== 'workos') {
     throw new ConfigError(`IDENTITY_PROVIDER must be "workos" or "disabled"`);
   }
-  const httpsRequired = env.NODE_ENV === 'production';
+  // https everywhere except explicit local development/test
+  const httpsRequired = !isLocalDevelopment(env);
   return Object.freeze({
     provider: 'workos' as const,
     workos: Object.freeze({
@@ -181,6 +202,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     pgSslRequire: env.PGSSL === 'require',
     identity: loadIdentityConfig(env),
     isProduction: env.NODE_ENV === 'production',
+    isLocalDevelopment: isLocalDevelopment(env),
   };
   return Object.freeze(config);
 }

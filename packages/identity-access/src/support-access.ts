@@ -116,14 +116,44 @@ export async function decideSupportAccess(input: {
   requestId: string;
   decidedByUserLinkId: string;
   approve: boolean;
+  /**
+   * FBL-020-R2: an APPROVAL must be backed by a high-assurance
+   * reauthentication grant belonging to the approver. Separation of duty
+   * alone is not enough — the approver must have freshly re-authenticated
+   * under a certified MFA policy. Denials need no grant.
+   */
+  approvalGrantId?: string | null;
 }): Promise<SupportAccessSession | null> {
   return withTransaction(async (executor) => {
+    if (input.approve) {
+      // The grant must exist, be consumed, belong to the approver, and have
+      // been minted at fresh_and_mfa_policy. Anything less cannot approve.
+      const grant = await executor.query(
+        `SELECT 1 FROM reauthentication_grants
+          WHERE grant_id = $1
+            AND user_link_id = $2
+            AND assurance_level = 'fresh_and_mfa_policy'
+            AND mfa_policy_certified_at_issue = TRUE
+            AND consumed_at IS NOT NULL`,
+        [input.approvalGrantId ?? null, input.decidedByUserLinkId],
+      );
+      if (grant.rows.length === 0) return null;
+    }
     const updated = await executor.query(
       `UPDATE support_access_requests
-          SET status = $3, decided_by_user_link_id = $2, decided_at = NOW()
+          SET status = $3,
+              decided_by_user_link_id = $2,
+              decided_at = NOW(),
+              approval_grant_id = $4,
+              authorization_version = authorization_version + 1
         WHERE request_id = $1 AND status = 'pending'
         RETURNING *`,
-      [input.requestId, input.decidedByUserLinkId, input.approve ? 'approved' : 'denied'],
+      [
+        input.requestId,
+        input.decidedByUserLinkId,
+        input.approve ? 'approved' : 'denied',
+        input.approve ? (input.approvalGrantId ?? null) : null,
+      ],
     );
     if (updated.rows.length === 0) return null;
     const request = mapRequest(updated.rows[0] as Row);
@@ -163,7 +193,9 @@ export async function revokeSupportSession(input: {
   return withTransaction(async (executor) => {
     const updated = await executor.query(
       `UPDATE support_access_sessions
-          SET revoked_at = NOW(), revoked_by_user_link_id = $2
+          SET revoked_at = NOW(),
+              revoked_by_user_link_id = $2,
+              authorization_version = authorization_version + 1
         WHERE support_session_id = $1 AND revoked_at IS NULL
         RETURNING tenant_id, actor_user_link_id`,
       [input.supportSessionId, input.revokedByUserLinkId],

@@ -197,8 +197,16 @@ async function planUserLink(
       });
       if (options.apply) {
         await executor.query(
-          `UPDATE user_links SET status = 'activated', activated_at = NOW(), email = COALESCE($2, email)
-            WHERE user_link_id = $1`,
+          `UPDATE user_links ul
+              SET status = 'activated', activated_at = NOW(),
+                  email = COALESCE($2, ul.email),
+                  connection_id = c.connection_id,
+                  issuer = c.issuer,
+                  provider_organization_id = c.provider_organization_id
+             FROM identity_provider_connections c
+            WHERE ul.user_link_id = $1
+              AND c.tenant_id IS NOT DISTINCT FROM ul.tenant_id
+              AND c.provider = ul.provider AND c.status = 'active'`,
           [id, options.adminEmail],
         );
       }
@@ -219,9 +227,17 @@ async function planUserLink(
   });
   if (options.apply) {
     await executor.query(
+      // R2: the administrator link is bound to the exact connection this
+      // bootstrap mapped — an activated link that cannot name its connection,
+      // issuer and organization is refused by the schema.
       `INSERT INTO user_links
-         (user_link_id, actor_scope, tenant_id, provider, provider_user_id, email, status, activated_at)
-       VALUES ($1, 'dealership', $2, 'workos', $3, $4, 'activated', NOW())`,
+         (user_link_id, actor_scope, tenant_id, provider, provider_user_id, email, status,
+          activated_at, connection_id, issuer, provider_organization_id)
+       SELECT $1, 'dealership', $2, 'workos', $3, $4, 'activated', NOW(),
+              c.connection_id, c.issuer, c.provider_organization_id
+         FROM identity_provider_connections c
+        WHERE c.tenant_id = $2 AND c.provider = 'workos' AND c.status = 'active'
+        LIMIT 1`,
       [id, options.tenantId, options.adminProviderUserId, options.adminEmail],
     );
     return id;

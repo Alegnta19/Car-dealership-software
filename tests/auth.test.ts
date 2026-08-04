@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import {
   resetDatabase,
+  sessionBindingFor,
   seedActor,
   seedRooftopIdentity,
   seedTenantIdentity,
@@ -190,6 +191,7 @@ describe(
         );
       }
       const created = await createSession({
+        ...(await sessionBindingFor(tenant)),
         tenantId: tenant,
         userLinkId: link.userLinkId,
         providerSessionId: 'sid_' + randomUUID().slice(0, 8),

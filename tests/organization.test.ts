@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, skipIntegration } from '@dealer/test-kit';
+import { ensureActiveConnection, resetDatabase, skipIntegration } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
   ORGANIZATION_LEVELS,
@@ -131,9 +131,18 @@ describe(
     }
 
     async function seedUserLink(tenantId: string | null): Promise<string> {
+      await ensureActiveConnection(tenantId);
       const result = await query(
-        `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id, status, activated_at)
-       VALUES ($1, $2, 'workos', $3, 'activated', NOW()) RETURNING user_link_id`,
+        `INSERT INTO user_links
+           (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+            connection_id, issuer, provider_organization_id)
+         SELECT $1, $2, 'workos', $3, 'activated', NOW(),
+                c.connection_id, c.issuer, c.provider_organization_id
+           FROM identity_provider_connections c
+          WHERE c.tenant_id IS NOT DISTINCT FROM $2 AND c.provider = 'workos'
+            AND c.status = 'active'
+          LIMIT 1
+         RETURNING user_link_id`,
         [tenantId === null ? 'platform' : 'dealership', tenantId, 'user_' + randomUUID()],
       );
       return String((result.rows[0] as { user_link_id: unknown }).user_link_id);
@@ -305,13 +314,36 @@ describe(
       const { tenant } = await seedChain();
       const other = await createTenant({ name: 'Other Tenant', status: 'active' });
       const link = await seedUserLink(tenant.tenantId);
+      // R2: a LIVE session must be fully bound, so every fixture below
+      // supplies the real connection/issuer/organization. Without it the
+      // binding CHECK would fire first and these tests would prove the wrong
+      // constraint.
+      const bindRow = await query(
+        `SELECT connection_id, issuer, provider_organization_id
+           FROM identity_provider_connections WHERE tenant_id = $1 LIMIT 1`,
+        [tenant.tenantId],
+      );
+      const b = bindRow.rows[0] as {
+        connection_id: unknown;
+        issuer: unknown;
+        provider_organization_id: unknown;
+      };
 
       // raw (non-64-hex) token storage is rejected structurally
       await assertSqlState(
         query(
-          `INSERT INTO identity_sessions (tenant_id, user_link_id, session_token_hash, auth_time, expires_at)
-         VALUES ($1, $2, 'raw-session-token-value', NOW(), NOW() + INTERVAL '8 hours')`,
-          [tenant.tenantId, link],
+          `INSERT INTO identity_sessions
+             (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
+              connection_id, issuer, provider_subject, provider_organization_id)
+           VALUES ($1, $2, 'raw-session-token-value', NOW(), NOW() + INTERVAL '8 hours',
+                   $3, $4, 'subj', $5)`,
+          [
+            tenant.tenantId,
+            link,
+            String(b.connection_id),
+            String(b.issuer),
+            String(b.provider_organization_id),
+          ],
         ),
         CHECK_VIOLATION,
         'non-digest session token',
@@ -319,18 +351,36 @@ describe(
       // a session cannot claim tenant B over tenant A's user link
       await assertSqlState(
         query(
-          `INSERT INTO identity_sessions (tenant_id, user_link_id, session_token_hash, auth_time, expires_at)
-         VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours')`,
-          [other.tenantId, link, sha256hex('session-a')],
+          `INSERT INTO identity_sessions
+             (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
+              connection_id, issuer, provider_subject, provider_organization_id)
+           VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, 'subj', $6)`,
+          [
+            other.tenantId,
+            link,
+            sha256hex('session-a'),
+            String(b.connection_id),
+            String(b.issuer),
+            String(b.provider_organization_id),
+          ],
         ),
         FK_VIOLATION,
         'cross-tenant session over user link',
       );
       // the digest of the opaque value is what a session stores
       await query(
-        `INSERT INTO identity_sessions (tenant_id, user_link_id, session_token_hash, auth_time, expires_at)
-       VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours')`,
-        [tenant.tenantId, link, sha256hex('session-a')],
+        `INSERT INTO identity_sessions
+           (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
+            connection_id, issuer, provider_subject, provider_organization_id)
+         VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, 'subj', $6)`,
+        [
+          tenant.tenantId,
+          link,
+          sha256hex('session-a'),
+          String(b.connection_id),
+          String(b.issuer),
+          String(b.provider_organization_id),
+        ],
       );
     });
 
@@ -389,9 +439,14 @@ describe(
       const link = await seedUserLink(tenant.tenantId);
 
       const txn = await query(
-        `INSERT INTO reauthentication_transactions (tenant_id, user_link_id, action, nonce_hash, expires_at)
-       VALUES ($1, $2, 'service.estimate.approve', $3, NOW() + INTERVAL '5 minutes')
-       RETURNING reauth_txn_id`,
+        // R2: a STARTED transaction must name the exact identity it began from
+        `INSERT INTO reauthentication_transactions
+           (tenant_id, user_link_id, action, nonce_hash, expires_at,
+            connection_id, issuer, provider_organization_id, provider_subject)
+         SELECT $1, $2, 'service.estimate.approve', $3, NOW() + INTERVAL '5 minutes',
+                c.connection_id, c.issuer, c.provider_organization_id, 'subj'
+           FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
+         RETURNING reauth_txn_id`,
         [tenant.tenantId, link, sha256hex('nonce-1')],
       );
       const txnId = String((txn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id);
@@ -472,12 +527,50 @@ describe(
         CHECK_VIOLATION,
         'self-approval',
       );
-      // a different user approves
+      // R2: approving without a high-assurance grant is refused outright
+      await assertSqlState(
+        query(
+          `UPDATE support_access_requests
+            SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW()
+          WHERE request_id = $1`,
+          [requestId, approver],
+        ),
+        CHECK_VIOLATION,
+        'approval without a high-assurance grant',
+      );
+      // a different user approves, recording the grant that backed it
+      // the approver's own high-assurance reauthentication, then its grant
+      const approvalTxn = await query(
+        `INSERT INTO reauthentication_transactions
+           (tenant_id, user_link_id, action, nonce_hash, expires_at, required_assurance,
+            connection_id, issuer, provider_organization_id, provider_subject)
+         SELECT $1, $2, 'identity.support.approve', $3, NOW() + INTERVAL '5 minutes',
+                'fresh_and_mfa_policy',
+                c.connection_id, c.issuer, c.provider_organization_id, 'approver'
+           FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
+         RETURNING reauth_txn_id`,
+        [tenant.tenantId, approver, sha256hex('approval-nonce')],
+      );
+      const approvalGrant = await query(
+        `INSERT INTO reauthentication_grants
+           (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
+            assurance_level, mfa_policy_certified_at_issue, consumed_at)
+         VALUES ($1, $2, $3, 'identity.support.approve', $4,
+                 NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())
+         RETURNING grant_id`,
+        [
+          String((approvalTxn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
+          tenant.tenantId,
+          approver,
+          sha256hex('approval-grant'),
+        ],
+      );
       await query(
         `UPDATE support_access_requests
-          SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW()
+          SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
+              approval_grant_id = $3
         WHERE request_id = $1`,
-        [requestId, approver],
+        [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
       );
 
       // a session longer than 60 minutes cannot exist
