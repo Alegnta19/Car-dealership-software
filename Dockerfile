@@ -7,7 +7,7 @@
 # resolved 2026-07-30); Dependabot's docker ecosystem is the approved mechanism that
 # proposes digest updates (.github/dependabot.yml).
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS builder
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS builder
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -28,7 +28,7 @@ COPY scripts ./scripts
 # The image needs the API and the compiled migrate runner; worker/web build in CI, not here.
 RUN npx tsc -b apps/api scripts
 
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner
+FROM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
