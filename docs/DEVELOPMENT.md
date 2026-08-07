@@ -101,9 +101,40 @@ dimensions — `npm run format` formats what you're working on.
 npm run architecture:check
 ```
 
-Dependency rules, the ownership manifest (architecture/modules.json), and process.env
-confinement — the same three checks CI runs; tests/architecture.test.ts additionally
-proves the checker rejects a forbidden persistence deep-import.
+Five checks, the same five CI runs: dependency rules, the app-SQL guard (no query
+primitives or SQL literals in `apps/`), the ownership manifest
+(architecture/modules.json), `process.env` confinement, and the role-bindings
+effectiveness guard. The last one (FBL-020-R3 §E3, hardened by §H1) fails the build
+when SQL reads `role_bindings` without resolving the single exported effectiveness
+predicate `EFFECTIVE_ROLE_BINDING_SQL` into every read, hand-writes a filter on that
+table's `status`, `effective_from` or `effective_to`, ORs or negates the resolved
+predicate away, declares the predicate a second time, guts the predicate itself, or
+builds role-bindings SQL the guard cannot resolve statically. That last one is
+deliberate: "I could not tell" used to print as `0 statement(s) inspected, OK`, which
+is exactly how a clean tree looks.
+
+It is not a text grep. Interpolations are RESOLVED — through local constants, object
+and array literals, destructuring, `for … of` bindings, `+` concatenation, and named,
+aliased, namespaced and re-exported imports — so `${EFFECTIVE_ROLE_BINDING_SQL}`,
+`${policy.EFFECTIVE_ROLE_BINDING_SQL}` and an alias bound at the import are one
+predicate, and a table name or filter fragment kept in a constant is substituted
+before the SQL is judged.
+
+Genuine exceptions declare themselves beside the SQL as
+`// role-binding-effectiveness-opt-out(<reason-code>): <justification>`. The code must
+be one of a CLOSED set — `predicate-definition`, `migration-reconciliation`,
+`all-bindings-including-ineffective`, `unresolvable-sql-hand-reviewed` — each of which
+excuses only the rules that category can excuse and only in the files where it can
+apply; prose alone is not an exception, and nothing excuses neutralising the
+predicate. Every opt-out in force is printed with its category on each run.
+
+tests/architecture.test.ts additionally proves each checker rejects a deliberately
+broken fixture — a forbidden persistence deep-import, an app embedding SQL, and a
+whole battery of role-bindings drift and evasion shapes under
+`architecture/fixtures/role-binding-drift/`, each pinned to the exact rules it must
+raise — so a checker that silently passed everything would fail the suite. The
+sibling `architecture/fixtures/role-binding-correct/` pins the other direction: a
+guard that rejects correct code teaches authors to route around it.
 
 ```bash
 npm run schema:fingerprint

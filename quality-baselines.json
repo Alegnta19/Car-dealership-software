@@ -13,10 +13,9 @@
     }
   },
   "eslint": {
-    "total": 125,
+    "total": 123,
     "byFile": {
       "apps/api/src/app.ts": 1,
-      "apps/api/src/routes/auth.ts": 2,
       "apps/api/src/types/express.d.ts": 1,
       "packages/database/src/pool.ts": 2,
       "packages/fixed-ops/src/legacy/metrics-aggregator.ts": 2,

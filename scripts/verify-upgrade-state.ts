@@ -150,6 +150,13 @@ async function main(): Promise<void> {
     'support_access_requests',
     'support_access_sessions',
   ]) {
+    // role-binding-effectiveness-opt-out(all-bindings-including-ineffective): this
+    // counts EVERY row in each identity table, `role_bindings` among them, to assert
+    // that migration 055 invented no identities and no evidence. A count that
+    // filtered by effectiveness would report zero for a table holding a future-dated
+    // or aged-out binding and so would pass while the upgrade had in fact fabricated
+    // a standing grant — the precise thing this assertion exists to catch. It reads
+    // the table as it is and decides nothing about what any row authorizes.
     const n = Number((await query(`SELECT COUNT(*)::int AS n FROM ${table}`)).rows[0]?.n ?? -1);
     if (n !== 0)
       failures.push(

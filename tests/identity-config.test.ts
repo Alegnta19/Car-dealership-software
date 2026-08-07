@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { loadConfig } from '@dealer/platform';
+import { ProviderRefreshError, createWorkosProvider } from '@dealer/identity-access';
+import { identitySetCookieHeader } from '@dealer/api';
 
 const BASE = {
   DATABASE_URL: 'postgresql://localhost/db',
@@ -116,6 +118,116 @@ describe('identity configuration (FBL-020)', () => {
     );
   });
 
+  /**
+   * FBL-020-R3 correction B1 — the cookie decision, asserted on the SET-COOKIE
+   * ATTRIBUTE the /auth surface actually emits.
+   *
+   * The defect: `isLocalDevelopment` was NODE_ENV alone and the cookie writer
+   * read it, so a real deployment whose identity URLs were all remote HTTPS
+   * but whose process ran NODE_ENV=development issued session, transaction and
+   * CLEARING cookies with no `Secure` attribute. URL validation was untouched
+   * by that bug — it has its own loopback condition — which is exactly why
+   * this test asserts the header rather than the validator.
+   */
+  const LOOPBACK_IDENTITY = {
+    ...WORKOS,
+    WORKOS_ISSUER: 'http://127.0.0.1:39999',
+    WORKOS_JWKS_URI: 'http://127.0.0.1:39999/oauth2/jwks',
+    WORKOS_REDIRECT_URI: 'http://127.0.0.1:3000/auth/callback',
+    WORKOS_REAUTH_REDIRECT_URI: 'http://localhost:3000/auth/reauth/callback',
+    WORKOS_LOGOUT_REDIRECT_URI: 'http://127.0.0.1:3000/',
+  };
+
+  const sessionCookie = (env: Record<string, string | undefined>): string =>
+    identitySetCookieHeader(loadConfig(env), 'dealer_session', 'opaque-session-token', {
+      maxAgeSeconds: 3600,
+      path: '/',
+    });
+  const clearingCookie = (env: Record<string, string | undefined>): string =>
+    identitySetCookieHeader(loadConfig(env), 'dealer_session', '', {
+      maxAgeSeconds: 0,
+      path: '/',
+    });
+
+  test('a REMOTE deployment keeps Secure cookies even at NODE_ENV=development', () => {
+    // THE DEFECT, stated as configuration: every identity URL is remote https,
+    // and the process happens to run NODE_ENV=development.
+    const remoteDev = { ...WORKOS, NODE_ENV: 'development' };
+    assert.equal(
+      loadConfig(remoteDev).allowsInsecureCookies,
+      false,
+      'NODE_ENV alone must never license an insecure cookie',
+    );
+    assert.match(
+      sessionCookie(remoteDev),
+      /(^|; )Secure($|;)/,
+      'the session cookie of a remote deployment must carry Secure',
+    );
+    assert.match(
+      clearingCookie(remoteDev),
+      /(^|; )Secure($|;)/,
+      'the CLEARING cookie must carry the same Secure attribute it replaces',
+    );
+    assert.match(sessionCookie({ ...WORKOS, NODE_ENV: 'test' }), /(^|; )Secure($|;)/);
+
+    // a MIXED set — loopback redirect URIs, a remote provider issuer — is a
+    // real deployment too: one remote URL is enough to keep Secure on.
+    const mixed = {
+      ...LOOPBACK_IDENTITY,
+      WORKOS_ISSUER: WORKOS.WORKOS_ISSUER,
+      WORKOS_JWKS_URI: WORKOS.WORKOS_JWKS_URI,
+      NODE_ENV: 'development',
+    };
+    assert.equal(loadConfig(mixed).allowsInsecureCookies, false);
+    assert.match(sessionCookie(mixed), /(^|; )Secure($|;)/);
+
+    // staging (NODE_ENV unset) and production are unchanged: Secure.
+    assert.match(sessionCookie(WORKOS), /(^|; )Secure($|;)/);
+    assert.match(sessionCookie({ ...WORKOS, NODE_ENV: 'production' }), /(^|; )Secure($|;)/);
+  });
+
+  test('ONLY development|test with EVERY identity URL on loopback drops Secure', () => {
+    for (const nodeEnv of ['development', 'test']) {
+      const env = { ...LOOPBACK_IDENTITY, NODE_ENV: nodeEnv };
+      assert.equal(loadConfig(env).allowsInsecureCookies, true, `${nodeEnv} loopback is local`);
+      assert.ok(
+        !sessionCookie(env).includes('Secure'),
+        `the local ${nodeEnv} harness may serve a plain-http cookie`,
+      );
+      assert.ok(!clearingCookie(env).includes('Secure'));
+    }
+    // …and never outside those two values, loopback or not.
+    for (const nodeEnv of [undefined, 'production', 'staging', 'preview']) {
+      const env = { ...LOOPBACK_IDENTITY, NODE_ENV: nodeEnv };
+      // http URLs are refused outside development/test, so the comparable
+      // loopback deployment is an https one.
+      const https = {
+        ...env,
+        WORKOS_ISSUER: 'https://127.0.0.1:39999',
+        WORKOS_JWKS_URI: 'https://127.0.0.1:39999/oauth2/jwks',
+        WORKOS_REDIRECT_URI: 'https://127.0.0.1:3000/auth/callback',
+        WORKOS_REAUTH_REDIRECT_URI: 'https://localhost:3000/auth/reauth/callback',
+        WORKOS_LOGOUT_REDIRECT_URI: 'https://127.0.0.1:3000/',
+      };
+      assert.equal(loadConfig(https).allowsInsecureCookies, false, `${String(nodeEnv)} is remote`);
+      assert.match(sessionCookie(https), /(^|; )Secure($|;)/);
+    }
+    // an identity-DISABLED process issues no identity cookie at all, so the
+    // secure direction is the truthful one.
+    assert.equal(loadConfig({ ...BASE, NODE_ENV: 'development' }).allowsInsecureCookies, false);
+
+    // the UNCONDITIONAL attributes are on every header either way
+    for (const header of [
+      sessionCookie({ ...WORKOS, NODE_ENV: 'development' }),
+      clearingCookie({ ...WORKOS, NODE_ENV: 'development' }),
+      sessionCookie({ ...LOOPBACK_IDENTITY, NODE_ENV: 'test' }),
+    ]) {
+      assert.match(header, /HttpOnly/);
+      assert.match(header, /SameSite=Lax/);
+      assert.ok(!/Domain=/i.test(header), 'session cookies stay host-only');
+    }
+  });
+
   test('clock skew is bounded', () => {
     assert.throws(
       () => loadConfig({ ...WORKOS, OIDC_CLOCK_SKEW_SECONDS: '9999' }),
@@ -126,4 +238,115 @@ describe('identity configuration (FBL-020)', () => {
       assert.equal(config.identity.workos.oidcClockSkewSeconds, 30);
     }
   });
+
+  // ── FBL-020-R3 correction D1: the provider exchange is BOUNDED ───────────
+
+  test('D1: the refresh bound and the two database bounds have conservative defaults', () => {
+    const config = loadConfig(WORKOS);
+    if (config.identity.provider !== 'workos') return assert.fail('expected workos');
+    assert.equal(config.identity.workos.providerRefreshTimeoutMs, 10_000);
+    // The pool's second line, on EVERY connection this process opens.
+    assert.equal(config.pgStatementTimeoutMs, 30_000);
+    assert.equal(config.pgIdleInTransactionTimeoutMs, 15_000);
+
+    // Configurable, bounded, and 0 means "no server-side bound" for the pool
+    // settings only — a refresh with no deadline at all is the defect, so the
+    // identity bound has a floor.
+    assert.throws(
+      () => loadConfig({ ...WORKOS, WORKOS_REFRESH_TIMEOUT_MS: '0' }),
+      /WORKOS_REFRESH_TIMEOUT_MS/,
+    );
+    assert.throws(
+      () => loadConfig({ ...WORKOS, WORKOS_REFRESH_TIMEOUT_MS: '600000' }),
+      /WORKOS_REFRESH_TIMEOUT_MS/,
+    );
+    const tightened = loadConfig({
+      ...WORKOS,
+      WORKOS_REFRESH_TIMEOUT_MS: '2500',
+      PG_STATEMENT_TIMEOUT_MS: '0',
+      PG_IDLE_IN_TRANSACTION_TIMEOUT_MS: '5000',
+    });
+    if (tightened.identity.provider !== 'workos') return assert.fail('expected workos');
+    assert.equal(tightened.identity.workos.providerRefreshTimeoutMs, 2500);
+    assert.equal(tightened.pgStatementTimeoutMs, 0);
+    assert.equal(tightened.pgIdleInTransactionTimeoutMs, 5000);
+  });
+
+  /**
+   * The adapter's OWN bound, which is the second line under the operation's.
+   * R3 set neither a timeout nor an AbortSignal on `authenticateWithRefreshToken`,
+   * so a provider that accepted the connection and then said nothing kept the
+   * exchange — and the request path above it — waiting indefinitely.
+   *
+   * Driven through the real adapter with `fetch` substituted, because what is
+   * under test is exactly what the adapter hands the transport.
+   */
+  test('D1: the WorkOS refresh exchange is bounded, aborts its socket, and is TRANSIENT', async () => {
+    const realFetch = globalThis.fetch;
+    let carriedSignal = false;
+    let socketAborted = false;
+    // A provider that accepts the request and then answers NOTHING. Substituted
+    // BEFORE the adapter is built, because the SDK captures its transport at
+    // construction — so this test reaches the transport whether or not the adapter
+    // installs a wrapper of its own, and never touches a real network.
+    globalThis.fetch = ((_input: unknown, init?: { signal?: AbortSignal }) => {
+      carriedSignal = init?.signal !== undefined && init.signal !== null;
+      return new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            socketAborted = true;
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          },
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    const provider = createWorkosProvider({
+      clientId: 'client_01ABC',
+      apiKey: 'sk_test_' + 'k'.repeat(32),
+      redirectUri: 'https://app.example.com/auth/callback',
+      reauthRedirectUri: 'https://app.example.com/auth/reauth/callback',
+      logoutRedirectUri: 'https://app.example.com/',
+      refreshTimeoutMs: 700,
+    });
+
+    const startedAt = Date.now();
+    try {
+      const failure = await within(
+        5_000,
+        'the refresh exchange',
+        provider.refreshSession({ refreshToken: 'rt_never_answered' }).then(
+          () => null,
+          (err: unknown) => err,
+        ),
+      );
+      const elapsedMs = Date.now() - startedAt;
+      assert.ok(failure instanceof ProviderRefreshError, 'no SDK type escapes the adapter');
+      assert.equal(
+        (failure as ProviderRefreshError).kind,
+        'transient',
+        'silence is NOT a definitive refusal — a timeout must never revoke a session',
+      );
+      assert.ok(elapsedMs < 4_000, `the exchange ended at its own bound (took ${elapsedMs}ms)`);
+      assert.equal(carriedSignal, true, 'the HTTP call carries an AbortSignal');
+      assert.equal(socketAborted, true, 'and the socket is aborted, not merely abandoned');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });
+
+/** Bounds the TEST's own wait, so an unbounded exchange FAILS instead of hanging. */
+async function within<T>(ms: number, label: string, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} did not finish within ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}

@@ -12,6 +12,11 @@
  *   - a platform binding NEVER grants dealership data access — the only
  *     platform path into a tenant is an approved, live support-access
  *     session restricted to its approved action set and scope;
+ *   - and the CONVERSE, which this comment used to leave unsaid: a `platform.*`
+ *     action is authorized ONLY by a PLATFORM-SCOPE binding. `role_bindings.role`
+ *     is a free text column constrained by a regex, so a tenant-scope binding
+ *     can carry a platform role NAME; it still authorizes no platform action.
+ *     Scope decides reach, the role column never widens it;
  *   - EVERY decision — allow and deny — writes one append-only
  *     policy_decisions evidence row (ids, codes, versions; never PII).
  *     Evidence is not optional: if the row cannot be written the decision
@@ -23,10 +28,25 @@
  * at the application root, exactly like the resource-scope resolver port —
  * this package never queries a fixed-ops table.
  */
+import { randomUUID } from 'node:crypto';
 import { query } from '@dealer/database';
+import { getRequestContext } from '@dealer/platform';
 import { resolveAncestry, type OrganizationNodeRef } from '@dealer/organization';
+// Role NAMES only, from the package's dependency-free contract module — the
+// engine still owns no action semantics and reads no catalog. R3 correction F1
+// needs the platform-support role list to re-judge a live support session's
+// actor, and that list has exactly one home.
+import { PLATFORM_SUPPORT_AUTHORITY_ROLES } from './contracts';
 
 export const POLICY_VERSION = 'fbl-020.1';
+
+/**
+ * FBL-020-R3 — how long a provider authentication counts as FRESH for the
+ * purposes of decision evidence. This classifies; it never authorizes. A
+ * sensitive action still demands a reauthentication GRANT, which is proved
+ * separately and consumed atomically.
+ */
+export const AUTHENTICATION_FRESHNESS_WINDOW_SECONDS = 900;
 
 const ACTION_NAME = /^[a-z][a-z0-9_.]{0,127}$/;
 
@@ -107,15 +127,21 @@ export interface PolicyInput {
    * tenant-scope binding can cover it.
    */
   readonly scopeHint?: OrganizationNodeRef | null;
-  readonly requestId?: string | null;
   /**
-   * A correlation id distinct from the request id: the request id identifies
-   * ONE HTTP call, the correlation id ties a whole flow together.
+   * FBL-020-R3: there is deliberately NO `requestId`, `correlationId`,
+   * `freshness` or `mfaAssurance` on this input.
+   *
+   * The first two used to be caller-supplied, and the caller was the HTTP layer
+   * reading `x-request-id` / `x-correlation-id` — so the evidence trail recorded
+   * whatever a client chose to send, and recorded NOTHING when it sent nothing.
+   * The engine now takes both from the GENERATED request context (or generates
+   * them itself off-request), which is the same pair the logs carry.
+   *
+   * The last two used to default to 'not_applicable' when a caller omitted
+   * them, which made an unproven assurance indistinguishable from an
+   * inapplicable one. They are now COMPUTED here from the actor's own session
+   * and grant state, and no caller can assert them.
    */
-  readonly correlationId?: string | null;
-  /** Recorded on the decision; classification only, never a token or claim. */
-  readonly freshness?: FreshnessClassification;
-  readonly mfaAssurance?: MfaAssuranceClassification;
   readonly supportRequestId?: string | null;
   /** R2: identity facts drawn from the generated request context. */
   readonly authTime?: Date | null;
@@ -144,6 +170,65 @@ export interface PolicyEngine {
   decide(input: PolicyInput): Promise<PolicyDecisionResult>;
 }
 
+/**
+ * FBL-020-R3 correction — the EFFECTIVENESS predicate every reader of
+ * `role_bindings` must apply, written ONCE, with `rb` as the table alias.
+ *
+ * A binding authorizes nothing unless it is `active` AND inside its effective
+ * window. That is three conditions, and the R3 adversarial review found a
+ * second, hand-written copy of them elsewhere in this package that had silently
+ * dropped the window — so a binding whose `effective_to` was a day in the past
+ * still passed one gate while the engine, asked the same question, refused. The
+ * text now lives here and is interpolated; there is nothing left to restate and
+ * therefore nothing left to drift.
+ */
+export const EFFECTIVE_ROLE_BINDING_SQL = `rb.status = 'active'
+        AND rb.effective_from <= NOW()
+        AND (rb.effective_to IS NULL OR rb.effective_to > NOW())`;
+
+/** The two binding columns the shared scope rule reads. */
+export interface ScopedBinding {
+  readonly scope_level: string;
+  readonly scope_id: string | null;
+}
+
+/**
+ * FBL-020-R3 correction — the scope rule for a TENANT-CONTEXT action: one whose
+ * catalog definition names no `resourceType`, whose caller names no `scopeHint`
+ * and no resource. Such an action reaches the WHOLE tenant, so ONLY a
+ * tenant-scope binding of that very tenant may authorize it — a rooftop,
+ * department or resource binding must never widen to tenant-wide reach.
+ *
+ * This IS the branch `covers()` takes when `ancestry === null`: the engine calls
+ * this function instead of stating the rule inline, and so does every other
+ * authority gate in this package. One rule, one implementation.
+ */
+export function coversTenantWide(binding: ScopedBinding, targetTenantId: string | null): boolean {
+  if (binding.scope_level === 'platform') return false; // never covers tenant data
+  if (binding.scope_level === 'resource') return false; // names one row, not a tenant
+  return binding.scope_level === 'tenant' && binding.scope_id === targetTenantId;
+}
+
+/**
+ * FBL-020-R3 correction B3 — the scope rule for a `platform.*` action: ONLY a
+ * PLATFORM-scope binding reaches the control plane.
+ *
+ * `role_bindings.role` is a free text column whose only constraint is a name
+ * regex (migration 055), so nothing in the schema stops a platform role NAME
+ * from being written at tenant scope. Before this rule the engine's remaining
+ * test for a dealership actor was `def.allowedRoles.includes(b.role)` against a
+ * binding that covered the tenant — so a dealership actor holding
+ * `{role: 'platform_admin', scopeLevel: 'tenant'}` was ALLOWED
+ * `platform.tenant.provision`, the whole control plane, from inside a tenant.
+ *
+ * Scope decides reach; the role column never widens it. Both actor branches
+ * call this through `covers()`, so a platform action has exactly one scope rule
+ * and the dealership path cannot acquire a second one.
+ */
+export function coversPlatformAction(binding: ScopedBinding): boolean {
+  return binding.scope_level === 'platform';
+}
+
 interface Row {
   [key: string]: unknown;
 }
@@ -162,6 +247,115 @@ interface BindingRow {
 export type FreshnessClassification = 'not_applicable' | 'stale' | 'fresh';
 export type MfaAssuranceClassification = 'not_applicable' | 'uncertified' | 'certified';
 
+export interface AssuranceClassification {
+  readonly freshness: FreshnessClassification;
+  readonly mfaAssurance: MfaAssuranceClassification;
+}
+
+/**
+ * The GENERATED evidence ids. Inside a request they are the very pair the
+ * outermost middleware minted and the logs already carry, so a decision row
+ * joins to its log lines. Outside a request — a scheduler, a CLI, a test — one
+ * is generated here rather than left null, because "no id" is not a fact a
+ * decision may record about itself.
+ *
+ * Caller-supplied header values never reach this function.
+ */
+function evidenceIds(): { requestId: string; correlationId: string } {
+  const context = getRequestContext();
+  if (context !== undefined) {
+    return { requestId: context.requestId, correlationId: context.correlationId };
+  }
+  const generated = randomUUID();
+  return { requestId: generated, correlationId: generated };
+}
+
+/**
+ * FBL-020-R3 correction B2 — assurance is COMPUTED, and it is computed about
+ * the CREDENTIAL THIS REQUEST PRESENTED.
+ *
+ * `sessionId` is the local session the request actually resolved — the same id
+ * the evidence row records and the same object an operator can revoke. It is
+ * NOT optional and it is NOT "the actor's freshest session": R3 made both
+ * credential kinds mint local sessions, so one user routinely holds several,
+ * and the predicate this replaces (`WHERE user_link_id = $1 ORDER BY auth_time
+ * DESC LIMIT 1`) recorded a request made on a six-hour-old cookie as 'fresh'
+ * because a bearer session had authenticated a minute earlier. The evidence row
+ * then claimed an assurance the presented credential did not have.
+ *
+ * Facts are read in one statement so a decision costs one extra round trip and
+ * cannot see a half-updated picture:
+ *
+ *   - the PRESENTED session is not live (revoked, expired, someone else's, or
+ *     none was presented at all) and no live grant is held → 'not_applicable'
+ *     for both. That is the truth for a system actor, an off-request decision
+ *     and a credential that proves nothing, and it is the ONLY way
+ *     'not_applicable' can be reached;
+ *   - a live UNSPENT grant, or the presented session authenticated inside the
+ *     freshness window → 'fresh'; a presented session older than the window →
+ *     'stale';
+ *   - 'certified' only when the connection backing THE PRESENTED session
+ *     certifies the organization's MFA policy, or a live unspent grant was
+ *     minted at fresh_and_mfa_policy against a connection that certified it at
+ *     issue. Anything else is 'uncertified' — never silently inapplicable.
+ *
+ * A CONSUMED grant proves nothing about the next request: it was spent, once,
+ * atomically, on the action it was minted for. It is excluded here for the same
+ * reason the spend predicate excludes it.
+ *
+ * Exported because `GET /auth/session` reports the SAME two classifications it
+ * would get on its next decision, for the SAME presented session. Two
+ * definitions of "fresh" — one for the evidence row, one for the page — would
+ * eventually disagree, and the page would then be telling the operator
+ * something the audit trail denies.
+ */
+export async function classifyActorAssurance(
+  userLinkId: string,
+  sessionId: string | null,
+): Promise<AssuranceClassification> {
+  const result = await query(
+    `SELECT
+       (SELECT s.auth_time
+          FROM identity_sessions s
+         WHERE s.session_id = $2::uuid AND s.user_link_id = $1
+           AND s.revoked_at IS NULL AND s.expires_at > NOW()) AS session_auth_time,
+       (SELECT COALESCE(c.mfa_policy_certified, FALSE)
+          FROM identity_sessions s
+          LEFT JOIN identity_provider_connections c ON c.connection_id = s.connection_id
+         WHERE s.session_id = $2::uuid AND s.user_link_id = $1
+           AND s.revoked_at IS NULL AND s.expires_at > NOW()) AS session_mfa_certified,
+       (SELECT g.grant_id
+          FROM reauthentication_grants g
+         WHERE g.user_link_id = $1 AND g.expires_at > NOW() AND g.consumed_at IS NULL
+         ORDER BY g.issued_at DESC LIMIT 1) AS live_grant_id,
+       (SELECT (g.assurance_level = 'fresh_and_mfa_policy' AND g.mfa_policy_certified_at_issue)
+          FROM reauthentication_grants g
+         WHERE g.user_link_id = $1 AND g.expires_at > NOW() AND g.consumed_at IS NULL
+         ORDER BY g.issued_at DESC LIMIT 1) AS grant_mfa_certified`,
+    [userLinkId, sessionId],
+  );
+  const row = (result.rows[0] ?? {}) as Row;
+  const sessionAuthTime =
+    row.session_auth_time === null || row.session_auth_time === undefined
+      ? null
+      : row.session_auth_time instanceof Date
+        ? row.session_auth_time
+        : new Date(String(row.session_auth_time));
+  const hasGrant = row.live_grant_id !== null && row.live_grant_id !== undefined;
+
+  if (sessionAuthTime === null && !hasGrant) {
+    return { freshness: 'not_applicable', mfaAssurance: 'not_applicable' };
+  }
+  const withinWindow =
+    sessionAuthTime !== null &&
+    Date.now() - sessionAuthTime.getTime() <= AUTHENTICATION_FRESHNESS_WINDOW_SECONDS * 1000;
+  const certified = row.session_mfa_certified === true || row.grant_mfa_certified === true;
+  return {
+    freshness: hasGrant || withinWindow ? 'fresh' : 'stale',
+    mfaAssurance: certified ? 'certified' : 'uncertified',
+  };
+}
+
 export function createPolicyEngine(options: {
   catalog: ActionCatalog;
   resolveResourceScope: ResourceScopeResolver;
@@ -179,18 +373,27 @@ export function createPolicyEngine(options: {
     scopeId: string | null;
     decision: 'allow' | 'deny';
     reasonCode: string;
-    requestId: string | null;
+    /** GENERATED, never a header value, never null for an identified actor. */
+    requestId: string;
     supportSessionId: string | null;
     matched?: ReadonlyArray<{ roleBindingId: string; authorizationVersion: number }> | undefined;
-    correlationId?: string | null | undefined;
-    freshness?: FreshnessClassification | undefined;
-    mfaAssurance?: MfaAssuranceClassification | undefined;
+    correlationId: string;
+    freshness: FreshnessClassification;
+    mfaAssurance: MfaAssuranceClassification;
     supportRequestId?: string | null | undefined;
     authTime?: Date | null | undefined;
     connectionId?: string | null | undefined;
     sessionId?: string | null | undefined;
     actorProviderSubject?: string | null | undefined;
   }): Promise<string> {
+    // Fail closed rather than write evidence that cannot be correlated: an
+    // identified actor's decision MUST carry both generated ids.
+    if (
+      (input.actorType === 'user' || input.actorType === 'platform_support') &&
+      (input.requestId.length === 0 || input.correlationId.length === 0)
+    ) {
+      throw new Error('policy evidence requires generated request and correlation ids');
+    }
     // A deny never claims a matched binding (also a database CHECK).
     const matched = input.decision === 'allow' ? (input.matched ?? []) : [];
     const result = await query(
@@ -218,9 +421,9 @@ export function createPolicyEngine(options: {
         input.supportSessionId,
         matched.map((m) => m.roleBindingId),
         matched.map((m) => m.authorizationVersion),
-        input.freshness ?? 'not_applicable',
-        input.mfaAssurance ?? 'not_applicable',
-        input.correlationId ?? null,
+        input.freshness,
+        input.mfaAssurance,
+        input.correlationId,
         input.supportRequestId ?? null,
         input.authTime ?? null,
         input.connectionId ?? null,
@@ -233,7 +436,18 @@ export function createPolicyEngine(options: {
 
   return {
     async decide(input: PolicyInput): Promise<PolicyDecisionResult> {
-      const requestId = input.requestId ?? null;
+      // GENERATED evidence ids and COMPUTED assurance — resolved once, before
+      // any rule runs, so every path out of this function records the same
+      // facts and no path can quietly omit them.
+      const { requestId, correlationId } = evidenceIds();
+      // R3 correction B2: the assurance recorded is the assurance of the
+      // session THIS request presented — the very id written to the evidence
+      // row below — not of whichever session the actor authenticated most
+      // recently on some other credential.
+      const assurance = await classifyActorAssurance(
+        input.actor.userLinkId,
+        input.sessionId ?? null,
+      );
       const actor = input.actor;
       const targetTenantId = input.targetTenantId ?? actor.tenantId;
       const actorType: 'user' | 'platform_support' =
@@ -260,9 +474,9 @@ export function createPolicyEngine(options: {
           reasonCode,
           requestId,
           supportSessionId: null,
-          correlationId: input.correlationId ?? null,
-          freshness: input.freshness,
-          mfaAssurance: input.mfaAssurance,
+          correlationId,
+          freshness: assurance.freshness,
+          mfaAssurance: assurance.mfaAssurance,
           supportRequestId: input.supportRequestId ?? null,
           authTime: input.authTime ?? null,
           connectionId: input.connectionId ?? null,
@@ -363,18 +577,24 @@ export function createPolicyEngine(options: {
       // 5. DATABASE-authoritative bindings, loaded per decision
       const bindings = (
         await query(
-          `SELECT role_binding_id, role, scope_level, scope_id, resource_type, resource_id,
-                  authorization_version
-             FROM role_bindings
-            WHERE user_link_id = $1 AND status = 'active'
-              AND effective_from <= NOW()
-              AND (effective_to IS NULL OR effective_to > NOW())
-              AND tenant_id IS NOT DISTINCT FROM $2`,
+          `SELECT rb.role_binding_id, rb.role, rb.scope_level, rb.scope_id,
+                  rb.resource_type, rb.resource_id, rb.authorization_version
+             FROM role_bindings rb
+            WHERE rb.user_link_id = $1
+              AND ${EFFECTIVE_ROLE_BINDING_SQL}
+              AND rb.tenant_id IS NOT DISTINCT FROM $2`,
           [actor.userLinkId, actor.actorScope === 'platform' ? null : actor.tenantId],
         )
       ).rows as unknown as BindingRow[];
 
       const covers = (binding: BindingRow): boolean => {
+        if (isPlatformAction) {
+          // R3 correction B3: a control-plane action is reached ONLY from
+          // platform scope — for EVERY actor, on both branches below. A
+          // tenant-scope binding carrying a platform role name is a misgrant,
+          // and a misgrant authorizes nothing.
+          return coversPlatformAction(binding);
+        }
         if (binding.scope_level === 'platform') return false; // never covers tenant data
         if (binding.scope_level === 'resource') {
           // EXACT match on tenant, resource type and resource id. A resource
@@ -391,7 +611,11 @@ export function createPolicyEngine(options: {
           // tenant. Only a tenant-scope binding may authorize that: a
           // rooftop or department binding must NEVER widen to tenant-wide
           // reach (the same rule sessionCovers applies to support sessions).
-          return binding.scope_level === 'tenant' && binding.scope_id === targetTenantId;
+          //
+          // The rule is `coversTenantWide` and it is called, not restated —
+          // every other authority gate in this package calls the same
+          // function, so none of them can disagree with this decision.
+          return coversTenantWide(binding, targetTenantId);
         }
         return ancestry.some(
           (node) => node.level === binding.scope_level && node.id === binding.scope_id,
@@ -422,9 +646,9 @@ export function createPolicyEngine(options: {
             requestId,
             supportSessionId: null,
             matched,
-            correlationId: input.correlationId ?? null,
-            freshness: input.freshness,
-            mfaAssurance: input.mfaAssurance,
+            correlationId,
+            freshness: assurance.freshness,
+            mfaAssurance: assurance.mfaAssurance,
             supportRequestId: input.supportRequestId ?? null,
             authTime: input.authTime ?? null,
             connectionId: input.connectionId ?? null,
@@ -449,10 +673,11 @@ export function createPolicyEngine(options: {
       }
 
       // 6. platform actors: platform.* actions via platform bindings…
+      //    `covers` is the SAME predicate the dealership branch above applied,
+      //    and for a platform action it is `coversPlatformAction` — so the two
+      //    branches cannot disagree about what reaches the control plane.
       if (isPlatformAction) {
-        const match = bindings.find(
-          (b) => b.scope_level === 'platform' && def.allowedRoles.includes(b.role),
-        );
+        const match = bindings.find((b) => def.allowedRoles.includes(b.role) && covers(b));
         if (match !== undefined) {
           const decisionId = await record({
             tenantId: targetTenantId,
@@ -473,9 +698,9 @@ export function createPolicyEngine(options: {
                 authorizationVersion: Number(match.authorization_version),
               },
             ],
-            correlationId: input.correlationId ?? null,
-            freshness: input.freshness,
-            mfaAssurance: input.mfaAssurance,
+            correlationId,
+            freshness: assurance.freshness,
+            mfaAssurance: assurance.mfaAssurance,
             authTime: input.authTime ?? null,
             connectionId: input.connectionId ?? null,
             sessionId: input.sessionId ?? null,
@@ -500,7 +725,46 @@ export function createPolicyEngine(options: {
       }
 
       // …7. and dealership data ONLY through a live approved support session
-      // whose request covers this action and whose scope covers the resource.
+      // whose request covers this action, whose scope covers the resource, AND
+      // whose actor STILL holds platform-support authority.
+      //
+      // FBL-020-R3 correction F1 — THE LAST CLAUSE IS NEW, AND IT IS THE POINT.
+      // Before it, this branch consulted the support session and the approved
+      // request and no role binding at all, so revoking a platform actor's
+      // binding — the natural offboarding action — took no effect on a live
+      // session: access continued until the session expired or an operator
+      // remembered to call `revokeSupportSession`. Offboarding must not depend
+      // on anybody remembering a second step.
+      //
+      // The authority is re-judged HERE, on EVERY decision, from the `bindings`
+      // rows already loaded above — a set the engine read under
+      // `EFFECTIVE_ROLE_BINDING_SQL`, so a revoked or windowed-out binding is
+      // simply not in it, no new query is issued, and there is no second
+      // predicate to drift.
+      //
+      // ON `coversPlatformAction`: today it can only be true here. `bindings` is
+      // this platform actor's own set (`rb.tenant_id IS NOT DISTINCT FROM NULL`
+      // on this branch) and migration 055 CHECKs that `tenant_id` is NULL
+      // exactly when `scope_level = 'platform'`, so the schema already implies
+      // it. It is STATED rather than inferred because the rule this branch
+      // enforces is "a PLATFORM-SCOPE binding in a support role", and a rule
+      // that silently rested on a CHECK in another file is how the drift this
+      // revision keeps finding gets in. It is the same function the
+      // control-plane branch calls, so the two cannot diverge.
+      const holdsSupportAuthority = bindings.some(
+        (b) =>
+          coversPlatformAction(b) &&
+          (PLATFORM_SUPPORT_AUTHORITY_ROLES as readonly string[]).includes(b.role),
+      );
+      if (!holdsSupportAuthority) {
+        // A resource denial still hides behind the not-found envelope: losing
+        // authority must not turn into an existence oracle.
+        return deny('SUPPORT_ACTOR_UNAUTHORIZED', {
+          resourceVisible: !namedResource,
+          sensitive,
+        });
+      }
+
       const sessions = (
         await query(
           `SELECT s.support_session_id, r.request_id, r.requested_actions, r.scope_level, r.scope_id
@@ -545,9 +809,9 @@ export function createPolicyEngine(options: {
           // role binding — so the matched-binding list is truthfully empty
           // and the request/session ids carry the evidence instead.
           matched: [],
-          correlationId: input.correlationId ?? null,
-          freshness: input.freshness,
-          mfaAssurance: input.mfaAssurance,
+          correlationId,
+          freshness: assurance.freshness,
+          mfaAssurance: assurance.mfaAssurance,
           supportRequestId: live.request_id,
           authTime: input.authTime ?? null,
           connectionId: input.connectionId ?? null,

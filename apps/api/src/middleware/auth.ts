@@ -10,6 +10,13 @@
  *     require the session's CSRF token in `x-csrf-token`.
  * A request carrying BOTH is ambiguous and refused outright.
  *
+ * FBL-020-R3: BOTH credentials now resolve a LOCAL, revocable session. A bearer
+ * token used to be authenticated against the provider alone, which left the
+ * provider as the only authority on whether the caller was still logged in —
+ * so a local logout could not deny an access token that had not expired yet.
+ * A verified bearer with no local session establishes one; every later request
+ * resolves it and is refused if it is revoked or expired.
+ *
  * The tenant a request operates on still never comes from a body or query
  * string: dealership actors act in the tenant their identity maps to, full
  * stop. A platform actor names a target tenant in `x-target-tenant`, and the
@@ -40,16 +47,21 @@ import {
   findUserLinkByProviderIdentity,
   isTenantEffective,
   isUserLinkUsable,
+  maintainProviderSession,
   mergeActionCatalogs,
   resolveActiveConnection,
+  resolveOrEstablishBearerSession,
+  revalidateSessionIdentity,
   rolesForUserLink,
   validateSessionToken,
   verifyCsrfToken,
   type AccessTokenVerifier,
   type ActionCatalog,
+  type IdentitySession,
   type PolicyEngine,
 } from '@dealer/identity-access';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
+import { identityProvider } from '../identity/provider';
 
 export type { Role, TenantContext };
 
@@ -62,7 +74,18 @@ export interface RequestIdentity {
   /** dealership actors carry their tenant; platform actors carry null */
   tenantId: string | null;
   authTime: Date | null;
+  /**
+   * The LOCAL, revocable session this request resolved. R3: BOTH credential
+   * kinds now have one — a bearer credential without a live local session is
+   * not authenticated, which is what makes local logout beat a provider token
+   * that has not expired yet.
+   */
   sessionId: string | null;
+  /**
+   * The PROVIDER's session identifier (`sid`). A mapping input and a logout
+   * argument — never authorization evidence, and never the local session id.
+   */
+  providerSessionId: string | null;
   /** The provider connection this credential was resolved through (R1 §C/§E). */
   connectionId: string | null;
   /** R2: the provider subject this credential proved. */
@@ -200,6 +223,12 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
       }
       throw err;
     }
+    // FBL-020-R3: an IMPERSONATED token is refused before anything else is
+    // resolved. A provider staff member acting as one of our users is not an
+    // actor this platform admits, on any credential path.
+    if (verified.impersonation.impersonated) {
+      throw new UnauthorizedError('Invalid access token');
+    }
     // FBL-020-R1 section C: the whole chain is re-checked on EVERY request —
     // connection, issuer agreement, tenant, link. Disabling any link in that
     // chain denies the very next request with the same otherwise-valid token;
@@ -225,7 +254,17 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
     if (verified.authTime.getTime() > Date.now() + identitySettings().oidcClockSkewSeconds * 1000) {
       throw new UnauthorizedError('Invalid access token');
     }
-    const link = await findUserLinkByProviderIdentity(connection.tenantId, verified.providerUserId);
+    // R3: the SIX-fact link lookup. Connection, issuer and provider
+    // organization are compared, not merely carried, so a link bound to a
+    // different organization is invisible here — an organization remap never
+    // hands the new organization the old organization's account.
+    const link = await findUserLinkByProviderIdentity({
+      tenantId: connection.tenantId,
+      providerUserId: verified.providerUserId,
+      connectionId: connection.connectionId,
+      issuer: connection.issuer,
+      providerOrganizationId: connection.providerOrganizationId,
+    });
     if (
       link === null ||
       link.status !== 'activated' ||
@@ -233,12 +272,34 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
     ) {
       throw new UnauthorizedError('Invalid access token');
     }
+    // R3: the bearer credential resolves a LOCAL session. Established on first
+    // use, revalidated on every later request against the whole identity
+    // chain, and refused the moment it is revoked or expired — so a local
+    // logout denies the very next request with a provider token that is still
+    // perfectly valid, without waiting for that token to expire.
+    const bearerSession = await resolveOrEstablishBearerSession({
+      issuer: connection.issuer,
+      expectedIssuer: identitySettings().issuer,
+      providerSessionId: verified.providerSessionId,
+      providerOrganizationId: connection.providerOrganizationId,
+      providerSubject: verified.providerUserId,
+      tenantId: connection.tenantId,
+      userLinkId: link.userLinkId,
+      connectionId: connection.connectionId,
+      authTime: verified.authTime,
+    });
+    if (bearerSession.outcome !== 'live') {
+      // Revoked, expired, issuer-disagreeing and no-longer-effective are ONE
+      // neutral answer outward; the distinction stays inside the platform.
+      throw new UnauthorizedError('Invalid access token');
+    }
     return {
       userLinkId: link.userLinkId,
       actorScope: connection.connectionScope,
       tenantId: connection.tenantId,
       authTime: verified.authTime,
-      sessionId: verified.providerSessionId,
+      sessionId: bearerSession.session.sessionId,
+      providerSessionId: verified.providerSessionId,
       connectionId: connection.connectionId,
       providerSubject: verified.providerUserId,
       credential: 'bearer',
@@ -278,6 +339,21 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
     if (!(await isUserLinkUsable(session.userLinkId))) {
       throw new UnauthorizedError('Invalid or expired session');
     }
+    // R3: ONE statement re-reads the whole chain — tenant, connection, issuer,
+    // organization, UserLink and the session itself, each inside its EFFECTIVE
+    // WINDOW, and each compared against the others rather than merely present.
+    // The individual checks above stay: they name their own failures, and this
+    // is the one that cannot be satisfied by a partially-agreeing chain (a link
+    // re-bound to a different connection than the session was established
+    // through, for instance, passes every check above and fails here).
+    if (
+      (await revalidateSessionIdentity({
+        sessionId: session.sessionId,
+        expectedIssuer: identitySettings().issuer,
+      })) === null
+    ) {
+      throw new UnauthorizedError('Invalid or expired session');
+    }
     if (!SAFE_METHODS.has(req.method)) {
       const presented = req.headers['x-csrf-token'];
       const settings = identitySettings();
@@ -288,19 +364,70 @@ async function authenticateAsync(req: Request): Promise<RequestIdentity> {
         throw new ForbiddenError('CSRF token missing or invalid', { code: 'csrf_required' });
       }
     }
+    // FBL-020-R3 correction C1: the PROVIDER SESSION is maintained before this
+    // request is served. /auth/callback takes custody of a sealed provider
+    // refresh credential on every login; until now nothing running could spend
+    // it, which made an 8-hour credential at rest with no operational benefit.
+    // A session whose provider access token is at or near expiry is refreshed
+    // here, so the provider's continued assent is re-checked within minutes
+    // rather than never, and the credential rotates instead of sitting still.
+    //
+    // Deliberately AFTER the CSRF check: a forged unsafe request must not be
+    // able to spend a single-use refresh token on its way to being refused.
+    const live = await maintainSession(session);
     return {
-      userLinkId: session.userLinkId,
-      actorScope: session.tenantId === null ? 'platform' : 'dealership',
-      tenantId: session.tenantId,
-      authTime: session.authTime,
-      sessionId: session.sessionId,
-      connectionId: session.connectionId,
-      providerSubject: session.providerSubject,
+      userLinkId: live.userLinkId,
+      actorScope: live.tenantId === null ? 'platform' : 'dealership',
+      tenantId: live.tenantId,
+      // The refreshed row, not the pre-refresh one: a rotation may have moved
+      // auth_time forward (only on verified evidence) and may have been handed a
+      // new provider session id, and the policy evidence must record what is
+      // true now.
+      authTime: live.authTime,
+      sessionId: live.sessionId,
+      providerSessionId: live.providerSessionId,
+      connectionId: live.connectionId,
+      providerSubject: live.providerSubject,
       credential: 'session',
     };
   }
 
   throw new UnauthorizedError('Missing credentials');
+}
+
+/**
+ * FBL-020-R3 correction C1 — the provider session behind a cookie session is
+ * MAINTAINED on the request path, and this is the whole of the app's part in it:
+ * one call into the identity package, which owns every statement.
+ *
+ * Returns the session this request must proceed on — the rotated row when a
+ * refresh happened, the one it already had otherwise. A refusal is thrown only
+ * when the session is genuinely gone (definitive provider refusal, identity
+ * mismatch, replay, impersonation, or a row revoked underneath us); a provider
+ * that merely did not answer leaves a still-valid local session serving traffic.
+ */
+async function maintainSession(session: IdentitySession): Promise<IdentitySession> {
+  const settings = identitySettings();
+  const maintained = await maintainProviderSession({
+    session,
+    provider: identityProvider(settings),
+    cookiePassword: settings.cookiePassword,
+    expectedIssuer: settings.issuer,
+    // The refreshed access token is VERIFIED by the same standards-based
+    // verifier a bearer credential faces. An unverifiable or impersonated
+    // replacement therefore kills the session rather than being adopted.
+    verifyAccessToken: (accessToken: string) => verifier().verify(accessToken),
+    // R3 correction D1: a refresh on the request path is BOUNDED. The exchange no
+    // longer holds a database transaction, so a provider that hangs costs this one
+    // request the bound and nothing else — but it must still cost only the bound.
+    providerTimeoutMs: settings.providerRefreshTimeoutMs,
+  });
+  if (maintained.outcome === 'session_ended') {
+    // Same neutral answer as every other session failure: the distinction stays
+    // inside the platform, on the session row's revoked_reason.
+    throw new UnauthorizedError('Invalid or expired session');
+  }
+  return maintained.session;
 }
 
 // ── authorization ──────────────────────────────────────────────────────────
@@ -383,16 +510,20 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     targetTenantId,
     resource,
     scopeHint,
-    correlationId: safeCorrelationId(req),
     // R2 §8: identity facts from the generated request context
     authTime: identity.authTime,
     connectionId: identity.connectionId,
-    sessionId: identity.credential === 'session' ? identity.sessionId : null,
+    // R3: the LOCAL session id, for both credential kinds. A bearer request
+    // now has one, so the evidence row names the object an operator can
+    // actually revoke instead of recording nothing.
+    sessionId: identity.sessionId,
     actorProviderSubject: identity.providerSubject,
-    // The evidence row records the SANITIZED correlation id — the same one
-    // the response header echoes. A hostile header value must never reach an
-    // append-only table (nor violate its CHECK and 500 the request).
-    requestId: safeRequestId(req),
+    // FBL-020-R3: the request and correlation ids are NOT passed from here any
+    // more. They used to be read off `x-request-id` / `x-correlation-id`, so a
+    // client decided what the append-only evidence row recorded — and recorded
+    // nothing at all when it sent nothing. The engine now reads the GENERATED
+    // pair the outermost middleware minted, which is also the pair every log
+    // line carries, so the decision and its logs join on ids no caller chose.
   });
 
   if (decision.decision !== 'allow') {
@@ -420,26 +551,6 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     roles,
   };
   bindRequestActor({ tenantId: targetTenantId as string, userId: identity.userLinkId, roles });
-}
-
-/**
- * The correlation id, screened exactly as request-context screens it: a
- * hostile or malformed `x-request-id` is dropped rather than propagated.
- */
-const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
-
-function safeRequestId(req: Request): string | null {
-  const raw = req.headers['x-request-id'];
-  return typeof raw === 'string' && SAFE_REQUEST_ID.test(raw) ? raw : null;
-}
-
-/**
- * The correlation id ties a whole flow together and is deliberately distinct
- * from the per-call request id. Screened the same way.
- */
-function safeCorrelationId(req: Request): string | null {
-  const raw = req.headers['x-correlation-id'];
-  return typeof raw === 'string' && SAFE_REQUEST_ID.test(raw) ? raw : null;
 }
 
 /** Convenience used by route handlers (unchanged shape from FBL-010). */

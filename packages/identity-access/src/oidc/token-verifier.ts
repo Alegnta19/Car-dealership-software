@@ -12,9 +12,14 @@
  * Failure model: ONE error type, fail closed. Internal detail rides on the
  * error object for structured logs; callers must never echo it outward.
  */
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { TokenVerificationError, type VerifiedAccessToken } from '../contracts';
+import {
+  NOT_IMPERSONATED,
+  TokenVerificationError,
+  type ImpersonationClassification,
+  type VerifiedAccessToken,
+} from '../contracts';
 
 export interface AccessTokenVerifierOptions {
   readonly issuer: string;
@@ -61,6 +66,44 @@ function claimEpochSeconds(value: unknown, name: string): Date {
     throw new TokenVerificationError(`claim ${name} missing or not a number`);
   }
   return new Date(value * 1000);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * FBL-020-R3 — does this token say it is being used ON BEHALF OF someone?
+ *
+ * Three carriers are recognised, any one of which classifies the token as
+ * impersonated: the RFC 8693 `act` (actor) claim, a provider-specific
+ * `impersonator` claim, and an authentication method of 'Impersonation'. The
+ * actor's EMAIL is examined only to record that one existed — the value is
+ * never returned, so it cannot reach a response, a log or the database.
+ *
+ * Reporting is all this does. Refusing is the caller's job, and every
+ * credential path (login, bearer, refresh, reauthentication) refuses.
+ */
+function classifyImpersonation(payload: Record<string, unknown>): ImpersonationClassification {
+  const carrier = isRecord(payload.act)
+    ? payload.act
+    : isRecord(payload.impersonator)
+      ? payload.impersonator
+      : null;
+  if (carrier !== null) {
+    const email = carrier.email;
+    return {
+      impersonated: true,
+      impersonatorEmailPresent: typeof email === 'string' && email.length > 0,
+    };
+  }
+  // A bare non-empty scalar in either claim, or the explicit method, still
+  // asserts impersonation — it just carries no email to classify.
+  const scalarActor =
+    (typeof payload.act === 'string' && payload.act.length > 0) ||
+    (typeof payload.impersonator === 'string' && payload.impersonator.length > 0) ||
+    payload.authentication_method === 'Impersonation';
+  return scalarActor ? { impersonated: true, impersonatorEmailPresent: false } : NOT_IMPERSONATED;
 }
 
 export function createAccessTokenVerifier(
@@ -113,14 +156,51 @@ export function createAccessTokenVerifier(
         throw new TokenVerificationError('claim org_id exceeds the bounded length');
       }
 
+      // ── FBL-020-R3: IMPOSSIBLE TIMES ────────────────────────────────────
+      //
+      // jose enforces `exp` and `nbf` against the clock. It does NOT judge
+      // `iat`, `auth_time`, or whether the claims are coherent with each
+      // other — so a token that says it was issued next week, or that the
+      // person authenticated next week, or that it expired before it was
+      // issued, verified cleanly and its times then flowed into session
+      // freshness and reauthentication proofs.
+      //
+      // The ONE allowance is the CONFIGURED clock tolerance, the same bound
+      // jose is given. It exists for hosts that disagree by a little; it is
+      // not a licence to accept the future as the past. Every rejection is
+      // the same closed failure, and no claim value is ever echoed.
+      const nowMs = Date.now();
+      const toleranceMs = clockTolerance * 1000;
+      if (issuedAt.getTime() > nowMs + toleranceMs) {
+        throw new TokenVerificationError('claim iat lies in the future beyond the clock tolerance');
+      }
+      if (authTime.getTime() > nowMs + toleranceMs) {
+        throw new TokenVerificationError(
+          'claim auth_time lies in the future beyond the clock tolerance',
+        );
+      }
+      // A credential that expires before it exists is not a credential.
+      if (expiresAt.getTime() < issuedAt.getTime() - toleranceMs) {
+        throw new TokenVerificationError('claim exp precedes claim iat beyond the clock tolerance');
+      }
+
+      // The returned nonce, reduced to a DIGEST here and nowhere else. The raw
+      // claim is read inside this function and dropped; only the digest travels
+      // outward, which is what lets a caller compare it against a stored
+      // `*_nonce_hash` without the value existing anywhere it could leak.
+      const presentedNonce = payload.nonce;
+      const nonceDigest =
+        typeof presentedNonce === 'string' && presentedNonce.length > 0
+          ? createHash('sha256').update(presentedNonce, 'utf8').digest('hex')
+          : null;
+
       if (verifyOptions?.requireNonce !== undefined) {
-        const presented = payload.nonce;
-        if (typeof presented !== 'string' || presented.length === 0) {
+        if (typeof presentedNonce !== 'string' || presentedNonce.length === 0) {
           throw new TokenVerificationError('claim nonce missing');
         }
         // constant-time compare; the value itself never reaches a log line
         const expected = Buffer.from(verifyOptions.requireNonce, 'utf8');
-        const actual = Buffer.from(presented, 'utf8');
+        const actual = Buffer.from(presentedNonce, 'utf8');
         if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
           throw new TokenVerificationError('claim nonce mismatch');
         }
@@ -150,6 +230,8 @@ export function createAccessTokenVerifier(
         issuedAt,
         expiresAt,
         roleHints,
+        nonceDigest,
+        impersonation: classifyImpersonation(payload),
       };
     },
   };

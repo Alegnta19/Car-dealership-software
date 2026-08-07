@@ -22,7 +22,7 @@
     "seed:mpi": "tsx scripts/seed-mpi-template.ts",
     "format": "prettier --write .",
     "format:check": "tsx scripts/quality-ratchet.ts check format",
-    "architecture:check": "tsx scripts/check-dependencies.ts apps packages && tsx scripts/check-app-sql.ts && tsx scripts/check-architecture-manifest.ts && tsx scripts/check-env-access.ts"
+    "architecture:check": "tsx scripts/check-dependencies.ts apps packages && tsx scripts/check-app-sql.ts && tsx scripts/check-architecture-manifest.ts && tsx scripts/check-env-access.ts && tsx scripts/check-role-binding-effectiveness.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

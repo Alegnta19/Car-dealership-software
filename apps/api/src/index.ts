@@ -5,7 +5,8 @@
 export { createApp } from './app';
 export { default as serviceCockpitRouter } from './routes/service-cockpit';
 export { default as authRouter } from './routes/auth';
-export { resetAuthRoutesForTests } from './routes/auth';
+export { resetAuthRoutesForTests, identitySetCookieHeader } from './routes/auth';
+export { useIdentityProviderForTests, resetIdentityProviderForTests } from './identity/provider';
 export {
   authenticate,
   requireAction,

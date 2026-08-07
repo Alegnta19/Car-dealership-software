@@ -19,6 +19,7 @@ const TITLES: Record<number, string> = {
   413: 'Content Too Large',
   422: 'Unprocessable Content',
   500: 'Internal Server Error',
+  503: 'Service Unavailable',
 };
 
 export function toProblemDetails(err: unknown, opts: { instance?: string } = {}): ProblemDetails {

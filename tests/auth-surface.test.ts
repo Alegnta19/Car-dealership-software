@@ -11,7 +11,7 @@ import {
   startIdentityTestEnv,
   type IdentityTestEnv,
 } from '@dealer/test-kit';
-import { closePool } from '@dealer/database';
+import { closePool, query } from '@dealer/database';
 import { openCookiePayload, sealCookiePayload } from '@dealer/identity-access';
 import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } from '@dealer/api';
 
@@ -105,6 +105,23 @@ describe(
       return m ? decodeURIComponent(m[1]!) : null;
     }
 
+    /**
+     * FBL-020-R3: the return location lives on the SERVER ROW, not in the
+     * browser's cookie, so the allowlist is proven where the value actually
+     * is. The cookie carries only the opaque handle that names this row.
+     */
+    async function serverReturnTo(sealed: string): Promise<string | null> {
+      const payload = openCookiePayload(sealed, env.cookiePassword, { maxAgeSeconds: 600 });
+      assert.ok(payload, 'the transaction cookie must open');
+      assert.equal(payload.return_to, undefined, 'the cookie must NOT carry the return location');
+      const r = await query(`SELECT return_to FROM login_transactions WHERE login_txn_id = $1`, [
+        String(payload.login_txn_id),
+      ]);
+      assert.equal(r.rows.length, 1, 'the cookie must name a real server transaction');
+      const row = r.rows[0] as { return_to: unknown };
+      return row.return_to === null ? null : String(row.return_to);
+    }
+
     test('GET /auth/login seals a transaction and redirects with Code+PKCE', async () => {
       const res = await fetch(`${base}/auth/login`, { redirect: 'manual' });
       assert.equal(res.status, 302);
@@ -128,6 +145,29 @@ describe(
         typeof payload.code_verifier === 'string' && (payload.code_verifier as string).length >= 32,
         'a PKCE verifier of real length is sealed, never sent to the browser in the clear',
       );
+      // R3: the cookie is the OPAQUE HANDLE plus the round-trip plaintext the
+      // server compares against its digests — and nothing else. The server row
+      // it names opens in `pending`, having declared no outcome whatsoever.
+      assert.ok(typeof payload.login_txn_id === 'string');
+      assert.deepEqual(
+        Object.keys(payload).sort(),
+        ['code_verifier', 'iat', 'login_txn_id', 'oidc_nonce', 'purpose', 'state'],
+        'the browser must carry nothing the server can hold instead',
+      );
+      const result = await query(
+        `SELECT status, consumed_at, consumed_outcome, failure_reason,
+                request_id, correlation_id
+           FROM login_transactions WHERE login_txn_id = $1`,
+        [String(payload.login_txn_id)],
+      );
+      const row = result.rows[0] as Record<string, unknown>;
+      assert.equal(row.status, 'pending');
+      assert.equal(row.consumed_at, null);
+      assert.equal(row.consumed_outcome, null);
+      assert.equal(row.failure_reason, null);
+      // the transaction is correlatable to the request that opened it
+      assert.ok(typeof row.request_id === 'string' && row.request_id.length >= 8);
+      assert.ok(typeof row.correlation_id === 'string' && row.correlation_id.length >= 8);
     });
 
     test('GET /auth/login refuses to be an open redirect', async () => {
@@ -142,15 +182,12 @@ describe(
         assert.equal(res.status, 302);
         const sealed = cookieValue(res.headers.get('set-cookie'), 'dealer_auth_txn');
         assert.ok(sealed);
-        const payload = openCookiePayload(sealed, env.cookiePassword, { maxAgeSeconds: 600 });
-        assert.ok(payload);
-        assert.equal(payload.return_to, '/', `${hostile} must be reduced to "/"`);
+        assert.equal(await serverReturnTo(sealed), '/', `${hostile} must be reduced to "/"`);
       }
 
       const ok = await fetch(`${base}/auth/login?return_to=%2Fros%2F123`, { redirect: 'manual' });
       const okSealed = cookieValue(ok.headers.get('set-cookie'), 'dealer_auth_txn');
-      const okPayload = openCookiePayload(okSealed!, env.cookiePassword, { maxAgeSeconds: 600 });
-      assert.equal(okPayload!.return_to, '/ros/123', 'a relative path IS preserved');
+      assert.equal(await serverReturnTo(okSealed!), '/ros/123', 'a relative path IS preserved');
     });
 
     test('GET /auth/callback refuses every state and cookie mismatch', async () => {

@@ -54,12 +54,12 @@ rooftop. No legacy column was renamed; the Fixed Ops scope resolver reads
 
 ### `user_links`
 
-| Column                  | Type | Notes                                                                                    |
-| ----------------------- | ---- | ---------------------------------------------------------------------------------------- |
-| `actor_scope`           | TEXT | `dealership` / `platform`, paired with `tenant_id` by CHECK                              |
-| `provider_user_id`      | TEXT | Unique per (tenant, provider) — `NULLS NOT DISTINCT`, so the platform slot is unique too |
-| `status`                | TEXT | `pending` → `activated` → `deactivated`; activation stamps `activated_at`                |
-| `email`, `display_name` | TEXT | Refreshed at login; never authorization inputs                                           |
+| Column                  | Type | Notes                                                                                                                                                                                                                          |
+| ----------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `actor_scope`           | TEXT | `dealership` / `platform`, paired with `tenant_id` by CHECK                                                                                                                                                                    |
+| `provider_user_id`      | TEXT | Unique per (tenant, provider) — `NULLS NOT DISTINCT`, so the platform slot is unique too                                                                                                                                       |
+| `status`                | TEXT | `pending` → `activated` → `deactivated`; activation stamps `activated_at`                                                                                                                                                      |
+| `email`, `display_name` | TEXT | Refreshed at login; never authorization inputs. A rewrite is audited as `email_changed` / `display_name_changed` — never the values — and does NOT advance `authorization_version`, because it changes nothing an actor may do |
 
 A link carries **no privilege**. A freshly activated user has zero role
 bindings and deny-by-default applies.
@@ -212,3 +212,126 @@ Nothing in migrations 055 or 056 deletes an organization, identity, role,
 session, reauthentication, policy or support-access record. Retirement is a
 status transition or an effective-window close, and policy evidence cannot be
 deleted at all.
+---
+
+# Migration 057 — FBL-020-R2/R3 boundary completion
+
+Forward-only and additive. Migrations 000 and 049–056 are **byte-identical** to
+the accepted head; 057 creates one table (`login_transactions`), adds columns,
+constraints and indexes, and deletes no row.
+
+**Reconciliation always precedes constraints.** Adding a CHECK before the
+UPDATE that fixes existing rows would abort the migration on a populated
+database, so every section in 057 is ordered: add the column, reconcile the
+rows that cannot satisfy the new rule, _then_ add the constraint. Where a
+reconciliation would otherwise erase a fact, the fact is preserved instead — a
+superseded support decision is copied into `superseded_*` columns and audited
+rather than overwritten.
+
+## 1. `login_transactions` — the server-side login authority
+
+State, nonce and PKCE verifier as SHA-256 digests; the allowlisted return
+location; its own `expires_at`; the screened `request_id` / `correlation_id`
+pair. Status walks
+
+```
+pending ──claim──▶ consuming ──▶ succeeded
+   │                   │
+   └───────────────────┴──────▶ failed  (always with a reason)
+```
+
+`lt_state_machine` makes the illegal shapes unrepresentable: a `succeeded` row
+that was never claimed, a terminal row with no consumption instant, and a
+status disagreeing with the outcome column. Both terminal states absorb, and
+the claim is conditional on `pending`, so a replay at any stage loses.
+
+`failure_reason` is a closed, server-written vocabulary. It never contains a
+provider message, a token, a nonce or an authorization code.
+
+## 2. `identity_sessions` — bound, revocable, refreshable
+
+| Column                                                                    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `credential_kind`                                                         | `cookie` / `bearer` — R3 gives BOTH credential kinds a locally revocable session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `connection_id`, `issuer`, `provider_subject`, `provider_organization_id` | A LIVE session must name all four (CHECK). The unbound state is unrepresentable, so there is no bypass                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `refresh_state_sealed`, `refresh_state_key_version`                       | AES-256-GCM ciphertext of the refresh token plus the key version that sealed it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `refresh_token_hash`                                                      | the replay digest; rotation is keyed on it, so a replayed token changes nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `provider_access_token_expires_at`                                        | R3 correction C1: the VERIFIED `exp` of the provider access token this session last obtained — an instant, never a credential. It is what schedules the refresh, so the sealed state above has a runtime spender instead of sitting at rest unused. NULL means the expiry was never learned, and nothing is ever scheduled. `is_bearer_holds_no_access_expiry` keeps it NULL on the bearer path, which takes custody of no provider credential                                                                                                                                                                                                                                                                                                |
+| `refresh_rotation_count`                                                  | increments only on a genuine rotation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `refresh_lease_id`, `refresh_lease_expires_at`                            | R3 correction D1: the CLAIM on an in-flight refresh attempt, and when it stops being one. It replaced holding the row's `FOR UPDATE` lock across the provider HTTP call — which pinned a shared pool connection inside an idle open transaction for as long as a hung provider hung. The lease keeps single-spend (a second request sees it and does nothing) without anyone waiting on someone else's network call. An EXPIRED lease is reclaimable, so a crashed attempt cannot wedge a session. `is_refresh_lease_paired` (claim and expiry are one fact) and `is_refresh_lease_needs_state` (a claim on nothing is meaningless) are CHECKs; with the two below/above, a revoked or bearer session holding a live claim is unrepresentable |
+| `revoked_at`, `revoked_reason`                                            | `is_revoked_holds_no_refresh_state`: a revoked session holds NO sealed state and no replay digest (CHECK) — and therefore, via `is_refresh_lease_needs_state`, no lease either                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+## 3. `reauthentication_transactions` — exact binding, and the nonce that is read
+
+| Column                                                                    | Notes                                                                                                         |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `connection_id`, `issuer`, `provider_organization_id`, `provider_subject` | The identity the step-up started from, derived server-side from the live session — never supplied by a caller |
+| `session_id`                                                              | The LOCAL session the step-up steps up FROM. The completion revalidates it                                    |
+| `oidc_nonce_hash`                                                         | The digest of the OIDC nonce this leg demands back. **Read at completion**, not merely written                |
+
+`rat_started_is_bound` requires all six of those on any `started` row, so the
+nonce comparison can never be reached with nothing to compare. Reconciliation
+expired every pre-R3 `started` row that could not satisfy it; no row was
+deleted and no value was invented.
+
+## 4. Support access — authority and high assurance
+
+| Column                   | Notes                                                                                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `approval_grant_id`      | The approver's own grant, SPENT BY the approval: minted for `identity.support.approve` against THIS request and consumed inside the approving transaction. UNIQUE (partial index), so one single-use grant can approve at most one request |
+| `superseded_*` (+ audit) | **HISTORY, NOT AUTHORITY.** A live approval that could not name a grant was ended and its decision PRESERVED here. Write-only audit fields: no gate, engine branch or mutation reads them, so setting one authorizes nothing               |
+
+**The approval assurance bar is NOT a column.** `decideSupportAccess` demands
+`fresh_and_mfa_policy` for every approval, stated once in code. R3 removed a
+`support_access_requests.approver_assurance` column that presented that bar as a
+per-request fact while nothing read it — an operator setting a row to
+`fresh_only` would have seen no change, and a later edit to the column DEFAULT
+would silently have done nothing. Making it authoritative was rejected because
+it would have introduced a per-request DOWNGRADE of the one gate that admits a
+platform person to tenant data; the bar is a platform-wide policy and belongs
+where it is reviewed. See migration 057, section 5.
+
+**Requester authority is re-judged, never remembered.** Filing, approval and
+session start each require the requester to hold a current, effective
+platform-support binding, and the policy engine re-checks the same binding on
+every decision made through a live support session. Revoking the binding is
+therefore sufficient offboarding: a pending request becomes unapprovable and a
+live session stops authorizing on its very next decision, with no operator
+obliged to remember `revokeSupportSession`.
+
+## Migration checksums (canonical values)
+
+**All migration checksums in this repository are canonical LF / git-blob
+values**, computed as
+
+```bash
+git show HEAD:migrations/<file>.sql | sha256sum
+```
+
+They are **not** Windows working-tree values: a working copy checked out with
+CRLF line endings hashes differently for every file, and a checksum taken there
+will disagree with CI and with every other machine. When a checksum is quoted
+in a report, in a ticket or in a review, it is this value.
+
+| Migration                                    | sha256 (canonical, LF/git-blob)                                    |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| `000_platform_core.sql`                      | `a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d` |
+| `049_phase248_service_cockpit.sql`           | `523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242` |
+| `050_phase248_hardening.sql`                 | `009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522` |
+| `051_phase248_metrics_support.sql`           | `e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4` |
+| `052_phase248_authorization_binding.sql`     | `94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41` |
+| `053_phase248_estimate_line_association.sql` | `a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a` |
+| `054_phase248_waitlist.sql`                  | `8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58` |
+| `055_identity_organization.sql`              | `52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d` |
+| `056_identity_contract_completion.sql`       | `ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d` |
+
+`057_identity_boundary_completion.sql` is **not** pinned here: it is unaccepted
+and still being edited in place, so any value quoted for it would be stale
+before it was read. It gets its checksum when it is accepted.
+
+## No hard deletion
+
+Nothing in migrations 055, 056 or 057 deletes an organization, identity, role,
+session, reauthentication, policy or support-access record. Retirement is a
+status transition or an effective-window close, and policy evidence cannot be
+updated or deleted at all.

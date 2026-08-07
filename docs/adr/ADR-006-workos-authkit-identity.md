@@ -90,3 +90,71 @@ is never logged. Missing, mismatched, expired and replayed all fail closed.
 
 `org_id` itself is required **in the verifier**, not in a later check a new
 caller could forget: this platform admits organization members only.
+
+---
+
+## R3 amendment (FBL-020-R3) — server-derived facts, and digests that are read
+
+R1 named the decisions; R2 stored the columns; R3 makes the platform the
+authority for the values those columns are compared against.
+
+**Starting facts are DERIVED, not accepted.** A reauthentication used to accept
+the connection, issuer, provider organization and provider subject it would
+later be checked against, falling back to the database only when they were
+absent. A caller that supplies both sides of an equality proves nothing by
+satisfying it. Every starting fact is now derived in one statement from the
+**live local session** the step-up is requested from: the session names its
+connection, the connection names the issuer and the organization, the UserLink
+names the subject. A caller may state what it believes those values are, and a
+disagreement **refuses the start** — belief is checked, never authoritative.
+The transaction additionally records the local session, and the completion
+revalidates tenant, connection, UserLink, session and MFA certification before
+any grant is minted.
+
+**A stored digest that nothing compares is decoration.** `oidc_nonce_hash` was
+written at start from R1 onward and never read, so the only nonce check that
+ever ran compared the token's claim against the value the client's own
+transaction cookie carried. The completion now compares the digest of the
+returned nonce against the **stored** digest, and migration 057 forbids a
+`started` transaction that cannot name one — so the comparison can never be
+reached with nothing to compare. The raw nonce never leaves the verifier: only
+its digest travels, which is why it cannot reach a log line, a response, an
+error or the database.
+
+**A missing verified value is a FAILURE.** R2 compared identity facts only when
+the caller had supplied them, so supplying nothing passed every check. Absence
+and disagreement are now the same closed answer.
+
+**Both credentials are locally revocable.** A bearer token used to be
+authenticated against the provider alone, which left the provider as the only
+authority on whether the caller was still logged in — a local logout could not
+deny an unexpired access token. A verified bearer now establishes a local
+session, every later request revalidates it, and revoking it denies the very
+next request.
+
+**Impersonation is refused, not merely unused.** ADR-008 rejected WorkOS
+impersonation; R3 stops relying on the dashboard for that. Three carriers (the
+RFC 8693 `act` claim, a provider `impersonator` object, and
+`authentication_method = 'Impersonation'`) are recognised, and any one refuses
+the credential on every path — bearer, login callback, reauthentication
+callback, and provider refresh, which additionally revokes the session. The
+impersonator's email is classified and dropped; the value never crosses the
+verifier boundary.
+
+**Assurance is COMPUTED.** Freshness and MFA certification are read from the
+actor's own live session and grants — one function, used both by the policy
+evidence row and by `GET /auth/session`, so the page can never tell an operator
+something the audit trail denies.
+
+**The authenticated-session response is BOUNDED.** `GET /auth/session` answers
+with eight identity facts and nothing else: internal user id, tenant, effective
+organization-scope summary, active role summary, computed freshness, MFA
+classification, local-session expiry, and active support state with expiry. No
+email, provider profile, provider subject, provider session id, token or
+refresh state. The CSRF token, which is not an identity fact, travels in the
+`x-csrf-token` response header instead.
+
+**HTTP is a loopback-only development affordance.** Plain http is accepted only
+when `NODE_ENV` is explicitly `development` or `test` **and** the URL host is
+loopback. The R2 `ALLOW_INSECURE_LOCAL_IDENTITY` override — which permitted
+http on any host, staging included — is gone.

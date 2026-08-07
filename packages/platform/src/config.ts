@@ -38,6 +38,20 @@ export interface WorkosIdentitySettings {
   readonly cookiePassword: string;
   readonly oidcAudience: string;
   readonly oidcClockSkewSeconds: number;
+  /**
+   * FBL-020-R3 correction D1 — the HARD BOUND on a provider refresh exchange,
+   * in milliseconds.
+   *
+   * A refresh now happens on the live request path, so an UNBOUNDED one is an
+   * availability defect: the WorkOS SDK call carried no deadline this platform
+   * chose, and a provider that HANGS rather than errors would keep the request
+   * waiting indefinitely (and, before the lease restructure below it, a shared
+   * database connection inside an open transaction with it). Expiry is
+   * classified TRANSIENT — a timeout is evidence that the provider did not
+   * answer, never evidence that the session was revoked — so a hanging provider
+   * costs a refresh, never a logout.
+   */
+  readonly providerRefreshTimeoutMs: number;
 }
 
 export type IdentityConfig =
@@ -56,6 +70,8 @@ export interface AppConfig {
   readonly pgPoolMax: number;
   readonly pgPoolIdleMs: number;
   readonly pgPoolConnectMs: number;
+  readonly pgStatementTimeoutMs: number;
+  readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
   readonly identity: IdentityConfig;
   /**
@@ -65,14 +81,40 @@ export interface AppConfig {
    */
   readonly isProduction: boolean;
   /**
-   * FBL-020-R2: HTTP identity endpoints and non-Secure cookies are permitted
-   * ONLY in explicit local development/test. Anything else — staging
-   * included — requires HTTPS and Secure cookies. `NODE_ENV` alone is not
-   * the switch: staging commonly runs with NODE_ENV=production, and a
-   * developer running NODE_ENV=development against a shared host must not
-   * silently downgrade the deployment.
+   * The URL POSTURE: whether a plain-http identity URL is even considered.
+   * True when NODE_ENV is development or test. It is NOT sufficient on its
+   * own — `url()` additionally requires the host to be loopback, so staging
+   * (which commonly runs NODE_ENV=production, but would be refused under
+   * either value) can never serve identity over http.
+   *
+   * This fact decides URL VALIDATION and nothing else. The cookie decision
+   * reads `allowsInsecureCookies` below, which is strictly narrower: a
+   * process may legitimately validate a mixed URL set while its cookies must
+   * still carry `Secure`.
    */
   readonly isLocalDevelopment: boolean;
+  /**
+   * FBL-020-R3 correction B1 — the ONE fact that may drop `Secure` from a
+   * session or transaction cookie, and the only fact the cookie writer reads.
+   *
+   * It is true ONLY when BOTH hold:
+   *   - NODE_ENV is explicitly `development` or `test`; AND
+   *   - a WorkOS identity is configured and EVERY one of its URLs — issuer,
+   *     JWKS, and all three redirect URIs — is a loopback host.
+   *
+   * A HOST condition is required because NODE_ENV describes a build, not a
+   * network. The R3 review found this decision resting on NODE_ENV alone, so
+   * a real deployment with all-remote HTTPS identity URLs that happened to
+   * run NODE_ENV=development issued its session and transaction cookies —
+   * and its clearing cookies — WITHOUT `Secure`, over the public internet.
+   *
+   * With the identity provider disabled there is no /auth surface to issue a
+   * cookie at all, so the answer is false: nothing legitimate needs it true,
+   * and false is the secure direction. Modern browsers treat http://localhost
+   * as a secure context and accept `Secure` cookies there, so a developer
+   * pointed at a remote provider loses nothing either.
+   */
+  readonly allowsInsecureCookies: boolean;
 }
 
 const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
@@ -139,17 +181,42 @@ function url(
 }
 
 /**
- * Local development/test must be declared, not inferred. Both conditions are
- * required: a non-production NODE_ENV AND an explicit opt-in. Everything else
- * — staging, preview, production — is treated as remote and secured.
+ * The URL posture only: NODE_ENV is explicitly `development` or `test`, so a
+ * plain-http identity URL MAY be considered. It is never sufficient by itself
+ * — `url()` also demands a loopback host, and the cookie decision
+ * (`allowsInsecureCookies`) demands that EVERY identity URL is loopback.
+ *
+ * R2 accepted an ALLOW_INSECURE_LOCAL_IDENTITY override on any host, which
+ * permitted remote and staging HTTP; the override is gone.
  */
 function isLocalDevelopment(env: Record<string, string | undefined>): boolean {
-  // FBL-020-R3 section J: BOTH conditions are required. R2 accepted an
-  // ALLOW_INSECURE_LOCAL_IDENTITY override on any host, which permitted
-  // remote and staging HTTP — the override is gone. NODE_ENV must be
-  // explicitly development or test; the host check is applied per-URL below.
   const nodeEnv = env.NODE_ENV;
   return nodeEnv === 'development' || nodeEnv === 'test';
+}
+
+/**
+ * FBL-020-R3 correction B1 — may this process issue a cookie WITHOUT `Secure`?
+ *
+ * NODE_ENV describes a build; it says nothing about the network the response
+ * travels over. So the answer carries a HOST condition: development/test AND
+ * every configured identity URL — the provider's issuer and JWKS as well as
+ * the three browser-facing redirect URIs — resolving to loopback. One remote
+ * URL anywhere in the set means this process is talking to a real deployment,
+ * and its cookies stay `Secure`.
+ *
+ * `provider: 'disabled'` yields false: no identity surface, therefore no
+ * cookie, therefore no reason to weaken one.
+ */
+function allowsInsecureCookies(
+  env: Record<string, string | undefined>,
+  identity: IdentityConfig,
+): boolean {
+  if (!isLocalDevelopment(env)) return false;
+  if (identity.provider !== 'workos') return false;
+  const w = identity.workos;
+  return [w.issuer, w.jwksUri, w.redirectUri, w.reauthRedirectUri, w.logoutRedirectUri].every(
+    isLoopbackHost,
+  );
 }
 
 /** Loopback only: localhost, 127.0.0.1, ::1. Nothing else is "local". */
@@ -189,6 +256,14 @@ function loadIdentityConfig(env: Record<string, string | undefined>): IdentityCo
       cookiePassword: secret(env, 'WORKOS_COOKIE_PASSWORD'),
       oidcAudience: requireVar(env, 'OIDC_AUDIENCE'),
       oidcClockSkewSeconds: integer(env, 'OIDC_CLOCK_SKEW_SECONDS', 60, { min: 0, max: 300 }),
+      // Conservative by design: long enough that a healthy-but-slow provider
+      // still completes a refresh, short enough that a hung one is a bounded
+      // delay on ONE request rather than an open-ended wait. The floor of 500ms
+      // stops a misconfiguration from making every refresh time out.
+      providerRefreshTimeoutMs: integer(env, 'WORKOS_REFRESH_TIMEOUT_MS', 10_000, {
+        min: 500,
+        max: 60_000,
+      }),
     }),
   });
 }
@@ -204,6 +279,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     throw new ConfigError('JSON_BODY_LIMIT must look like a size, e.g. 100kb or 1mb');
   }
 
+  const identity = loadIdentityConfig(env);
   const config: AppConfig = {
     databaseUrl: requireVar(env, 'DATABASE_URL'),
     port: integer(env, 'PORT', 3000, { min: 1, max: 65535 }),
@@ -216,10 +292,16 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     pgPoolMax: integer(env, 'PGPOOL_MAX', 10, { min: 1, max: 100 }),
     pgPoolIdleMs: integer(env, 'PGPOOL_IDLE_MS', 30_000, { min: 0, max: 600_000 }),
     pgPoolConnectMs: integer(env, 'PGPOOL_CONNECT_MS', 5_000, { min: 100, max: 60_000 }),
+    pgStatementTimeoutMs: integer(env, 'PG_STATEMENT_TIMEOUT_MS', 30_000, { min: 0, max: 600_000 }),
+    pgIdleInTransactionTimeoutMs: integer(env, 'PG_IDLE_IN_TRANSACTION_TIMEOUT_MS', 15_000, {
+      min: 0,
+      max: 600_000,
+    }),
     pgSslRequire: env.PGSSL === 'require',
-    identity: loadIdentityConfig(env),
+    identity,
     isProduction: env.NODE_ENV === 'production',
     isLocalDevelopment: isLocalDevelopment(env),
+    allowsInsecureCookies: allowsInsecureCookies(env, identity),
   };
   return Object.freeze(config);
 }
@@ -235,6 +317,21 @@ export interface DatabaseConfig {
   readonly pgPoolMax: number;
   readonly pgPoolIdleMs: number;
   readonly pgPoolConnectMs: number;
+  /**
+   * FBL-020-R3 correction D1 — server-side bounds every pooled connection starts
+   * with, in milliseconds. 0 disables one (the value Postgres itself uses for "no
+   * limit"), which is also how the migration runner scopes them off for DDL.
+   *
+   * `pgStatementTimeoutMs` bounds ANY single statement, including the time it
+   * spends waiting for a row lock. `pgIdleInTransactionTimeoutMs` bounds an OPEN
+   * TRANSACTION that is running nothing at all — the exact shape of the defect
+   * this correction closes, where a transaction sat idle around an untimed
+   * provider HTTP call and held its pool connection for the duration. Neither is
+   * the primary fix (not holding a transaction across a network call is); they are
+   * the floor under every future caller who forgets.
+   */
+  readonly pgStatementTimeoutMs: number;
+  readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
 }
 
@@ -244,6 +341,11 @@ export function loadDatabaseConfig(env: Record<string, string | undefined>): Dat
     pgPoolMax: integer(env, 'PGPOOL_MAX', 10, { min: 1, max: 100 }),
     pgPoolIdleMs: integer(env, 'PGPOOL_IDLE_MS', 30_000, { min: 0, max: 600_000 }),
     pgPoolConnectMs: integer(env, 'PGPOOL_CONNECT_MS', 5_000, { min: 100, max: 60_000 }),
+    pgStatementTimeoutMs: integer(env, 'PG_STATEMENT_TIMEOUT_MS', 30_000, { min: 0, max: 600_000 }),
+    pgIdleInTransactionTimeoutMs: integer(env, 'PG_IDLE_IN_TRANSACTION_TIMEOUT_MS', 15_000, {
+      min: 0,
+      max: 600_000,
+    }),
     pgSslRequire: env.PGSSL === 'require',
   });
 }

@@ -119,20 +119,28 @@ dealership data.
 
 ## Decision reason codes
 
-| Code                        | Meaning                                                              | External rendering                                             |
-| --------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `ALLOW_ROLE_BINDING`        | A dealership binding covered the scope                               | proceed                                                        |
-| `ALLOW_PLATFORM_ROLE`       | A platform binding covered a `platform.*` action                     | proceed                                                        |
-| `ALLOW_SUPPORT_SESSION`     | A live approved support session covered it                           | proceed + `x-support-access` header                            |
-| `ACTION_UNKNOWN`            | No catalog entry                                                     | 403                                                            |
-| `CROSS_TENANT`              | Target tenant ≠ actor tenant                                         | 404 when resource-scoped                                       |
-| `TENANT_INACTIVE`           | Tenant not active/effective                                          | 403                                                            |
-| `RESOURCE_REQUIRED`         | Route declared a resource action without an id                       | 403                                                            |
-| `RESOURCE_TYPE_MISMATCH`    | Wrong resource type for the action                                   | 404                                                            |
-| `RESOURCE_NOT_FOUND`        | Resolver found nothing **in this tenant**                            | 404                                                            |
-| `SCOPE_NOT_FOUND`           | A named location did not resolve in this tenant, or is not effective | 404                                                            |
-| `RESOURCE_SCOPE_UNRESOLVED` | Ancestry broken                                                      | 404                                                            |
-| `NO_MATCHING_BINDING`       | Deny by default                                                      | 404 when a RESOURCE was named (non-enumeration), otherwise 403 |
+| Code                         | Meaning                                                                           | External rendering                                             |
+| ---------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `ALLOW_ROLE_BINDING`         | A dealership binding covered the scope                                            | proceed                                                        |
+| `ALLOW_PLATFORM_ROLE`        | A platform binding covered a `platform.*` action                                  | proceed                                                        |
+| `ALLOW_SUPPORT_SESSION`      | A live approved support session covered it                                        | proceed + `x-support-access` header                            |
+| `ACTION_UNKNOWN`             | No catalog entry                                                                  | 403                                                            |
+| `CROSS_TENANT`               | Target tenant ≠ actor tenant                                                      | 404 when resource-scoped                                       |
+| `TENANT_INACTIVE`            | Tenant not active/effective                                                       | 403                                                            |
+| `RESOURCE_REQUIRED`          | Route declared a resource action without an id                                    | 403                                                            |
+| `RESOURCE_TYPE_MISMATCH`     | Wrong resource type for the action                                                | 404                                                            |
+| `RESOURCE_NOT_FOUND`         | Resolver found nothing **in this tenant**                                         | 404                                                            |
+| `SCOPE_NOT_FOUND`            | A named location did not resolve in this tenant, or is not effective              | 404                                                            |
+| `RESOURCE_SCOPE_UNRESOLVED`  | Ancestry broken                                                                   | 404                                                            |
+| `SUPPORT_ACTOR_UNAUTHORIZED` | The support session's actor no longer holds an effective platform-support binding | 404 when a RESOURCE was named (non-enumeration), otherwise 403 |
+| `NO_MATCHING_BINDING`        | Deny by default                                                                   | 404 when a RESOURCE was named (non-enumeration), otherwise 403 |
 
 **Non-enumeration:** for resource-scoped requests, "not yours" and "does not
 exist" produce the identical not-found envelope.
+
+**`SUPPORT_ACTOR_UNAUTHORIZED` is how offboarding takes effect.** A live support
+session is not authority on its own: the engine re-reads the actor's
+platform-scope bindings on every decision, under the same effectiveness
+predicate every other reader uses. Revoking the binding, or letting its window
+close, denies the very next request through that session — no operator has to
+remember to revoke the session as well.

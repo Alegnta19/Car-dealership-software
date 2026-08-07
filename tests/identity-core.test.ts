@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, sessionBindingFor, skipIntegration } from '@dealer/test-kit';
+import {
+  bootstrapAdministrator,
+  resetDatabase,
+  sessionBindingFor,
+  skipIntegration,
+} from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import { createTenant } from '@dealer/organization';
 import {
-  createPendingUserLink,
   createSession,
   csrfTokenForSession,
   deactivateUserLink,
   activateUserLink,
   observeUserLinkOnLogin,
-  findUserLink,
+  provisionUserLink,
+  findBoundUserLink,
   resolveConnectionByOrganization,
   revokeSessionByToken,
   revokeSessionsForUserLink,
@@ -43,6 +48,20 @@ describe(
       return tenant;
     }
 
+    /**
+     * R3: a login OBSERVATION must name the connection it came through — the
+     * six-fact lookup has no three-fact fallback. The harness reads the real
+     * connection rather than inventing one.
+     */
+    async function loginBinding(tenantId: string | null) {
+      const b = await sessionBindingFor(tenantId);
+      return {
+        connectionId: b.connectionId,
+        issuer: b.issuer,
+        providerOrganizationId: b.providerOrganizationId,
+      };
+    }
+
     test('organization resolution: only ACTIVE connections resolve; unknown fails closed', async () => {
       const tenant = await seedTenantWithConnection('org_resolve');
       const pool = { query };
@@ -60,6 +79,7 @@ describe(
     test('first login creates a PENDING link, grants NOTHING, and never activates', async () => {
       const tenant = await seedTenantWithConnection('org_first');
       const link = await observeUserLinkOnLogin({
+        ...(await loginBinding(tenant.tenantId)),
         tenantId: tenant.tenantId,
         providerUserId: 'user_first',
         email: 'first@example.com',
@@ -86,6 +106,7 @@ describe(
 
       // a second login refreshes bounded identifiers and STILL does not activate
       const again = await observeUserLinkOnLogin({
+        ...(await loginBinding(tenant.tenantId)),
         tenantId: tenant.tenantId,
         providerUserId: 'user_first',
         email: 'renamed@example.com',
@@ -109,17 +130,21 @@ describe(
 
     test('activation is an explicit, attributable administrative act that grants no role', async () => {
       const tenant = await seedTenantWithConnection('org_activate');
-      const admin = await createPendingUserLink({
+      // R3: provisioning is itself an attributable mutation, so it needs a true
+      // actor. The bootstrap administrator is the origin of trust — the only
+      // link that exists before anybody could have created one.
+      const origin = await bootstrapAdministrator(tenant.tenantId);
+      const admin = await provisionUserLink({
         tenantId: tenant.tenantId,
         providerUserId: 'user_admin_actor',
         email: null,
-        createdByUserLinkId: null,
+        provisionedByUserLinkId: origin,
       });
-      const pending = await createPendingUserLink({
+      const pending = await provisionUserLink({
         tenantId: tenant.tenantId,
         providerUserId: 'user_pending',
         email: 'pending@example.com',
-        createdByUserLinkId: null,
+        provisionedByUserLinkId: origin,
       });
       assert.equal(pending.status, 'pending');
 
@@ -162,10 +187,14 @@ describe(
 
       // a deactivated identity is refused at login and cannot be re-activated
       assert.ok(
-        await deactivateUserLink({ userLinkId: pending.userLinkId, deactivatedByUserLinkId: null }),
+        await deactivateUserLink({
+          userLinkId: pending.userLinkId,
+          deactivatedByUserLinkId: origin,
+        }),
       );
       assert.equal(
         await observeUserLinkOnLogin({
+          ...(await loginBinding(tenant.tenantId)),
           tenantId: tenant.tenantId,
           providerUserId: 'user_pending',
           email: null,
@@ -184,9 +213,109 @@ describe(
       );
     });
 
+    /**
+     * FBL-020-R3 correction C2 — the SUCCESSFUL login is audited.
+     *
+     * The refused and pending branches each wrote an audit row; the activated
+     * branch — the only one that goes on to mint a session — wrote nothing, so
+     * the trail recorded exactly the logins that did not get in. The module
+     * header claimed otherwise, which is worse than saying nothing.
+     */
+    test('R3: an ACTIVATED login writes its audit event, carrying no email and no display name', async () => {
+      const tenant = await seedTenantWithConnection('org_login_audit');
+      const origin = await bootstrapAdministrator(tenant.tenantId);
+      const binding = await loginBinding(tenant.tenantId);
+      const observe = (email: string | null, displayName: string | null) =>
+        observeUserLinkOnLogin({
+          ...binding,
+          tenantId: tenant.tenantId,
+          providerUserId: 'user_audited_login',
+          email,
+          displayName,
+        });
+
+      const pending = await observe('before@example.com', 'Before Name');
+      assert.ok(pending);
+      const activated = await activateUserLink({
+        userLinkId: pending.userLinkId,
+        activatedByUserLinkId: origin,
+      });
+      assert.ok(activated);
+
+      const versionOf = async () =>
+        Number(
+          (
+            (
+              await query(`SELECT authorization_version FROM user_links WHERE user_link_id = $1`, [
+                pending.userLinkId,
+              ])
+            ).rows[0] as { authorization_version: unknown }
+          ).authorization_version,
+        );
+      const observedRows = async () =>
+        (
+          await query(
+            `SELECT actor_user_id, details FROM audit_events
+              WHERE entity_type = 'user_link' AND entity_id = $1
+                AND event_type = 'identity.user_link.login_observed'
+              ORDER BY created_at, event_id`,
+            [pending.userLinkId],
+          )
+        ).rows as Array<{ actor_user_id: unknown; details: Record<string, unknown> }>;
+
+      assert.deepEqual(await observedRows(), [], 'nothing yet: no successful login has happened');
+      const versionAfterActivation = await versionOf();
+
+      // A successful login that REWRITES the stored profile fields.
+      const loggedIn = await observe('after@example.com', 'After Name');
+      assert.ok(loggedIn);
+      assert.equal(loggedIn.status, 'activated');
+      assert.equal(loggedIn.email, 'after@example.com');
+
+      const rows = await observedRows();
+      assert.equal(rows.length, 1, 'the login that got in left exactly one row');
+      const first = rows[0];
+      assert.ok(first);
+      assert.equal(String(first.actor_user_id), pending.userLinkId);
+      assert.deepEqual(first.details, {
+        provider: 'workos',
+        status: 'activated',
+        email_changed: true,
+        display_name_changed: true,
+      });
+      // The row says WHICH fields moved and never what they moved to.
+      const serialized = JSON.stringify(first.details);
+      for (const value of [
+        'after@example.com',
+        'before@example.com',
+        'After Name',
+        'Before Name',
+      ]) {
+        assert.ok(!serialized.includes(value), `${value} must never reach the audit trail`);
+      }
+      // A profile rewrite is NOT an authorization change: the version stands still.
+      assert.equal(
+        await versionOf(),
+        versionAfterActivation,
+        'a display-name change must not inflate authorization_version',
+      );
+
+      // A login that changes nothing is still recorded as a login, and says so.
+      assert.ok(await observe('after@example.com', 'After Name'));
+      const both = await observedRows();
+      assert.equal(both.length, 2);
+      assert.deepEqual(both[1]?.details, {
+        provider: 'workos',
+        status: 'activated',
+        email_changed: false,
+        display_name_changed: false,
+      });
+    });
+
     test('sessions: opaque token round trip, revocation, expiry, and read-time kill on deactivation', async () => {
       const tenant = await seedTenantWithConnection('org_sessions');
       const linkPending = await observeUserLinkOnLogin({
+        ...(await loginBinding(tenant.tenantId)),
         tenantId: tenant.tenantId,
         providerUserId: 'user_sessions',
         email: null,
@@ -250,13 +379,17 @@ describe(
         authTime: new Date(),
         ttlSeconds: 3600,
       });
-      await deactivateUserLink({ userLinkId: link.userLinkId, deactivatedByUserLinkId: null });
+      await deactivateUserLink({
+        userLinkId: link.userLinkId,
+        deactivatedByUserLinkId: await bootstrapAdministrator(tenant.tenantId),
+      });
       assert.equal(await validateSessionToken(second.sessionToken), null);
     });
 
     test('revokeSessionsForUserLink sweeps every live session', async () => {
       const tenant = await seedTenantWithConnection('org_sweep');
       const linkPending = await observeUserLinkOnLogin({
+        ...(await loginBinding(tenant.tenantId)),
         tenantId: tenant.tenantId,
         providerUserId: 'user_sweep',
         email: null,
@@ -330,7 +463,17 @@ describe(
 
       // apply: everything lands, audited
       await bootstrapIdentity({ ...base, apply: true });
-      const admin = await findUserLink({ query }, 'workos', tenantId, 'user_admin');
+      // R3: six facts, never three. The bootstrap binds the link to the
+      // connection it created, so the lookup must find it through that binding.
+      const admin = await findBoundUserLink(
+        { query },
+        {
+          provider: 'workos',
+          tenantId,
+          providerUserId: 'user_admin',
+          ...(await loginBinding(tenantId)),
+        },
+      );
       assert.ok(admin);
       assert.equal(admin.status, 'activated');
       const binding = await query(
@@ -360,6 +503,26 @@ describe(
       await assert.rejects(
         bootstrapIdentity({ ...base, tenantId: randomUUID(), apply: true }),
         BootstrapRefused,
+      );
+
+      // R3: ISSUER DRIFT refuses, in dry-run as well as in apply. The issuer is
+      // the trust anchor, so re-running with a different one is a decision an
+      // operator makes deliberately, never a side effect of a re-run.
+      for (const apply of [false, true]) {
+        await assert.rejects(
+          bootstrapIdentity({ ...base, issuer: 'https://another-env.authkit.app', apply }),
+          BootstrapRefused,
+          `issuer drift must refuse (apply=${String(apply)})`,
+        );
+      }
+      const unchanged = await query(
+        `SELECT issuer FROM identity_provider_connections WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      assert.equal(
+        String((unchanged.rows[0] as { issuer: unknown }).issuer),
+        base.issuer,
+        'a refused run changes nothing',
       );
     });
   },

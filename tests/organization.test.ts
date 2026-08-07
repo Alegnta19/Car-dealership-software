@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { ensureActiveConnection, resetDatabase, skipIntegration } from '@dealer/test-kit';
+import {
+  bootstrapAdministrator,
+  ensureActiveConnection,
+  resetDatabase,
+  skipIntegration,
+} from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
   ORGANIZATION_LEVELS,
@@ -19,6 +24,7 @@ import {
   resolveAncestry,
   setUnitStatus,
 } from '@dealer/organization';
+import { grantRole, revokeRole } from '@dealer/identity-access';
 
 function sha256hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -399,13 +405,19 @@ describe(
         CHECK_VIOLATION,
         'platform binding with tenant/scope',
       );
-      await query(
-        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES (NULL, $1, 'platform_admin', 'platform', NULL)`,
-        [platformLink],
-      );
+      await grantRole({
+        actingUserLinkId: await bootstrapAdministrator(null),
+        tenantId: null,
+        userLinkId: platformLink,
+        role: 'platform_admin',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
 
-      // duplicate ACTIVE binding is rejected — including the NULL-bearing platform shape
+      // duplicate ACTIVE binding is rejected — including the NULL-bearing
+      // platform shape. This one stays a RAW insert on purpose: the assertion
+      // is that the DATABASE refuses it, so it must not be filtered by a
+      // service first.
       await assertSqlState(
         query(
           `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
@@ -416,38 +428,66 @@ describe(
         'duplicate active platform binding',
       );
 
-      // dealership binding, revoke, re-grant: allowed (uniqueness is on ACTIVE only)
-      await query(
-        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES ($1, $2, 'service_manager', 'rooftop', $3)`,
-        [tenant.tenantId, link, rooftop.rooftopId],
+      // dealership binding, revoke, re-grant: allowed (uniqueness is on ACTIVE
+      // only). R3: grant and revoke run through the owned mutation services, so
+      // even this DDL characterization leaves an attributed, versioned trail.
+      const admin = await bootstrapAdministrator(tenant.tenantId);
+      const grant = () =>
+        grantRole({
+          actingUserLinkId: admin,
+          tenantId: tenant.tenantId,
+          userLinkId: link,
+          role: 'service_manager',
+          scopeLevel: 'rooftop',
+          scopeId: rooftop.rooftopId,
+        });
+      const first = await grant();
+      const revoked = await revokeRole({
+        actingUserLinkId: admin,
+        roleBindingId: first.roleBindingId,
+      });
+      assert.ok(revoked, 'the active binding was revoked');
+      assert.ok(
+        revoked.authorizationVersion > first.authorizationVersion,
+        'revocation ADVANCES the authorization version',
       );
-      await query(
-        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW()
-        WHERE user_link_id = $1 AND status = 'active' AND scope_level = 'rooftop'`,
-        [link],
-      );
-      await query(
-        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES ($1, $2, 'service_manager', 'rooftop', $3)`,
-        [tenant.tenantId, link, rooftop.rooftopId],
-      );
+      await grant();
     });
 
     test('reauthentication: hash-only storage, one grant per transaction, atomic single consumption', async () => {
       const { tenant } = await seedChain();
       const link = await seedUserLink(tenant.tenantId);
 
+      // R3: a STARTED transaction must name the exact identity it began from,
+      // the LOCAL SESSION it stepped up from, AND the digest of the OIDC nonce
+      // its completion has to be handed back. `rat_started_is_bound` refuses
+      // anything less, so the unbound state cannot exist to be completed.
+      await assertSqlState(
+        query(
+          `INSERT INTO reauthentication_transactions
+             (tenant_id, user_link_id, action, nonce_hash, expires_at,
+              connection_id, issuer, provider_organization_id, provider_subject)
+           SELECT $1, $2, 'service.estimate.approve', $3, NOW() + INTERVAL '5 minutes',
+                  c.connection_id, c.issuer, c.provider_organization_id, 'subj'
+             FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1`,
+          [tenant.tenantId, link, sha256hex('nonce-unbound')],
+        ),
+        CHECK_VIOLATION,
+        'a started transaction with no session and no nonce digest',
+      );
+
+      // A grant only ever belongs to a COMPLETED transaction, so the fixture
+      // records one: the binding rule above governs the `started` state.
       const txn = await query(
-        // R2: a STARTED transaction must name the exact identity it began from
         `INSERT INTO reauthentication_transactions
-           (tenant_id, user_link_id, action, nonce_hash, expires_at,
-            connection_id, issuer, provider_organization_id, provider_subject)
+           (tenant_id, user_link_id, action, nonce_hash, expires_at, state, completed_at,
+            connection_id, issuer, provider_organization_id, provider_subject, oidc_nonce_hash)
          SELECT $1, $2, 'service.estimate.approve', $3, NOW() + INTERVAL '5 minutes',
-                c.connection_id, c.issuer, c.provider_organization_id, 'subj'
+                'completed', NOW(),
+                c.connection_id, c.issuer, c.provider_organization_id, 'subj', $4
            FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
          RETURNING reauth_txn_id`,
-        [tenant.tenantId, link, sha256hex('nonce-1')],
+        [tenant.tenantId, link, sha256hex('nonce-1'), sha256hex('oidc-nonce-1')],
       );
       const txnId = String((txn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id);
 
@@ -541,15 +581,18 @@ describe(
       // a different user approves, recording the grant that backed it
       // the approver's own high-assurance reauthentication, then its grant
       const approvalTxn = await query(
+        // R3: the grant belongs to a COMPLETED transaction; `rat_started_is_bound`
+        // governs the `started` state and is exercised in the reauthentication case.
         `INSERT INTO reauthentication_transactions
            (tenant_id, user_link_id, action, nonce_hash, expires_at, required_assurance,
-            connection_id, issuer, provider_organization_id, provider_subject)
+            state, completed_at,
+            connection_id, issuer, provider_organization_id, provider_subject, oidc_nonce_hash)
          SELECT $1, $2, 'identity.support.approve', $3, NOW() + INTERVAL '5 minutes',
-                'fresh_and_mfa_policy',
-                c.connection_id, c.issuer, c.provider_organization_id, 'approver'
+                'fresh_and_mfa_policy', 'completed', NOW(),
+                c.connection_id, c.issuer, c.provider_organization_id, 'approver', $4
            FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
          RETURNING reauth_txn_id`,
-        [tenant.tenantId, approver, sha256hex('approval-nonce')],
+        [tenant.tenantId, approver, sha256hex('approval-nonce'), sha256hex('approval-oidc-nonce')],
       );
       const approvalGrant = await query(
         `INSERT INTO reauthentication_grants

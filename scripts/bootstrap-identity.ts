@@ -4,13 +4,20 @@
  *
  *   DATABASE_URL=... npx tsx scripts/bootstrap-identity.ts \
  *     --tenant-id <uuid> --tenant-name "Delta Motors Group" \
- *     --provider-org org_... --admin-user user_... [--admin-email a@b.c] [--apply]
+ *     --provider-org org_... --issuer https://<env>.authkit.app \
+ *     --admin-user user_... [--admin-email a@b.c] [--apply]
+ *
+ * `--issuer` is REQUIRED. The issuer is the trust anchor every request is
+ * checked against (R1 section C), so a connection this command cannot state an
+ * issuer for is a connection that would authorize nothing — there is no
+ * default and nothing is guessed.
  *
  * DRY-RUN BY DEFAULT: without --apply it prints the plan and writes nothing.
  * Idempotent: re-running against an already-bootstrapped tenant changes
  * nothing and says so. Ambiguity refuses loudly: a provider organization
- * already mapped to a DIFFERENT tenant, or a tenant already carrying a
- * different active organization, aborts before any write. Prints identifiers
+ * already mapped to a DIFFERENT tenant, a tenant already carrying a
+ * different active organization, or an existing mapping whose issuer DISAGREES
+ * with the one named here, all abort before any write. Prints identifiers
  * only — never a credential, an API key or a cookie value.
  *
  * Every applied step lands in audit_events inside the same transaction
@@ -123,7 +130,7 @@ async function planConnection(
   steps: BootstrapStep[],
 ): Promise<void> {
   const byOrg = await executor.query(
-    `SELECT tenant_id, status FROM identity_provider_connections
+    `SELECT tenant_id, status, issuer FROM identity_provider_connections
       WHERE provider = 'workos' AND provider_organization_id = $1`,
     [options.providerOrganizationId],
   );
@@ -134,11 +141,21 @@ async function planConnection(
         'provider organization is already mapped to a different internal home — refusing an ambiguous mapping',
       );
     }
+    // R3: ISSUER DRIFT. The issuer is the trust anchor, so re-running the
+    // bootstrap with a different one is either a typo or an attempt to move a
+    // live tenant's trust to another environment. Either way it is a decision
+    // an operator makes deliberately (and audibly), never a side effect of a
+    // re-run: this command reports the disagreement and writes nothing.
+    if (String(row.issuer) !== options.issuer) {
+      throw new BootstrapRefused(
+        'the existing mapping records a DIFFERENT issuer than --issuer — refusing issuer drift; change it deliberately, not via bootstrap',
+      );
+    }
     if (String(row.status) === 'active') {
       steps.push({
         step: 'connection',
         action: 'exists',
-        detail: 'active connection already maps this organization',
+        detail: 'active connection already maps this organization at the named issuer',
       });
       return;
     }
@@ -176,14 +193,38 @@ async function planUserLink(
   options: BootstrapOptions,
   steps: BootstrapStep[],
 ): Promise<string | null> {
+  // R3: (provider, tenant, subject) is not an identity. The lookup also reads
+  // whether the existing link's BINDING — connection, issuer, organization —
+  // still agrees with the tenant's active connection, so a link that belongs to
+  // a different provider organization is refused rather than adopted. An
+  // as-yet-unbound PENDING link agrees by definition; the schema only demands a
+  // binding once a link is activated.
   const existing = await executor.query(
-    `SELECT user_link_id, status FROM user_links
-      WHERE provider = 'workos' AND tenant_id = $1 AND provider_user_id = $2`,
+    `SELECT ul.user_link_id,
+            ul.status,
+            COALESCE(
+              ul.connection_id IS NULL
+              OR (ul.connection_id = c.connection_id
+                  AND ul.issuer = c.issuer
+                  AND ul.provider_organization_id = c.provider_organization_id),
+              FALSE
+            ) AS binding_agrees
+       FROM user_links ul
+       LEFT JOIN identity_provider_connections c
+              ON c.tenant_id = ul.tenant_id
+             AND c.provider = ul.provider
+             AND c.status = 'active'
+      WHERE ul.provider = 'workos' AND ul.tenant_id = $1 AND ul.provider_user_id = $2`,
     [options.tenantId, options.adminProviderUserId],
   );
   if (existing.rows.length > 0) {
     const row = existing.rows[0] as Row;
     const id = String(row.user_link_id);
+    if (row.binding_agrees !== true) {
+      throw new BootstrapRefused(
+        'the named administrator link is bound to a different provider connection — re-home it explicitly, not via bootstrap',
+      );
+    }
     if (String(row.status) === 'deactivated') {
       throw new BootstrapRefused(
         'the named administrator link is deactivated — refusing to resurrect it here',
@@ -260,6 +301,13 @@ async function planRoleBinding(
     });
     return;
   }
+  // role-binding-effectiveness-opt-out(all-bindings-including-ineffective): an
+  // IDEMPOTENCY probe against the
+  // unrevoked-binding uniqueness rule, not an authorization read. It must see a
+  // binding whose window has not opened or has already closed — those rows still
+  // occupy the unique slot, so an effectiveness-filtered probe would report
+  // "absent", insert a second grant and fail on the index. The bootstrap decides
+  // whether a row EXISTS; it never decides what a row authorizes.
   const existing = await executor.query(
     `SELECT role_binding_id FROM role_bindings
       WHERE tenant_id = $1 AND user_link_id = $2 AND role = $3
@@ -280,9 +328,15 @@ async function planRoleBinding(
     detail: `grant ${TENANT_ADMIN_ROLE} at tenant scope`,
   });
   if (options.apply) {
+    // The bootstrap is the ORIGIN of trust: before it runs there is no actor to
+    // attribute anything to, so this one grant is attributed to the
+    // administrator link it just minted. Every LATER authorization change goes
+    // through the owned mutation services in @dealer/identity-access.
     await executor.query(
-      `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES ($1, $2, $3, 'tenant', $1)`,
+      `INSERT INTO role_bindings
+         (tenant_id, user_link_id, role, scope_level, scope_id,
+          granted_by_user_link_id, created_by_user_link_id, updated_by_user_link_id)
+       VALUES ($1, $2, $3, 'tenant', $1, $2, $2, $2)`,
       [options.tenantId, userLinkId, TENANT_ADMIN_ROLE],
     );
   }

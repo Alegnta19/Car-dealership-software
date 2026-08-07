@@ -3,7 +3,11 @@
  * package itself owns. Fixed Ops publishes its own service catalog; the two
  * are merged at the application composition root.
  */
-import { PLATFORM_ADMIN_ROLE, PLATFORM_SUPPORT_ROLE, TENANT_ADMIN_ROLE } from './contracts';
+import {
+  PLATFORM_ADMIN_ROLE,
+  PLATFORM_SUPPORT_AUTHORITY_ROLES,
+  TENANT_ADMIN_ROLE,
+} from './contracts';
 import { createActionCatalog, type ActionCatalog } from './policy';
 
 export const IDENTITY_ACTION_DEFINITIONS = [
@@ -69,7 +73,10 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     action: 'platform.support.request',
     description: 'File a support-access request against a tenant',
     resourceType: null,
-    allowedRoles: [PLATFORM_SUPPORT_ROLE, PLATFORM_ADMIN_ROLE],
+    // R3 correction F1: the SAME list the mutation gate and the engine's
+    // support branch read, so the three cannot disagree about who holds
+    // platform-support authority.
+    allowedRoles: PLATFORM_SUPPORT_AUTHORITY_ROLES,
   },
 ] as const;
 

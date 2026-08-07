@@ -5,7 +5,9 @@
  */
 import { query } from '@dealer/database';
 import { IDENTITY_PROVIDER_WORKOS, type IdentityProviderKind } from './contracts';
-import { findUserLink, type ActorScope, type UserLink } from './user-link';
+import { EFFECTIVE_ROLE_BINDING_SQL } from './policy';
+import { findBoundUserLink } from './user-link';
+import type { ActorScope, UserLink } from './contracts';
 
 /**
  * An ACTIVE, EFFECTIVE provider connection, with the facts authorization
@@ -90,13 +92,31 @@ export async function isTenantEffective(tenantId: string): Promise<boolean> {
  * Looks up a user link by provider identity. Returns it in ANY status —
  * callers decide, so a pending link can be reported distinctly from a
  * missing one without ever being treated as access.
+ *
+ * FBL-020-R3: the three-fact form (provider, tenant, subject) is GONE. All six
+ * facts are required and compared, so a link bound to a different connection,
+ * issuer or provider organization is never returned — an organization remap
+ * does not hand the new organization the old organization's account.
  */
-export async function findUserLinkByProviderIdentity(
-  tenantId: string | null,
-  providerUserId: string,
-  provider: IdentityProviderKind = IDENTITY_PROVIDER_WORKOS,
-): Promise<UserLink | null> {
-  return findUserLink({ query }, provider, tenantId, providerUserId);
+export async function findUserLinkByProviderIdentity(input: {
+  tenantId: string | null;
+  providerUserId: string;
+  connectionId: string;
+  issuer: string;
+  providerOrganizationId: string;
+  provider?: IdentityProviderKind;
+}): Promise<UserLink | null> {
+  return findBoundUserLink(
+    { query },
+    {
+      provider: input.provider ?? IDENTITY_PROVIDER_WORKOS,
+      tenantId: input.tenantId,
+      providerUserId: input.providerUserId,
+      connectionId: input.connectionId,
+      issuer: input.issuer,
+      providerOrganizationId: input.providerOrganizationId,
+    },
+  );
 }
 
 /** True only for an ACTIVATED link inside its effective window. */
@@ -112,9 +132,24 @@ export async function isUserLinkUsable(userLinkId: string): Promise<boolean> {
 }
 
 /**
- * The actor's ACTIVE role names in ONE tenant — informational context for
- * legacy service visibility rules. Every authorization decision still goes
- * through the policy engine, which reads the bindings itself.
+ * The actor's EFFECTIVE role names in ONE tenant.
+ *
+ * FBL-020-R3 correction E2. This list is not merely informational: the API
+ * middleware writes it into `req.tenantContext.roles`, and the Fixed Ops
+ * cockpit reads those roles through `hasAnyRole` to decide SUPERVISOR reach —
+ * whether the ownership guards on an MPI session and a work ticket apply at all.
+ * Both queries used to filter `status = 'active'` and nothing else, which is the
+ * same window-dropping copy of the effectiveness rule the R3 review found
+ * elsewhere, and here it did real widening work: a technician whose
+ * `service_advisor` binding had AGED OUT of its window still satisfied
+ * `hasAnyRole(ctx, SERVICE_MANAGER, SERVICE_ADVISOR)`, so ownership stopped
+ * being enforced and another technician's inspection and work ticket became
+ * reachable — while the engine, asked about the same actor, denied the
+ * corresponding action.
+ *
+ * The predicate is now the engine's own, interpolated. Every authorization
+ * decision still goes through the policy engine; this list can no longer
+ * disagree with it about which bindings exist.
  */
 export async function rolesForUserLink(
   userLinkId: string,
@@ -123,14 +158,18 @@ export async function rolesForUserLink(
   const result =
     tenantId === undefined
       ? await query(
-          `SELECT DISTINCT role FROM role_bindings
-            WHERE user_link_id = $1 AND status = 'active' ORDER BY role`,
+          `SELECT DISTINCT rb.role FROM role_bindings rb
+            WHERE rb.user_link_id = $1
+              AND ${EFFECTIVE_ROLE_BINDING_SQL}
+            ORDER BY rb.role`,
           [userLinkId],
         )
       : await query(
-          `SELECT DISTINCT role FROM role_bindings
-            WHERE user_link_id = $1 AND status = 'active'
-              AND tenant_id IS NOT DISTINCT FROM $2 ORDER BY role`,
+          `SELECT DISTINCT rb.role FROM role_bindings rb
+            WHERE rb.user_link_id = $1
+              AND ${EFFECTIVE_ROLE_BINDING_SQL}
+              AND rb.tenant_id IS NOT DISTINCT FROM $2
+            ORDER BY rb.role`,
           [userLinkId, tenantId],
         );
   return (result.rows as Array<{ role: string }>).map((r) => r.role);

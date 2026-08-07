@@ -10,7 +10,10 @@ import { resetConfigForTests } from '@dealer/platform';
 import {
   activateUserLink,
   completeReauthentication,
+  createSession,
+  grantRole,
   observeUserLinkOnLogin,
+  oidcNonceDigest,
   startReauthentication,
 } from '@dealer/identity-access';
 import { startLocalIssuer, type LocalIssuer } from './local-issuer';
@@ -44,6 +47,11 @@ export async function startIdentityTestEnv(): Promise<IdentityTestEnv> {
   process.env.WORKOS_LOGOUT_REDIRECT_URI = 'http://127.0.0.1:3000/';
   process.env.WORKOS_COOKIE_PASSWORD = cookiePassword;
   process.env.OIDC_AUDIENCE = issuer.audience;
+  // FBL-020-R3 correction D1: the harness bounds a provider refresh far tighter
+  // than production's 10s, so a suite can prove what a HANGING provider costs
+  // without waiting ten seconds to find out. It changes nothing for a provider
+  // that answers, and every fake port in the battery answers immediately.
+  process.env.WORKOS_REFRESH_TIMEOUT_MS = '1500';
   resetConfigForTests();
   return { issuer, cookiePassword, stop: () => issuer.stop() };
 }
@@ -168,9 +176,48 @@ export async function seedTestWorldIdentity(world: TestWorld): Promise<void> {
   await seedUserLinkRow(world.tenantA.tenantId, world.technician.userId);
 }
 
+/**
+ * The ORIGIN-OF-TRUST fixture: the harness analogue of
+ * `scripts/bootstrap-identity.ts`. Before it exists there is no actor to
+ * attribute anything to, so this ONE link is inserted directly — it holds no
+ * role binding and therefore grants nothing by existing. Every authorization
+ * change a suite makes afterwards is attributed to it through the owned
+ * mutation services. Idempotent per home.
+ */
+export async function bootstrapAdministrator(tenantId: string | null): Promise<string> {
+  const subject = 'user_bootstrap_admin';
+  const existing = await query(
+    `SELECT user_link_id FROM user_links
+      WHERE tenant_id IS NOT DISTINCT FROM $1 AND provider = 'workos' AND provider_user_id = $2`,
+    [tenantId, subject],
+  );
+  if (existing.rows.length > 0) {
+    return String((existing.rows[0] as { user_link_id: unknown }).user_link_id);
+  }
+  await ensureActiveConnection(tenantId);
+  const created = await query(
+    `INSERT INTO user_links
+       (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+        connection_id, issuer, provider_organization_id)
+     SELECT $1, $2, 'workos', $3, 'activated', NOW(),
+            c.connection_id, c.issuer, c.provider_organization_id
+       FROM identity_provider_connections c
+      WHERE c.tenant_id IS NOT DISTINCT FROM $2 AND c.provider = 'workos' AND c.status = 'active'
+      LIMIT 1
+     RETURNING user_link_id`,
+    [tenantId === null ? 'platform' : 'dealership', tenantId, subject],
+  );
+  if (created.rows.length === 0) {
+    throw new Error('no active provider connection to bootstrap an administrator against');
+  }
+  return String((created.rows[0] as { user_link_id: unknown }).user_link_id);
+}
+
 export interface SeededActor {
   userLinkId: string;
   tenantId: string;
+  /** The provider subject the link is bound to — needed to re-sign tokens. */
+  providerUserId: string;
   token: string;
 }
 
@@ -200,30 +247,88 @@ export async function seedActor(
       LIMIT 1`,
     [userLinkId, input.tenantId, providerUserId],
   );
+  // FBL-020-R3: role bindings are NEVER inserted by raw SQL any more, not even
+  // from a fixture. Every grant goes through the owned mutation service, so the
+  // seeded actor's authorization has a true actor, a version and an audit row —
+  // the same trail production grants leave.
+  const grantedBy = await bootstrapAdministrator(input.tenantId);
   for (const role of input.roles) {
-    await query(
-      `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [
-        input.tenantId,
-        userLinkId,
-        role,
-        input.scope?.level ?? 'tenant',
-        input.scope?.id ?? input.tenantId,
-      ],
-    );
+    await grantRole({
+      actingUserLinkId: grantedBy,
+      tenantId: input.tenantId,
+      userLinkId,
+      role,
+      scopeLevel: input.scope?.level ?? 'tenant',
+      scopeId: input.scope?.id ?? input.tenantId,
+    });
   }
   const token = await issuer.signAccessToken({
     sub: providerUserId,
     org_id: testOrganizationId(input.tenantId),
   });
-  return { userLinkId, tenantId: input.tenantId, token };
+  return { userLinkId, tenantId: input.tenantId, providerUserId, token };
 }
 
 /**
- * Mints a REAL reauthentication grant through the production services (no
- * provider round trip needed: the completion proof only needs a verified
- * auth_time, and the harness supplies "now").
+ * The LOCAL session an activated link would have after a real login, built from
+ * the link's own binding so the identity chain the platform revalidates on every
+ * request actually holds. FBL-020-R3 made a live local session a precondition of
+ * a step-up (a grant that outlives the session it steps up from proves nothing),
+ * so anything minting a grant needs one of these first.
+ */
+export async function seedLocalSession(
+  userLinkId: string,
+  ttlSeconds = 3600,
+): Promise<{
+  sessionId: string;
+  sessionToken: string;
+  tenantId: string | null;
+  connectionId: string;
+  issuer: string;
+  providerOrganizationId: string;
+  providerSubject: string;
+}> {
+  const r = await query(
+    `SELECT tenant_id, provider_user_id, connection_id, issuer, provider_organization_id
+       FROM user_links WHERE user_link_id = $1 AND status = 'activated'`,
+    [userLinkId],
+  );
+  if (r.rows.length === 0) {
+    throw new Error('no activated user link to seed a local session for');
+  }
+  const row = r.rows[0] as Record<string, unknown>;
+  if (row.connection_id === null || row.issuer === null || row.provider_organization_id === null) {
+    throw new Error('an activated user link must be bound before it can hold a session');
+  }
+  const tenantId = row.tenant_id === null ? null : String(row.tenant_id);
+  const binding = {
+    connectionId: String(row.connection_id),
+    issuer: String(row.issuer),
+    providerOrganizationId: String(row.provider_organization_id),
+    providerSubject: String(row.provider_user_id),
+  };
+  const created = await createSession({
+    ...binding,
+    tenantId,
+    userLinkId,
+    providerSessionId: 'sid_seed_' + userLinkId.slice(0, 8),
+    authTime: new Date(),
+    ttlSeconds,
+  });
+  return {
+    sessionId: created.session.sessionId,
+    sessionToken: created.sessionToken,
+    tenantId,
+    ...binding,
+  };
+}
+
+/**
+ * Mints a REAL reauthentication grant through the production services. No
+ * provider round trip is needed — the completion's proofs are a verified
+ * auth_time, the OIDC nonce digest and the verified identity, and the harness
+ * supplies exactly what a real callback would: "now", the digest of the nonce
+ * the START generated, and the binding the START derived from the session.
  */
 export async function mintReauthGrant(input: {
   tenantId: string;
@@ -235,28 +340,27 @@ export async function mintReauthGrant(input: {
   assurance?: 'fresh_only' | 'fresh_and_mfa_policy';
 }): Promise<string> {
   const assurance = input.assurance ?? 'fresh_and_mfa_policy';
-  const binding = await sessionBindingFor(input.tenantId);
   if (assurance === 'fresh_and_mfa_policy') await certifyMfaPolicy(input.tenantId);
+  const session = await seedLocalSession(input.userLinkId);
   const started = await startReauthentication({
     tenantId: input.tenantId,
     userLinkId: input.userLinkId,
+    sessionId: session.sessionId,
     action: input.action,
     resourceType: input.resourceType ?? 'repair_order',
     resourceId: input.resourceId,
     requiredAssurance: assurance,
-    connectionId: binding.connectionId,
-    issuer: binding.issuer,
-    providerOrganizationId: binding.providerOrganizationId,
-    providerSubject: binding.providerSubject,
   });
+  if (started === null) throw new Error('test grant minting refused the starting identity');
   const completed = await completeReauthentication({
     nonce: started.nonce,
     userLinkId: input.userLinkId,
     verifiedAuthTime: new Date(),
-    connection: {
-      connectionId: binding.connectionId,
-      mfaPolicyCertified: assurance === 'fresh_and_mfa_policy',
-    },
+    verifiedNonceDigest: oidcNonceDigest(started.oidcNonce),
+    verifiedConnectionId: started.binding.connectionId,
+    verifiedIssuer: started.binding.issuer,
+    verifiedOrganizationId: started.binding.providerOrganizationId,
+    verifiedProviderSubject: started.binding.providerSubject,
   });
   if (completed === null) throw new Error('test grant minting failed');
   return completed.grant;
@@ -274,11 +378,17 @@ export async function observeThenActivate(input: {
   displayName?: string | null;
   activatedByUserLinkId: string;
 }): Promise<{ userLinkId: string }> {
+  // R3: a login now carries the connection it came through. The harness reads
+  // the tenant's real active connection rather than inventing one.
+  const binding = await sessionBindingFor(input.tenantId);
   const pending = await observeUserLinkOnLogin({
     tenantId: input.tenantId,
     providerUserId: input.providerUserId,
     email: input.email ?? null,
     displayName: input.displayName ?? null,
+    connectionId: binding.connectionId,
+    issuer: binding.issuer,
+    providerOrganizationId: binding.providerOrganizationId,
   });
   if (pending === null) throw new Error('login observation refused the identity');
   const activated = await activateUserLink({

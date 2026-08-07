@@ -4,9 +4,11 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import {
+  bootstrapAdministrator,
   certifyMfaPolicy,
   resetDatabase,
   seedRooftopIdentity,
+  sessionBindingFor,
   skipIntegration,
   startIdentityTestEnv,
   testIssuer,
@@ -20,8 +22,10 @@ import { createRooftop, createDealerGroup, createLegalEntity } from '@dealer/org
 import {
   decideSupportAccess,
   activateUserLink,
+  grantRole as grantRoleBinding,
   observeUserLinkOnLogin,
   requestSupportAccess,
+  revokeRolesForUserLink,
   revokeSupportSession,
 } from '@dealer/identity-access';
 import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } from '@dealer/api';
@@ -98,11 +102,14 @@ describe(
       role: string,
       scope: { level: string; id: string | null },
     ): Promise<void> {
-      await query(
-        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES ($1, $2, $3, $4, $5)`,
-        [tenantId, userLinkId, role, scope.level, scope.id],
-      );
+      await grantRoleBinding({
+        actingUserLinkId: await bootstrapAdministrator(tenantId),
+        tenantId,
+        userLinkId,
+        role,
+        scopeLevel: scope.level,
+        scopeId: scope.id,
+      });
     }
 
     test('a dealership goes from legacy data to daily work, support and revocation', async () => {
@@ -200,11 +207,16 @@ describe(
       assert.equal(adminWrite.status, 403, 'administering identities is not doing service work');
 
       // ── 7. A new advisor logs in and receives NO privilege ────────────────
+      const advisorBinding = await sessionBindingFor(tenantId);
       const advisorLink = await observeUserLinkOnLogin({
         tenantId,
         providerUserId: 'user_advisor',
         email: 'advisor@delta.example',
         displayName: 'Ada Advisor',
+        // R3: a login names the connection it came through.
+        connectionId: advisorBinding.connectionId,
+        issuer: advisorBinding.issuer,
+        providerOrganizationId: advisorBinding.providerOrganizationId,
       });
       assert.ok(advisorLink);
       assert.equal(advisorLink.status, 'pending', 'login must NOT activate (R1 section B)');
@@ -378,7 +390,6 @@ describe(
         advisorLink.userLinkId,
         String(started.body!.data.reauth_txn_id),
         connectionId,
-        false,
       );
       assert.equal(refusedGrant, null, 'uncertified MFA policy must fail closed');
       const noGrantYet = await query(`SELECT COUNT(*)::int AS n FROM reauthentication_grants`, []);
@@ -399,7 +410,6 @@ describe(
         advisorLink.userLinkId,
         String(started2.body!.data.reauth_txn_id),
         connectionId,
-        true,
       );
       assert.ok(grantResult, 'certified policy plus freshness mints the grant');
       // exactly ONE transaction and ONE grant exist — no shadow transaction
@@ -426,11 +436,15 @@ describe(
        VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active', $1)`,
         [testIssuer()],
       );
+      const supportBinding = await sessionBindingFor(null);
       const supportLink = await observeUserLinkOnLogin({
         tenantId: null,
         providerUserId: 'user_support',
         email: 'support@platform.example',
         displayName: 'Sam Support',
+        connectionId: supportBinding.connectionId,
+        issuer: supportBinding.issuer,
+        providerOrganizationId: supportBinding.providerOrganizationId,
       });
       assert.ok(supportLink);
       assert.ok(
@@ -439,11 +453,14 @@ describe(
           activatedByUserLinkId: adminLinkId,
         }),
       );
-      await query(
-        `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
-       VALUES (NULL, $1, 'platform_support', 'platform', NULL)`,
-        [supportLink.userLinkId],
-      );
+      await grantRoleBinding({
+        actingUserLinkId: await bootstrapAdministrator(null),
+        tenantId: null,
+        userLinkId: supportLink.userLinkId,
+        role: 'platform_support',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
       const supportToken = await env.issuer.signAccessToken({
         sub: 'user_support',
         org_id: 'org_platform_support',
@@ -483,23 +500,18 @@ describe(
         null,
         'approval without a high-assurance grant is refused',
       );
-      await mintReauthGrant({
+      const approvalGrant = await mintReauthGrant({
         tenantId,
         userLinkId: adminLinkId,
         action: 'identity.support.approve',
-        resourceId: randomUUID(),
+        resourceType: 'support_access_request',
+        resourceId: supportRequest.requestId,
       });
-      const approvalGrantRow = await query(
-        `UPDATE reauthentication_grants SET consumed_at = NOW()
-          WHERE user_link_id = $1 AND action = 'identity.support.approve'
-          RETURNING grant_id`,
-        [adminLinkId],
-      );
       const supportSession = await decideSupportAccess({
         requestId: supportRequest.requestId,
         decidedByUserLinkId: adminLinkId,
         approve: true,
-        approvalGrantId: String((approvalGrantRow.rows[0] as { grant_id: unknown }).grant_id),
+        approvalGrant,
       });
       assert.ok(supportSession);
 
@@ -546,10 +558,11 @@ describe(
       });
       assert.equal(afterRevoke.status, 404, 'revocation ends access on the next decision');
 
-      await query(
-        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW() WHERE user_link_id = $1`,
-        [advisorLink.userLinkId],
-      );
+      // R3: attributed, versioned, audited revocation — not a raw UPDATE.
+      await revokeRolesForUserLink({
+        actingUserLinkId: adminLinkId,
+        userLinkId: advisorLink.userLinkId,
+      });
       assert.equal(
         (await call(advisorToken, 'GET', '/api/service/home')).status,
         403,
@@ -678,10 +691,9 @@ describe(
       setCookieHeader: string | null,
       userLinkId: string,
       expectedTxnId: string,
-      connectionId: string | null,
-      mfaCertified: boolean,
+      connectionId: string,
     ): Promise<string | null> {
-      const { completeReauthentication, openCookiePayload } =
+      const { completeReauthentication, oidcNonceDigest, openCookiePayload } =
         await import('@dealer/identity-access');
       assert.ok(setCookieHeader, 'the reauth start must seal a transaction cookie');
       const match = /dealer_reauth_txn=([^;,]+)/.exec(setCookieHeader);
@@ -692,13 +704,26 @@ describe(
       assert.equal(payload.purpose, 'reauth');
       const nonce = String(payload.nonce);
 
-      const connection =
-        connectionId === null ? null : { connectionId, mfaPolicyCertified: mfaCertified };
+      // What a real verified token would carry — read from the CONNECTION and
+      // the USER LINK, never from the transaction row we are about to test.
+      const conn = await query(
+        `SELECT issuer, provider_organization_id FROM identity_provider_connections
+          WHERE connection_id = $1`,
+        [connectionId],
+      );
+      const connRow = conn.rows[0] as { issuer: unknown; provider_organization_id: unknown };
+      const linkRow = (
+        await query(`SELECT provider_user_id FROM user_links WHERE user_link_id = $1`, [userLinkId])
+      ).rows[0] as { provider_user_id: unknown };
       const completed = await completeReauthentication({
         nonce,
         userLinkId,
         verifiedAuthTime: new Date(),
-        connection,
+        verifiedNonceDigest: oidcNonceDigest(String(payload.oidc_nonce)),
+        verifiedConnectionId: connectionId,
+        verifiedIssuer: String(connRow.issuer),
+        verifiedOrganizationId: String(connRow.provider_organization_id),
+        verifiedProviderSubject: String(linkRow.provider_user_id),
       });
       if (completed === null) return null;
       assert.equal(

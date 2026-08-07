@@ -6,6 +6,22 @@
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
+/**
+ * FBL-020-R3: the ONLY allowance made for clock drift when judging a seal's
+ * own timestamp. It exists because two hosts may disagree by a little; it is
+ * not a window in which the future is accepted as the past. Callers that hold
+ * the configured OIDC skew pass it, so the platform has ONE tolerance rather
+ * than one per primitive.
+ */
+const DEFAULT_CLOCK_TOLERANCE_SECONDS = 60;
+
+export interface OpenCookieOptions {
+  /** How old a seal may be, measured from its own `iat`. */
+  readonly maxAgeSeconds: number;
+  /** Clock drift allowance for a seal stamped ahead of us. Defaults to 60s. */
+  readonly clockToleranceSeconds?: number;
+}
+
 function keyFor(cookiePassword: string): Buffer {
   return createHash('sha256').update(cookiePassword, 'utf8').digest();
 }
@@ -27,7 +43,7 @@ export function sealCookiePayload(
 export function openCookiePayload(
   sealed: string,
   cookiePassword: string,
-  options: { maxAgeSeconds: number },
+  options: OpenCookieOptions,
 ): Record<string, unknown> | null {
   try {
     const raw = Buffer.from(sealed, 'base64url');
@@ -41,8 +57,19 @@ export function openCookiePayload(
       'utf8',
     );
     const payload = JSON.parse(plaintext) as Record<string, unknown>;
-    const iat = typeof payload.iat === 'number' ? payload.iat : 0;
-    if (Math.floor(Date.now() / 1000) - iat > options.maxAgeSeconds) return null;
+    // A seal with no usable timestamp has no age, and something with no age
+    // can never go stale. Refuse it rather than treat it as brand new.
+    const iat = payload.iat;
+    if (typeof iat !== 'number' || !Number.isFinite(iat)) return null;
+    const now = Math.floor(Date.now() / 1000);
+    // FBL-020-R3: a seal stamped in the FUTURE is refused. Without this the
+    // staleness test below is trivially defeated — `now - iat` goes negative,
+    // so a forward-dated seal never expires and one issued by a host with a
+    // running-fast clock outlives its whole window. The allowance is the
+    // configured clock tolerance and nothing else.
+    const tolerance = options.clockToleranceSeconds ?? DEFAULT_CLOCK_TOLERANCE_SECONDS;
+    if (iat - now > tolerance) return null;
+    if (now - iat > options.maxAgeSeconds) return null;
     return payload;
   } catch {
     return null;

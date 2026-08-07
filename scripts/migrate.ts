@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { closePool, getPool } from '@dealer/database';
+import { closePool, getPool, withTransaction } from '@dealer/database';
 import { logger } from '@dealer/platform';
 
 /**
@@ -46,19 +46,31 @@ async function migrate(): Promise<void> {
     if (applied.has(filename)) continue;
 
     const sql = readFileSync(join(MIGRATIONS_DIR, filename), 'utf8');
-    const client = await pool.connect();
     try {
-      await client.query('BEGIN');
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
-      await client.query('COMMIT');
+      // FBL-020-R3 correction G1: this goes through the shared `withTransaction`
+      // rather than checking a client out here. A client checked out directly has no
+      // `'error'` listener — pg-pool removes its own for the duration of a checkout —
+      // so an asynchronous FATAL (a killed backend, an operator shutdown mid-DDL)
+      // would arrive as an unhandled `'error'` event and kill the runner outright
+      // instead of failing this migration with a message and a non-zero exit. There
+      // must be exactly one hardened checkout path in the codebase, and this is it.
+      await withTransaction(async (tx) => {
+        // FBL-020-R3 correction D1: the pool gives every connection a bounded
+        // `statement_timeout` and `idle_in_transaction_session_timeout` so a request
+        // path can never pin one indefinitely. DDL is the one legitimate exception —
+        // an index build or a large backfill may take minutes and interrupting it
+        // half-way is strictly worse than waiting. `SET LOCAL` scopes the exemption
+        // to THIS migration's transaction: it reverts at COMMIT, so the connection
+        // returns to the pool bounded again.
+        await tx.query('SET LOCAL statement_timeout = 0');
+        await tx.query('SET LOCAL idle_in_transaction_session_timeout = 0');
+        await tx.query(sql);
+        await tx.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+      });
       logger.info({ filename }, 'Migration applied');
       count += 1;
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => undefined);
       throw new Error(`Migration ${filename} failed: ${(err as Error).message}`);
-    } finally {
-      client.release();
     }
   }
 

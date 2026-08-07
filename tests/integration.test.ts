@@ -3,14 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import {
   INTEGRATION_DATABASE_URL,
+  bootstrapAdministrator,
   countRows,
   makeWorld,
   resetDatabase,
   seedMPITemplate,
   seedTechnician,
+  seedUserLinkRow,
   skipIntegration,
   type TestWorld,
 } from '@dealer/test-kit';
+import { ROLES } from '@dealer/contracts';
+import { grantRole, rolesForUserLink } from '@dealer/identity-access';
+import type { AuthContext } from '@dealer/fixed-ops';
 import * as promClient from 'prom-client';
 import { closePool, query, withTransaction } from '@dealer/database';
 import { consumeSensitiveActionGrant } from '@dealer/fixed-ops';
@@ -1509,6 +1514,150 @@ describe(
            'in_repair','qc','ready_pickup','comeback_review','no_show_followup')) NOT VALID`,
         );
       }
+    });
+
+    // ── FBL-020-R3 §E2: the ownership consequence ───────────────────────────
+    //
+    // `rolesForUserLink` is what the API middleware writes into
+    // `req.tenantContext.roles`, and `hasAnyRole` reads those roles to decide
+    // SUPERVISOR reach: a service advisor or manager may work on anyone's
+    // inspection and anyone's work ticket, while a technician is confined to
+    // their own. The roles list therefore authorizes, and it used to filter
+    // `status = 'active'` with no effective-window predicate — so a technician
+    // whose `service_advisor` binding had AGED OUT still passed the supervisor
+    // path and could read and write ANOTHER technician's MPI session and work
+    // ticket. Their engine-level allow came from their still-effective
+    // `service_technician` binding, so the stale binding did the widening.
+    //
+    // This test drives the real composition: the roles come from the identity
+    // package exactly as the middleware fetches them, and the guards are the
+    // real Fixed Ops ones. No Fixed Ops behaviour changed — only the roles list
+    // became correct.
+    describe('a windowed-out supervisor binding stops widening technician reach', () => {
+      /** The context the middleware would build for this actor, right now. */
+      async function contextFor(userLinkId: string): Promise<AuthContext> {
+        const roles = await rolesForUserLink(userLinkId, w.tenantA.tenantId);
+        return {
+          tenantId: w.tenantA.tenantId,
+          userId: userLinkId,
+          roles: roles as AuthContext['roles'],
+        };
+      }
+
+      /** Moves a binding's window without touching its lifecycle status. */
+      async function ageOut(userLinkId: string, role: string): Promise<void> {
+        const moved = await query(
+          `UPDATE role_bindings
+              SET effective_from = NOW() - INTERVAL '2 days',
+                  effective_to = NOW() - INTERVAL '1 day'
+            WHERE user_link_id = $1 AND role = $2 AND status = 'active'
+            RETURNING status`,
+          [userLinkId, role],
+        );
+        assert.equal(moved.rows.length, 1, 'the fixture moved exactly one binding');
+        assert.equal(
+          moved.rows[0].status,
+          'active',
+          "the binding stays 'active' — only its window has passed, which is the shape that slipped through",
+        );
+      }
+
+      test('another technician MPI session and work ticket become unreachable', async () => {
+        const granter = await bootstrapAdministrator(w.tenantA.tenantId);
+        const otherTech = randomUUID();
+        await seedUserLinkRow(w.tenantA.tenantId, otherTech);
+        await seedTechnician(w.tenantA, w.locationA, otherTech);
+
+        // The actor: a technician who ALSO holds a service_advisor binding.
+        // Both grants go through the owned mutation service, as production does.
+        for (const role of [ROLES.TECHNICIAN, ROLES.SERVICE_ADVISOR]) {
+          await grantRole({
+            actingUserLinkId: granter,
+            tenantId: w.tenantA.tenantId,
+            userLinkId: w.technician.userId,
+            role,
+            scopeLevel: 'tenant',
+            scopeId: w.tenantA.tenantId,
+          });
+        }
+
+        // Work that belongs to the OTHER technician: an inspection they own and
+        // a ticket assigned to them.
+        const appt = await newAppointment();
+        const ro = await svc.checkIn(w.tenantA, appt.appointment_id, {});
+        const line = await svc.addLineItem(w.tenantA, ro.ro_id, {
+          line_type: 'labor',
+          description: 'Replace rear pads',
+        });
+        const templateId = await seedMPITemplate(w.tenantA, w.locationA);
+        const session = await svc.startMPISession(w.tenantA, ro.ro_id, {
+          template_id: templateId,
+          tech_user_id: otherTech,
+        });
+        const ticket = await svc.dispatchTech(w.tenantA, {
+          ro_id: ro.ro_id,
+          line_item_id: line.line_item_id,
+          tech_user_id: otherTech,
+        });
+
+        // CONTROL — while the service_advisor binding is inside its window the
+        // supervisor path is real, and reaching another technician's work is
+        // legitimate. This half proves the test is not vacuous.
+        const supervising = await contextFor(w.technician.userId);
+        assert.ok(
+          supervising.roles.includes(ROLES.SERVICE_ADVISOR),
+          'the effective binding puts service_advisor in the context',
+        );
+        await svc.recordMPIResult(supervising, session.mpi_session_id, {
+          item_key: 'brake_pads_rear',
+          status: 'pass',
+        });
+        await svc.recordTimeEntry(supervising, ticket.ticket_id, { event_type: 'start' });
+
+        // THE DEFECT — the service_advisor binding ages out. It is still
+        // 'active', and the technician binding is untouched and still effective,
+        // so this actor keeps every legitimate permission they had.
+        await ageOut(w.technician.userId, ROLES.SERVICE_ADVISOR);
+        const confined = await contextFor(w.technician.userId);
+
+        // THE SECURITY CONSEQUENCE, asserted first: ownership is enforced
+        // again, so the other technician's inspection and ticket are refused —
+        // and refused by the ownership guards specifically, not by some other
+        // rule that happens to reject the call.
+        await assert.rejects(
+          () =>
+            svc.recordMPIResult(confined, session.mpi_session_id, {
+              item_key: 'tyres',
+              status: 'pass',
+            }),
+          (err: unknown) => (err as { code?: string }).code === 'not_inspection_owner',
+          "a technician must not record findings on another technician's inspection",
+        );
+        await assert.rejects(
+          () => svc.recordTimeEntry(confined, ticket.ticket_id, { event_type: 'pause' }),
+          (err: unknown) => (err as { code?: string }).code === 'not_ticket_assignee',
+          "nor clock time against another technician's work ticket",
+        );
+
+        // …because the aged-out binding is no longer in the context at all, and
+        // only that one is gone.
+        assert.deepEqual(
+          [...confined.roles].sort(),
+          [ROLES.TECHNICIAN],
+          'the aged-out binding must be gone from the context, and only that one',
+        );
+
+        // …and nothing was widened away: the technician's OWN work is still
+        // theirs to do, so the fix confines rather than breaks.
+        const ownSession = await svc.startMPISession(w.tenantA, ro.ro_id, {
+          template_id: templateId,
+          tech_user_id: w.technician.userId,
+        });
+        await svc.recordMPIResult(confined, ownSession.mpi_session_id, {
+          item_key: 'brake_pads_front',
+          status: 'pass',
+        });
+      });
     });
   },
 );

@@ -156,6 +156,14 @@ export async function seedMPITemplate(ctx: AuthContext, locationId: string): Pro
 }
 
 export async function countRows(table: string, where: string, params: unknown[]): Promise<number> {
+  // role-binding-effectiveness-opt-out(unresolvable-sql-hand-reviewed): the table
+  // and the filter are BOTH supplied by the calling test, so no static reading of
+  // this file can say which table this counts or what it counts there. Reviewed:
+  // this is the suite's own row-counting helper, and the suite is the counter-party
+  // this guard exempts by design — it must be able to construct an ineffective
+  // binding and then observe that row directly, which is how the effectiveness
+  // fixes are proved. It decides nothing and authorizes nothing; every callable
+  // authorization path lives in @dealer/identity-access and is guarded there.
   const result = await query(`SELECT COUNT(*)::int AS cnt FROM ${table} WHERE ${where}`, params);
   return Number(result.rows[0].cnt);
 }

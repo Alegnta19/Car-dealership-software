@@ -103,3 +103,32 @@ export class UnprocessableError extends AppError {
     super(422, options.code ?? 'unprocessable', message, options);
   }
 }
+
+/**
+ * 503 — INFRASTRUCTURE, not the request. Every other class above describes something
+ * about the caller's request (malformed, unauthenticated, not permitted, in conflict
+ * with the stored state); this one says the request was fine and a dependency the
+ * platform needs was not there. The distinction is load-bearing in two directions:
+ *
+ *   * it is TRANSIENT — `retryable` is true, and the same request repeated may well
+ *     succeed. Nothing about it is a verdict on the caller;
+ *   * it is NOT an authorization outcome. A lost database connection must never be
+ *     read as "this session is invalid" or "this actor lacks permission": it may not
+ *     revoke a session, consume a step-up grant, or count as a denied policy decision.
+ *     Losing a connection tells us nothing about who the caller is.
+ *
+ * Callers that branch on failure therefore have a single, honest discriminator for
+ * "the platform failed, the operation did not happen" instead of having to pattern-match
+ * driver text.
+ */
+export class ServiceUnavailableError extends AppError {
+  /** Always true. Present so callers can test intent rather than the class name. */
+  public readonly retryable = true;
+
+  constructor(
+    message = 'Service temporarily unavailable',
+    options: { code?: string; details?: Record<string, unknown>; messageI18n?: I18nMessage } = {},
+  ) {
+    super(503, options.code ?? 'service_unavailable', message, options);
+  }
+}
