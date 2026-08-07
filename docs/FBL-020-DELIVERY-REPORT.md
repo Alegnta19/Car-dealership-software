@@ -2,8 +2,15 @@
 
 Governing document: **Master Blueprint v2.0, §14.3**. This report supersedes the
 R2 report in full. Every number below was measured on the tree being submitted,
-not carried forward from an earlier revision — see §12 for the one block that is
-deliberately empty.
+not carried forward from an earlier revision.
+
+§12 was written as an explicit, unmistakable placeholder and shipped that way in
+the code-bearing commit `f816642`, because no CI run for a commit can exist
+before that commit does. It has since been filled in from run `31223131820`,
+whose `head_sha` was compared against `f816642` and found equal, and this
+documentation closeout is the commit that carries it. That ordering is
+deliberate: it is the discipline whose absence produced the R2 defect described
+in §2, and an earlier false-green report in FBL-000.
 
 ## 1. Status
 
@@ -534,9 +541,14 @@ of what a reviewer should weigh.
    (migration 050) is dead weight** — no longer written or read; dropping it is a
    future migration.
 
-10. **Local schema fingerprints are corroboration only.** The authoritative
+10. **Local schema fingerprints are corroboration only.** ~~The authoritative
     fresh-vs-upgraded comparison is the in-CI one, and it has not run for this
-    tree.
+    tree.~~ **DISCHARGED.** It has now run: §12 records
+    `dcfffc97630b664feccacee70b0a1aebb28e50d69d00c7fdc741c6c0aa0bc15a` for both
+    fresh and upgraded across 41 tables, `equal=true`, from
+    `upgrade-evidence/fingerprint-equality.txt` of run `31223131820` on
+    `f816642`. The original wording is struck through rather than deleted so the
+    register shows what was open at code-freeze and what closed afterwards.
 
 11. **No gate pins any figure in this report, and that risk has already
     materialised twice in this order.** Nothing in `tests/`, `scripts/` or
@@ -559,49 +571,83 @@ of what a reviewer should weigh.
     _Treat every other figure in this report as true-when-written, and re-measure
     before quoting it._ Recorded in `docs/identity/KNOWN-LIMITATIONS.md`.
 
-## 12. CI EVIDENCE — NOT YET MEASURED
+## 12. CI evidence — measured
 
-> ### ⛔ PLACEHOLDER — DO NOT READ AS EVIDENCE ⛔
->
-> **Every value in this section is absent on purpose. The code-bearing commit
-> does not exist yet, so no CI run for it exists yet. Nothing here has been
-> measured, estimated, or carried over from an earlier head. Any reviewer who
-> finds this block still unfilled should treat the CI gate as NOT DISCHARGED.**
->
-> The operator fills this in **after** pushing the single code-bearing commit and
-> **after** the run whose `head_sha` equals that commit reports a conclusion.
-> Values from any other run — including R2's run `30929301450`, which belongs to
-> head `ff31370` and a different migration 057 — must not be used.
->
-> | Field                     | Value                            |
-> | ------------------------- | -------------------------------- |
-> | Code-bearing commit SHA   | `<<TO BE FILLED — 40-hex>>`      |
-> | CI run id                 | `<<TO BE FILLED>>`               |
-> | Run URL                   | `<<TO BE FILLED>>`               |
-> | `head_sha` equals commit? | `<<TO BE FILLED — must be YES>>` |
-> | Event                     | `<<TO BE FILLED>>`               |
-> | Conclusion                | `<<TO BE FILLED>>`               |
->
-> | Job                                              | Conclusion         |
-> | ------------------------------------------------ | ------------------ |
-> | typecheck, lint ratchet, build, all tests, scans | `<<TO BE FILLED>>` |
-> | upgrade from earliest retained schema fixture    | `<<TO BE FILLED>>` |
-> | container build (digest-pinned base)             | `<<TO BE FILLED>>` |
-> | secret scan (genuine full history)               | `<<TO BE FILLED>>` |
->
-> | Artifact               | Size               | sha256             |
-> | ---------------------- | ------------------ | ------------------ |
-> | `baseline-evidence`    | `<<TO BE FILLED>>` | `<<TO BE FILLED>>` |
-> | `upgrade-evidence`     | `<<TO BE FILLED>>` | `<<TO BE FILLED>>` |
-> | `secret-scan-evidence` | `<<TO BE FILLED>>` | `<<TO BE FILLED>>` |
-> | `container-evidence`   | `<<TO BE FILLED>>` | `<<TO BE FILLED>>` |
->
-> | In-CI schema fingerprint | Value                               |
-> | ------------------------ | ----------------------------------- |
-> | fresh                    | `<<TO BE FILLED — 64-hex>>`         |
-> | upgraded                 | `<<TO BE FILLED — 64-hex>>`         |
-> | equal                    | `<<TO BE FILLED — must be true>>`   |
-> | test count / skipped     | `<<TO BE FILLED — expect 315 / 0>>` |
+Filled in after the code-bearing commit was pushed and after the run whose
+`head_sha` **equals that commit** reported a conclusion. No value here comes from
+any other run; R2's run `30929301450` belongs to head `ff31370` and a different
+migration 057, and was not used.
+
+| Field                     | Value                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| Code-bearing commit SHA   | `f816642a92c8d8d1c3c86ad7670b24ef43c67b62`                                             |
+| CI run id                 | `31223131820`                                                                          |
+| Run URL                   | https://github.com/Alegnta19/Car-dealership-software/actions/runs/31223131820          |
+| `head_sha` equals commit? | **YES** — API returned `f816642a92c8d8d1c3c86ad7670b24ef43c67b62`, compared explicitly |
+| Event                     | `push`                                                                                 |
+| Status / conclusion       | `completed` / **success**                                                              |
+
+| Job                                              | Conclusion  |
+| ------------------------------------------------ | ----------- |
+| typecheck, lint ratchet, build, all tests, scans | **success** |
+| upgrade from earliest retained schema fixture    | **success** |
+| container build (digest-pinned base)             | **success** |
+| secret scan (genuine full history)               | **success** |
+
+| Artifact               | Size     | sha256 (of the downloaded zip)                                     |
+| ---------------------- | -------- | ------------------------------------------------------------------ |
+| `baseline-evidence`    | 57,804 B | `1acdcff5b31a4a2cde1b499c5f9cb35c1431bdaba48935868c1646e3f43291e6` |
+| `upgrade-evidence`     | 32,005 B | `8e023ad2b3dd33222ca87eac5e9771d4117f6e4b0034bd095078851583adcd9c` |
+| `secret-scan-evidence` | 8,109 B  | `19d2b3c168fd2ab92ed9194cc963ab29bc0a002c46aaca866e843f01b58b3cf9` |
+| `container-evidence`   | 701 B    | `1914f166f8258400df4e3b2f5058048316d4b0aa62299ed86afcafb43f77ca5c` |
+
+### Read from the run's own artifacts, not from a local run
+
+`baseline-evidence/test-summary.json`:
+
+```json
+{
+  "tests": 315,
+  "suites": 29,
+  "passed": 315,
+  "failed": 0,
+  "cancelled": 0,
+  "skipped": 0,
+  "todo": 0,
+  "duration_ms": 96537.537887
+}
+```
+
+**315 / 315, zero failed, cancelled, skipped or todo** — identical to the local
+figure in §7, which is the point: the local run is corroboration and this is the
+authority.
+
+`upgrade-evidence/fingerprint-equality.txt` — this discharges §11.10, which
+recorded that only the in-CI comparison is authoritative:
+
+| In-CI schema fingerprint | Value                                                              |
+| ------------------------ | ------------------------------------------------------------------ |
+| fresh                    | `dcfffc97630b664feccacee70b0a1aebb28e50d69d00c7fdc741c6c0aa0bc15a` |
+| upgraded                 | `dcfffc97630b664feccacee70b0a1aebb28e50d69d00c7fdc741c6c0aa0bc15a` |
+| equal                    | **true**                                                           |
+| tables                   | 41                                                                 |
+
+`secret-scan-evidence/scan-evidence.txt` — gitleaks `v8.24.3`, image pinned by
+digest, `--log-opts=--all` over the genuine full history: **51 commits scanned,
+~3.21 MB, no leaks found**, 52 revisions and 10 remote branches in scope.
+
+`container-evidence/image-digest.txt` —
+`sha256:45955b9f2ca26bc296ff87f9ddf8002b119445f0398dfe46a817110b67888e41`.
+
+`baseline-evidence/tool-versions.txt` — `node=v20.20.2`, `npm=10.8.2`,
+`tsc=5.9.3`, `eslint=v10.8.0`, `prettier=3.9.6`,
+`postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`.
+The pinned toolchain and the digest-pinned database image are the ones the order
+requires.
+
+**The CI gate is DISCHARGED for the code-bearing commit.** This documentation
+closeout commit is itself a second commit and runs its own build; its result does
+not retroactively alter anything above, which describes `f816642` only.
 
 ## 13. Position
 
