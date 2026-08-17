@@ -8,15 +8,25 @@ import { randomUUID } from 'node:crypto';
 import { query } from '@dealer/database';
 import { resetConfigForTests } from '@dealer/platform';
 import {
+  DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS,
   activateUserLink,
+  changeOrganizationStatus,
+  changeOrganizationUnitStatus,
+  claimReauthentication,
   completeReauthentication,
+  createOrganization,
+  createOrganizationUnit,
   createSession,
   grantRole,
   observeUserLinkOnLogin,
   oidcNonceDigest,
   startReauthentication,
+  type OrganizationStatus,
+  type PolicyEngine,
 } from '@dealer/identity-access';
+import type { OrgUnitStatus } from '@dealer/organization';
 import { startLocalIssuer, type LocalIssuer } from './local-issuer';
+import { fixtureAuthorizationStateWrite } from './fixture-primitives';
 import type { TestWorld } from './db';
 
 export interface IdentityTestEnv {
@@ -78,42 +88,30 @@ export function testIssuer(): string {
  * an active provider connection. Idempotent per tenant.
  */
 export async function seedTenantIdentity(tenantId: string, name?: string): Promise<void> {
+  // FBL-020-R4 §5 — THE ORDER BELOW IS THE FIXTURE'S HONEST ANSWER TO A REAL PROBLEM.
+  //
+  // The attributed services demand an EXISTING acting user link, and the first link of
+  // a tenant cannot exist before the tenant and its provider connection do. So this
+  // fixture does what the production bootstrap does: the ORIGIN (tenant, connection,
+  // first administrator) goes through the declared fixture primitive, and everything
+  // after it — including the organization units — goes through the attributed service,
+  // leaving the same trail a real administrator would.
   const existing = await query(`SELECT status FROM tenants WHERE tenant_id = $1`, [tenantId]);
   if (existing.rows.length === 0) {
-    await query(`INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')`, [
-      tenantId,
-      name ?? 'Test Tenant ' + tenantId.slice(0, 8),
-    ]);
+    await fixtureAuthorizationStateWrite(
+      'seed-authorization-state',
+      `INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')`,
+      [tenantId, name ?? 'Test Tenant ' + tenantId.slice(0, 8)],
+    );
   } else {
-    await query(`UPDATE tenants SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
+    await fixtureAuthorizationStateWrite(
+      'seed-authorization-state',
+      `UPDATE tenants SET status = 'active' WHERE tenant_id = $1`,
+      [tenantId],
+    );
   }
-  const group = await query(
-    `INSERT INTO dealer_groups (tenant_id, name, status)
-     SELECT $1, 'Test Group', 'active'
-      WHERE NOT EXISTS (SELECT 1 FROM dealer_groups WHERE tenant_id = $1)
-     RETURNING dealer_group_id`,
-    [tenantId],
-  );
-  const groupId =
-    group.rows.length > 0
-      ? String((group.rows[0] as { dealer_group_id: unknown }).dealer_group_id)
-      : String(
-          (
-            (
-              await query(
-                `SELECT dealer_group_id FROM dealer_groups WHERE tenant_id = $1 LIMIT 1`,
-                [tenantId],
-              )
-            ).rows[0] as { dealer_group_id: unknown }
-          ).dealer_group_id,
-        );
-  await query(
-    `INSERT INTO legal_entities (tenant_id, dealer_group_id, name, status)
-     SELECT $1, $2, 'Test Entity', 'active'
-      WHERE NOT EXISTS (SELECT 1 FROM legal_entities WHERE tenant_id = $1)`,
-    [tenantId, groupId],
-  );
-  await query(
+  await fixtureAuthorizationStateWrite(
+    'seed-authorization-state',
     `INSERT INTO identity_provider_connections
        (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
      SELECT 'dealership', $1, 'workos', $2, 'active', $3
@@ -122,27 +120,236 @@ export async function seedTenantIdentity(tenantId: string, name?: string): Promi
       )`,
     [tenantId, testOrganizationId(tenantId), testIssuer()],
   );
+  // The PLATFORM origin administrator, not this tenant's — see `originActor`. Minting a
+  // tenant-scoped administrator here would leave every seeded tenant with an activated
+  // link BOUND to its connection, and several suites are about what happens when that
+  // connection drifts; the fixture must not decide that for them.
+  const actor = await originActor();
+  const existingGroup = await query(
+    `SELECT dealer_group_id FROM dealer_groups WHERE tenant_id = $1 ORDER BY created_at LIMIT 1`,
+    [tenantId],
+  );
+  const groupId =
+    existingGroup.rows.length > 0
+      ? String((existingGroup.rows[0] as { dealer_group_id: unknown }).dealer_group_id)
+      : (
+          await createOrganizationUnit({
+            actingUserLinkId: actor,
+            tenantId,
+            level: 'dealer_group',
+            parentId: tenantId,
+            name: 'Test Group',
+            status: 'active',
+          })
+        ).unitId;
+  const existingEntity = await query(
+    `SELECT legal_entity_id FROM legal_entities WHERE tenant_id = $1 LIMIT 1`,
+    [tenantId],
+  );
+  if (existingEntity.rows.length === 0) {
+    await createOrganizationUnit({
+      actingUserLinkId: actor,
+      tenantId,
+      level: 'legal_entity',
+      parentId: groupId,
+      name: 'Test Entity',
+      status: 'active',
+    });
+  }
 }
 
-/** Attaches a rooftop with a SPECIFIC id (the legacy location_id) to the tenant. */
+/**
+ * Attaches a rooftop with a SPECIFIC id (the legacy location_id) to the tenant.
+ *
+ * FBL-020-R4 §5: through the attributed service, so the fixture leaves an actor, a
+ * version and an audit row exactly as an administrator would. Idempotent by looking
+ * first rather than by `ON CONFLICT DO NOTHING`, because a create that silently does
+ * nothing has no honest audit row to write.
+ */
 export async function seedRooftopIdentity(
   tenantId: string,
   rooftopId: string,
   name?: string,
 ): Promise<void> {
-  await query(
-    `INSERT INTO rooftops (rooftop_id, tenant_id, legal_entity_id, name, status)
-     SELECT $1, $2, le.legal_entity_id, $3, 'active'
-       FROM legal_entities le WHERE le.tenant_id = $2
-      ORDER BY le.created_at LIMIT 1
-     ON CONFLICT (rooftop_id) DO NOTHING`,
-    [rooftopId, tenantId, name ?? 'Rooftop ' + rooftopId.slice(0, 8)],
+  const existing = await query(`SELECT 1 FROM rooftops WHERE rooftop_id = $1`, [rooftopId]);
+  if (existing.rows.length > 0) return;
+  const entity = await query(
+    `SELECT legal_entity_id FROM legal_entities WHERE tenant_id = $1 ORDER BY created_at LIMIT 1`,
+    [tenantId],
   );
+  if (entity.rows.length === 0) throw new Error('seed the tenant chain before seeding a rooftop');
+  await createOrganizationUnit({
+    actingUserLinkId: await originActor(),
+    tenantId,
+    level: 'rooftop',
+    parentId: String((entity.rows[0] as { legal_entity_id: unknown }).legal_entity_id),
+    unitId: rooftopId,
+    name: name ?? 'Rooftop ' + rooftopId.slice(0, 8),
+    status: 'active',
+  });
+}
+
+/**
+ * FBL-020-R4 §5 — THE ATTRIBUTED, VERSION-AWARE ORGANIZATION FIXTURES.
+ *
+ * These replace `createTenant` / `createDealerGroup` / `createLegalEntity` /
+ * `createRooftop` / `createDepartment` / `setUnitStatus`, the six unattributed
+ * production writes this order removed from `@dealer/organization`. Every one of them
+ * now goes through the owned mutation service, so a suite that builds an organization
+ * leaves precisely the trail a real administrator would: a true actor on the row, an
+ * `authorization_version` that starts at 1 and advances on every change, and one audit
+ * event per mutation.
+ *
+ * THE ACTOR FOR A BRAND-NEW TENANT IS A PLATFORM ONE, deliberately. A tenant cannot be
+ * attributed to one of its own users before it has any, and inventing an actor would be
+ * the very fiction these services exist to prevent — so the fixture uses the PLATFORM
+ * origin administrator, which is who provisions a tenant in the real control plane too.
+ * Units below it are attributed to the tenant's own origin administrator.
+ *
+ * The return shapes match the removed repository functions field for field, so a test
+ * that used to read `.dealerGroupId` still does; what changed is that the row now knows
+ * who made it.
+ */
+export async function seedTenantViaService(input: {
+  name: string;
+  status?: OrganizationStatus;
+  tenantId?: string;
+}): Promise<{ tenantId: string; status: OrganizationStatus; provisionedBy: string }> {
+  const provisioner = await bootstrapAdministrator(null);
+  const created = await createOrganization({
+    actingUserLinkId: provisioner,
+    ...(input.tenantId === undefined ? {} : { tenantId: input.tenantId }),
+    name: input.name,
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+  return { tenantId: created.tenantId, status: created.status, provisionedBy: provisioner };
+}
+
+/**
+ * The PLATFORM origin administrator — the actor every organization fixture attributes
+ * to.
+ *
+ * Deliberately platform-scope rather than the tenant's own administrator, for a reason
+ * that matters to the suite's honesty: minting a tenant-scoped administrator would
+ * require an active provider connection FOR THAT TENANT, so merely creating a rooftop
+ * would silently manufacture a connection — and several suites assert exactly how many
+ * active connections a tenant may have. A platform link needs only the platform
+ * connection (tenant_id NULL), which no tenant-scoped assertion is about, and it is
+ * also who provisions organizations in the real control plane.
+ */
+async function originActor(): Promise<string> {
+  return bootstrapAdministrator(null);
+}
+
+export async function seedDealerGroup(input: {
+  tenantId: string;
+  name: string;
+  status?: OrgUnitStatus;
+}): Promise<{ dealerGroupId: string; tenantId: string; status: OrgUnitStatus }> {
+  const created = await createOrganizationUnit({
+    actingUserLinkId: await originActor(),
+    tenantId: input.tenantId,
+    level: 'dealer_group',
+    parentId: input.tenantId,
+    name: input.name,
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+  return { dealerGroupId: created.unitId, tenantId: input.tenantId, status: created.status };
+}
+
+export async function seedLegalEntity(input: {
+  tenantId: string;
+  dealerGroupId: string;
+  name: string;
+  status?: OrgUnitStatus;
+}): Promise<{ legalEntityId: string; tenantId: string; status: OrgUnitStatus }> {
+  const created = await createOrganizationUnit({
+    actingUserLinkId: await originActor(),
+    tenantId: input.tenantId,
+    level: 'legal_entity',
+    parentId: input.dealerGroupId,
+    name: input.name,
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+  return { legalEntityId: created.unitId, tenantId: input.tenantId, status: created.status };
+}
+
+export async function seedRooftop(input: {
+  tenantId: string;
+  legalEntityId: string;
+  name: string;
+  rooftopId?: string;
+  status?: OrgUnitStatus;
+}): Promise<{ rooftopId: string; tenantId: string; status: OrgUnitStatus }> {
+  const created = await createOrganizationUnit({
+    actingUserLinkId: await originActor(),
+    tenantId: input.tenantId,
+    level: 'rooftop',
+    parentId: input.legalEntityId,
+    name: input.name,
+    ...(input.rooftopId === undefined ? {} : { unitId: input.rooftopId }),
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+  return { rooftopId: created.unitId, tenantId: input.tenantId, status: created.status };
+}
+
+export async function seedDepartment(input: {
+  tenantId: string;
+  rooftopId: string;
+  code: string;
+  name: string;
+  status?: OrgUnitStatus;
+}): Promise<{ departmentId: string; tenantId: string; status: OrgUnitStatus }> {
+  const created = await createOrganizationUnit({
+    actingUserLinkId: await originActor(),
+    tenantId: input.tenantId,
+    level: 'department',
+    parentId: input.rooftopId,
+    code: input.code,
+    name: input.name,
+    ...(input.status === undefined ? {} : { status: input.status }),
+  });
+  return { departmentId: created.unitId, tenantId: input.tenantId, status: created.status };
+}
+
+/**
+ * The attributed replacement for `setUnitStatus`. Returns whether a row changed, which
+ * is what the old boolean meant — but a `true` now also means an audit row was written
+ * and the version advanced, which is the whole difference.
+ */
+export async function setUnitStatusViaService(
+  level: 'dealer_group' | 'legal_entity' | 'rooftop' | 'department',
+  tenantId: string,
+  unitId: string,
+  status: OrgUnitStatus,
+): Promise<boolean> {
+  const changed = await changeOrganizationUnitStatus({
+    actingUserLinkId: await originActor(),
+    tenantId,
+    level,
+    unitId,
+    status,
+  });
+  return changed !== null;
+}
+
+/** The attributed replacement for `setTenantStatus`. */
+export async function setTenantStatusViaService(
+  tenantId: string,
+  status: OrganizationStatus,
+): Promise<boolean> {
+  const changed = await changeOrganizationStatus({
+    actingUserLinkId: await bootstrapAdministrator(null),
+    tenantId,
+    status,
+  });
+  return changed !== null;
 }
 
 /** Creates an activated user link with a SPECIFIC user_link_id. */
 export async function seedUserLinkRow(tenantId: string | null, userLinkId: string): Promise<void> {
-  await query(
+  await fixtureAuthorizationStateWrite(
+    'seed-authorization-state',
     `INSERT INTO user_links
        (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
         connection_id, issuer, provider_organization_id)
@@ -195,7 +402,8 @@ export async function bootstrapAdministrator(tenantId: string | null): Promise<s
     return String((existing.rows[0] as { user_link_id: unknown }).user_link_id);
   }
   await ensureActiveConnection(tenantId);
-  const created = await query(
+  const created = await fixtureAuthorizationStateWrite(
+    'seed-authorization-state',
     `INSERT INTO user_links
        (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
         connection_id, issuer, provider_organization_id)
@@ -236,7 +444,8 @@ export async function seedActor(
   // in for an administrator having activated it, never a login side effect.
   // R2: an ACTIVATED link must be exactly bound to its connection, issuer and
   // organization — the schema refuses anything less.
-  await query(
+  await fixtureAuthorizationStateWrite(
+    'seed-authorization-state',
     `INSERT INTO user_links
        (user_link_id, actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
         connection_id, issuer, provider_organization_id)
@@ -350,8 +559,20 @@ export async function mintReauthGrant(input: {
     resourceType: input.resourceType ?? 'repair_order',
     resourceId: input.resourceId,
     requiredAssurance: assurance,
+    callbackUri: TEST_REAUTH_CALLBACK_URI,
   });
   if (started === null) throw new Error('test grant minting refused the starting identity');
+  // FBL-020-R4 section 3: a completion requires the transaction to have CLAIMED
+  // its own callback state. The harness performs the claim exactly as the real
+  // /auth/reauth/callback does — with the state and PKCE verifier the START
+  // generated — rather than reaching past it.
+  const claimed = await claimReauthentication({
+    nonce: started.nonce,
+    state: started.state,
+    codeVerifier: started.codeVerifier,
+    callbackUri: TEST_REAUTH_CALLBACK_URI,
+  });
+  if (claimed === null) throw new Error('test grant minting could not claim the round trip');
   const completed = await completeReauthentication({
     nonce: started.nonce,
     userLinkId: input.userLinkId,
@@ -399,14 +620,41 @@ export async function observeThenActivate(input: {
   return { userLinkId: activated.userLinkId };
 }
 
-/** Certifies the tenant's provider connection as MFA-required (R1 §E). */
-export async function certifyMfaPolicy(tenantId: string, certified = true): Promise<void> {
-  await query(
+/**
+ * The reauthentication callback the harness's step-ups are issued for. It is the
+ * value the START stores and the CLAIM re-compares, so it must be one constant
+ * rather than two hopeful copies.
+ */
+export const TEST_REAUTH_CALLBACK_URI = 'http://127.0.0.1:3000/auth/reauth/callback';
+
+/**
+ * Certifies the tenant's provider connection as MFA-required (R1 §E).
+ *
+ * FBL-020-R4 §3: a certification now has a VALIDITY DEADLINE, and the schema
+ * refuses a certified connection without one (`ipc_mfa_certification_is_bounded`).
+ * The fixture stands in for an administrator having certified the policy, so it
+ * writes a real, bounded certification — a stale or unbounded one would be
+ * treated as uncertified everywhere, which is the point of the control.
+ */
+export async function certifyMfaPolicy(
+  tenantId: string,
+  certified = true,
+  options?: { validForSeconds?: number },
+): Promise<void> {
+  await fixtureAuthorizationStateWrite(
+    'simulate-authorization-drift',
     `UPDATE identity_provider_connections
         SET mfa_policy_certified = $2,
-            mfa_policy_certified_at = CASE WHEN $2 THEN NOW() ELSE NULL END
+            mfa_policy_certified_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+            mfa_policy_certification_expires_at =
+              CASE WHEN $2 THEN NOW() + make_interval(secs => $3) ELSE NULL END,
+            mfa_policy_certification_revoked_at =
+              CASE WHEN $2 THEN NULL ELSE mfa_policy_certification_revoked_at END,
+            mfa_policy_certification_revoked_by_user_link_id =
+              CASE WHEN $2 THEN NULL
+                   ELSE mfa_policy_certification_revoked_by_user_link_id END
       WHERE tenant_id = $1`,
-    [tenantId, certified],
+    [tenantId, certified, options?.validForSeconds ?? DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS],
   );
 }
 
@@ -447,7 +695,8 @@ export async function sessionBindingFor(
  * Idempotent, and safe for the NULL-tenant platform scope.
  */
 export async function ensureActiveConnection(tenantId: string | null): Promise<void> {
-  await query(
+  await fixtureAuthorizationStateWrite(
+    'seed-authorization-state',
     `INSERT INTO identity_provider_connections
        (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
      SELECT $1, $2, 'workos', $3, 'active', $4
@@ -462,4 +711,84 @@ export async function ensureActiveConnection(tenantId: string | null): Promise<v
       testIssuer(),
     ],
   );
+}
+
+/**
+ * FBL-020-R4 §2 — THE SESSION A FIXTURE PRESENTS.
+ *
+ * Migration 057 makes an ALLOW that names no presented session unrepresentable, and
+ * the policy engine derives the credential facts it records from that session's row.
+ * A fixture that authorizes somebody therefore has to authenticate them too, which is
+ * the point: the old fixtures asserted allows for actors who had never presented a
+ * credential, so the suite could not have noticed evidence going missing.
+ *
+ * Idempotent against `resetDatabase`: it looks for a live session first and seeds one
+ * only when there is none, so the helper holds no state that a truncation invalidates.
+ * Returns null when the link cannot hold a session at all (not activated, or not
+ * bound) — a deliberate ghost actor stays a ghost.
+ */
+export async function presentedSessionFor(userLinkId: string): Promise<string | null> {
+  const live = await query(
+    `SELECT session_id FROM identity_sessions
+      WHERE user_link_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
+      ORDER BY auth_time DESC LIMIT 1`,
+    [userLinkId],
+  );
+  if (live.rows.length > 0) return String((live.rows[0] as Record<string, unknown>).session_id);
+  try {
+    return (await seedLocalSession(userLinkId)).sessionId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wraps a policy engine so a fixture that does not name a session presents the actor's
+ * own live one. It NEVER overrides an explicit `sessionId` (including an explicit
+ * null), so a test that is about the presented credential still controls it exactly.
+ */
+export function withPresentedSession(engine: PolicyEngine): PolicyEngine {
+  return {
+    async decide(input) {
+      if (input.sessionId !== undefined) return engine.decide(input);
+      return engine.decide({
+        ...input,
+        sessionId: await presentedSessionFor(input.actor.userLinkId),
+      });
+    },
+  };
+}
+
+/**
+ * FBL-020-R4 §2.1 — the binding of an EXISTING link, read from the link itself.
+ *
+ * `sessionBindingFor(tenantId, subject)` returns the tenant's connection plus whatever
+ * subject the caller names, which was fine while nothing checked the two against each
+ * other. Migration 057's `is_link_identity_tuple` now does: a session's connection,
+ * issuer, organization and provider subject must all belong to the very link it is
+ * issued to. A fixture that wants a session for a link therefore has to read that
+ * link's own facts rather than restate them, which is exactly what this does.
+ */
+export async function sessionBindingForLink(userLinkId: string): Promise<{
+  connectionId: string;
+  issuer: string;
+  providerOrganizationId: string;
+  providerSubject: string;
+}> {
+  const r = await query(
+    `SELECT connection_id, issuer, provider_organization_id, provider_user_id
+       FROM user_links WHERE user_link_id = $1`,
+    [userLinkId],
+  );
+  if (r.rows.length === 0) throw new Error('no such user link to bind a session to');
+  const row = r.rows[0] as Record<string, unknown>;
+  if (row.connection_id === null || row.issuer === null || row.provider_organization_id === null) {
+    throw new Error('the user link is not bound to a connection yet');
+  }
+  return {
+    connectionId: String(row.connection_id),
+    issuer: String(row.issuer),
+    providerOrganizationId: String(row.provider_organization_id),
+    providerSubject: String(row.provider_user_id),
+  };
 }

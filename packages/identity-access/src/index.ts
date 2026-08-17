@@ -22,3 +22,6 @@ export * from './actor';
 export * from './sealed-cookie';
 export * from './federation';
 export * from './login-transaction';
+export * from './login-admission';
+export * from './audit-inventory';
+export * from './bootstrap';

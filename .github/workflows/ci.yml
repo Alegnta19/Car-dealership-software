@@ -75,13 +75,26 @@ jobs:
       - name: 'Build (workspace builds: api, worker, web, scripts)'
         run: npm run build
 
-      - name: Worker shell smoke test
+      # The worker's wiring, proved WITHOUT a schema: --list-jobs touches no database, so
+      # this step also proves the job registry is reachable from the compiled entry point
+      # before migrations have run.
+      - name: Worker job registry smoke test
         run: |
-          node apps/worker/dist/main.js | tee artifacts/worker-smoke.txt
-          grep -q 'no jobs registered' artifacts/worker-smoke.txt
+          set -o pipefail
+          node apps/worker/dist/main.js --list-jobs | tee artifacts/worker-smoke.txt
+          grep -q 'identity.support_access.expiry' artifacts/worker-smoke.txt
 
       - name: Migrations apply from an empty database
         run: npm run migrate
+
+      # …and the job's REAL pass, against the migrated database, from the compiled output.
+      # FBL-020-R4 §4: the expiry transition must be production-reachable, so CI runs the
+      # very entry point the deployment runs rather than asserting that a function exists.
+      - name: Worker support-expiry pass (compiled, against the real schema)
+        run: |
+          set -o pipefail
+          node apps/worker/dist/main.js --once 2>&1 | tee artifacts/worker-expiry-pass.txt
+          grep -q '"mode":"once"' artifacts/worker-expiry-pass.txt
 
       - name: Migration idempotency (second run applies nothing)
         run: |
@@ -109,8 +122,28 @@ jobs:
           npx tsx --test --test-concurrency=1 --test-reporter=tap --test-reporter-destination=stdout \
             tests/*.test.ts 2>&1 | tee artifacts/test-output.log
 
-      - name: Enforce test summary (non-empty; failed=0; skipped=0)
+      # FBL-020-R4 §7: all eight summary fields REQUIRED (`todo` among them, which R3 read
+      # but did not require), and the run must be at least as large as the declared floors.
+      # A suite that SHRANK is the commonest way coverage silently disappears, and it is
+      # invisible in a green log.
+      - name: Enforce test summary (all eight fields, floors, zero failed/cancelled/skipped/todo)
         run: npx tsx scripts/parse-test-summary.ts artifacts/test-output.log artifacts/test-summary.json
+
+      - name: Requirement map (every R4 requirement resolves to tests that exist)
+        run: |
+          set -o pipefail
+          npx tsx scripts/check-requirement-map.ts --out artifacts/requirement-map-check.txt
+
+      # FBL-020-R4 §7: the suite being green is not evidence that the suite is HOLDING
+      # anything — R3's review found a test that passed with a security predicate deleted.
+      # Each control is removed in an isolated copy of the tree and its named test must
+      # die. A mutation that survives fails the job.
+      - name: Mutation-kill checks (isolated copy of the tree)
+        run: |
+          set -o pipefail
+          npx tsx scripts/mutation-kill.ts --out artifacts/mutation-kill.json \
+            --log artifacts/mutation-kill.txt
+          grep -q '"mutations_survived": 0' artifacts/mutation-kill.json
 
       - name: Schema fingerprint (fresh chain)
         run: |
@@ -128,8 +161,9 @@ jobs:
       - name: Evidence completeness (every required artifact exists and is non-empty)
         run: |
           for f in tool-versions.txt migrate-second-run.log migration-manifest.json healthz.json \
-                   worker-smoke.txt \
+                   worker-smoke.txt worker-expiry-pass.txt \
                    test-output.log test-summary.json schema-fingerprint.json schema-fingerprint.txt \
+                   requirement-map-check.txt mutation-kill.json mutation-kill.txt \
                    npm-audit.json sbom.cdx.json; do
             test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }
           done
@@ -141,8 +175,24 @@ jobs:
           name: baseline-evidence
           path: artifacts/
 
+  # FBL-020-R4 §6 — THE UPGRADE JOB NOW PROVES SOMETHING.
+  #
+  # Until R4 this job seeded Fixed Ops rows only, and scripts/verify-upgrade-state.ts
+  # REQUIRED every identity table to be EMPTY. Migration 057 — a file whose whole
+  # subject is reconciling RETAINED IDENTITY ROWS before it constrains them — was
+  # therefore only ever exercised against zero rows, and every "the constraint would
+  # abort here if it preceded this statement" claim in it was unproven by the gate that
+  # existed to prove it. The R3 report's populated-upgrade claim rested on a local,
+  # prose-only exercise; it was not a CI gate and is not offered as one now.
+  #
+  # The job applies the retained schema, seeds Fixed Ops data, migrates to the last
+  # PRE-057 migration, asserts 055/056 invented no identities (the old assertion, kept
+  # at the point where it is true), seeds NONEMPTY legacy identity data, asserts that
+  # fixture is really there, runs the NEGATIVE CONTROLS on isolated copies, applies 057,
+  # and asserts the exact reconciled state of every seeded row plus nonzero and
+  # unchanged before/after counts. Then it compares fresh and upgraded fingerprints.
   migration-upgrade:
-    name: upgrade from earliest retained schema fixture
+    name: populated upgrade drill + reconciliation negative controls
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -181,20 +231,88 @@ jobs:
           set -o pipefail
           MIGRATIONS_DIR=tests/fixtures/schema-f76a27a npm run migrate 2>&1 | tee artifacts/upgrade-log.txt
 
-      - name: Seed legacy data that schema allowed
+      - name: Seed legacy Fixed Ops data that schema allowed
         run: |
           set -o pipefail
-          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync('tests/fixtures/legacy-seed-f76a27a.sql','utf8'));await c.end();console.log('legacy seed applied');})().catch(e=>{console.error(e);process.exit(1);})" 2>&1 | tee -a artifacts/upgrade-log.txt
+          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync(process.argv[1],'utf8'));await c.end();console.log('seed applied: '+process.argv[1]);})().catch(e=>{console.error(e);process.exit(1);})" tests/fixtures/legacy-seed-f76a27a.sql 2>&1 | tee -a artifacts/upgrade-log.txt
 
-      - name: Upgrade to the current head (050..latest on top of legacy data)
+      # The chain UP TO but NOT INCLUDING 057, so the identity fixture can be seeded
+      # against the schema a retained database would actually have had. Staged as a copy
+      # rather than by a new runner flag: MIGRATIONS_DIR already exists for exactly this
+      # (the retained two-file fixture above uses it), the copies are byte-identical, so
+      # the checksum ledger verifies them against migrations/ on the next full run.
+      #
+      # The file count is ASSERTED. When a migration 058 is added this step FAILS, which
+      # forces a decision about which side of the boundary it belongs on instead of
+      # silently seeding against the wrong schema.
+      - name: Stage the pre-057 chain
+        run: |
+          set -o pipefail
+          PRE057="$RUNNER_TEMP/pre057-migrations"
+          mkdir -p "$PRE057"
+          cp migrations/*.sql "$PRE057/"
+          rm -f "$PRE057/057_identity_boundary_completion.sql"
+          ls -1 "$PRE057" | tee artifacts/pre-057-chain.txt
+          test "$(ls -1 "$PRE057" | wc -l)" -eq 9
+          ! grep -q '^057_' artifacts/pre-057-chain.txt
+          echo "PRE057=$PRE057" >> "$GITHUB_ENV"
+
+      - name: Migrate through the last PRE-057 migration (050..056)
+        run: |
+          set -o pipefail
+          MIGRATIONS_DIR="$PRE057" npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+
+      # The assertion the previous version of this job made as its ONLY assertion, kept
+      # at the one point where it is a true statement about 055/056: before any identity
+      # row exists, those migrations must have invented none.
+      - name: Verify the organization backfill invented no identities (phase=backfill)
+        run: |
+          set -o pipefail
+          npx tsx scripts/verify-upgrade-state.ts --phase=backfill \
+            --out artifacts/upgrade-backfill.json | tee artifacts/upgrade-backfill.txt
+
+      - name: Seed NONEMPTY legacy identity data (pre-057 schema)
+        run: |
+          set -o pipefail
+          node -e "const{readFileSync}=require('fs');const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(readFileSync(process.argv[1],'utf8'));await c.end();console.log('seed applied: '+process.argv[1]);})().catch(e=>{console.error(e);process.exit(1);})" tests/fixtures/legacy-identity-seed-pre-057.sql 2>&1 | tee -a artifacts/upgrade-log.txt
+
+      # An empty or partial fixture can no longer be mistaken for a pass: this step
+      # fails if ANY identity table is empty, and records the exact census 057 will be
+      # measured against.
+      - name: Verify the identity fixture is present and NONEMPTY (phase=pre-057)
+        run: |
+          set -o pipefail
+          npx tsx scripts/verify-upgrade-state.ts --phase=pre-057 \
+            --out artifacts/identity-pre-057.json | tee artifacts/identity-pre-057.txt
+          grep -q '"result": "OK"' artifacts/identity-pre-057.json
+
+      # THE RECONCILIATIONS ARE PROVED LOAD-BEARING, IN CI, NOT BY HAND. Each control
+      # copies this database (CREATE DATABASE … TEMPLATE), deletes ONE reconciliation
+      # from 057, and requires the intended refusal — a named Postgres constraint, or a
+      # named verifier assertion. A control whose removal changes nothing FAILS the job.
+      - name: Reconciliation negative controls (isolated copies of the pre-057 database)
+        run: |
+          set -o pipefail
+          npx tsx scripts/upgrade-negative-controls.ts \
+            --before artifacts/identity-pre-057.json \
+            --out artifacts/negative-controls.json \
+            --log artifacts/negative-controls.txt
+          grep -q '"controls_failed": 0' artifacts/negative-controls.json
+
+      - name: Apply 057 on top of the populated legacy data
         run: |
           set -o pipefail
           npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
 
-      - name: Legacy-seed survival and NOT VALID constraint state
+      # The reconciled state, row by row, plus nonzero and UNCHANGED before/after counts:
+      # 057 reconciles by changing state, never by deleting the evidence of a problem.
+      - name: Verify the reconciled state and before/after counts (phase=post-057)
         run: |
           set -o pipefail
-          npx tsx scripts/verify-upgrade-state.ts | tee artifacts/constraint-state.txt
+          npx tsx scripts/verify-upgrade-state.ts --phase=post-057 \
+            --before artifacts/identity-pre-057.json \
+            --out artifacts/identity-post-057.json | tee artifacts/constraint-state.txt
+          grep -q '"result": "OK"' artifacts/identity-post-057.json
 
       - name: Fingerprint the upgraded schema
         run: |
@@ -233,6 +351,9 @@ jobs:
       - name: Evidence completeness (every required artifact exists and is non-empty)
         run: |
           for f in fixture-checksums.json upgrade-log.txt constraint-state.txt \
+                   pre-057-chain.txt upgrade-backfill.txt upgrade-backfill.json \
+                   identity-pre-057.txt identity-pre-057.json identity-post-057.json \
+                   negative-controls.txt negative-controls.json \
                    upgraded-schema-fingerprint.json fresh-schema-fingerprint.json \
                    fingerprint-equality.txt upgraded-healthz.json; do
             test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }

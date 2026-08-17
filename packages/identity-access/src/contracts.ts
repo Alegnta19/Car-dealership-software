@@ -76,6 +76,46 @@ export const PLATFORM_SUPPORT_AUTHORITY_ROLES = [
 ] as const;
 
 /**
+ * FBL-020-R4 §3 — WHEN AN MFA-POLICY CERTIFICATION ACTUALLY COUNTS.
+ *
+ * R3 stored `mfa_policy_certified` as a bare boolean with an attribution date and
+ * nothing else, so a certification made once was true for ever: there was no
+ * deadline to re-confirm it against and no way to withdraw it except by flipping
+ * the same boolean back. A high-assurance step-up therefore rested on a fact that
+ * could be arbitrarily stale, and "the organization still requires MFA" is exactly
+ * the kind of external fact that goes out of date without telling anybody.
+ *
+ * FOUR conditions, all required, evaluated by the DATABASE at the instant of use:
+ * the flag is set, the certification is dated, it has not been revoked, and its
+ * validity deadline is still in the future. Missing, false, revoked and expired are
+ * therefore ONE answer — not certified — and every one of them fails CLOSED.
+ *
+ * It is written ONCE, here, and interpolated by every reader (connection
+ * resolution, the reauthentication completion, the assurance classifier and the
+ * presented-credential read) precisely so those four readers cannot drift into
+ * four different opinions about what "certified" means. `c` is the
+ * identity_provider_connections alias every one of them uses.
+ */
+export const EFFECTIVE_MFA_CERTIFICATION_SQL = `(
+       c.mfa_policy_certified
+   AND c.mfa_policy_certified_at IS NOT NULL
+   AND c.mfa_policy_certification_revoked_at IS NULL
+   AND c.mfa_policy_certification_expires_at IS NOT NULL
+   AND c.mfa_policy_certification_expires_at > NOW()
+  )`;
+
+/**
+ * How long ONE certification is good for unless the certifying administrator
+ * names something shorter. Bounded deliberately: a certification that outlived
+ * the review cycle it came from would be indistinguishable from one nobody has
+ * looked at in years.
+ */
+export const DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS = 90 * 24 * 3600;
+
+/** The hard ceiling on a caller-chosen validity window (one year). */
+export const MAX_MFA_CERTIFICATION_VALIDITY_SECONDS = 365 * 24 * 3600;
+
+/**
  * FBL-020-R3 — provider-neutral IMPERSONATION classification.
  *
  * A provider may let its own staff act as one of our users (WorkOS calls this

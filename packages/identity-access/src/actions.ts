@@ -39,6 +39,20 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     sensitive: true,
   },
   {
+    action: 'identity.connection.certify_mfa_policy',
+    description: "Certify (or withdraw) the organization's MFA policy on a provider connection",
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+    sensitive: true,
+  },
+  {
+    action: 'platform.connection.certify_mfa_policy',
+    description: 'Certify a PLATFORM-scope provider connection MFA policy',
+    resourceType: null,
+    allowedRoles: [PLATFORM_ADMIN_ROLE],
+    sensitive: true,
+  },
+  {
     action: 'identity.support.approve',
     description: 'Approve or deny a pending support-access request',
     resourceType: null,

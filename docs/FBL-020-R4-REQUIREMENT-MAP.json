@@ -1,0 +1,678 @@
+{
+  "order": "FBL-020-R4",
+  "purpose": "Machine-readable mapping from every FBL-020-R4 requirement to the named tests and CI gates that prove it. scripts/check-requirement-map.ts verifies that every named test EXISTS verbatim in the named file and that every named script, fixture and CI step exists, so this file cannot rot into a claim about tests that were renamed or deleted. tests/ci-gates.test.ts runs that check inside the suite.",
+  "governing_document": {
+    "status": "IN HAND AND VERIFIED",
+    "title": "Dealership Management & Sales Cloud — Master Architecture Blueprint and Forward-Only Roadmap",
+    "version_line": "Version 2.0  |  August 4, 2026  |  Governing management-first baseline",
+    "file": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+    "file_sha256": "556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+    "section_governing_fbl_020": "14.3",
+    "section_14_3_heading": "14.3 First active instruction — FBL-020-R2",
+    "superseded_document": {
+      "title": "Car Dealership SaaS — Repository Assessment and Industrial Platform Blueprint",
+      "version_line": "Version 1.0  |  July 30, 2026  |  Architecture baseline",
+      "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
+      "file_sha256": "d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9",
+      "section_governing_fbl_020": "14.5",
+      "section_14_5_heading": "14.5 Work Order FBL-020 — Identity and Organization"
+    },
+    "note": "The DOCX in hand governs FBL-020 at §14.3 and names revision R2. R3 and R4 are architect-issued correction orders delivered as order text, not as sections of either DOCX; neither document contains the word R4. See docs/FBL-020-DELIVERY-REPORT.md §0."
+  },
+  "requirements": [
+    {
+      "id": "R4-§0-census",
+      "requirement": "Establish whether any persistent environment has applied migration 057, and therefore whether 057 may be corrected in place.",
+      "verdict": "DISCHARGED by the architect: no persistent environment has ever applied 057, so it is corrected in place and no 058 is required for that reason.",
+      "proof_kind": "architect finding",
+      "tests": []
+    },
+    {
+      "id": "R4-§0-ledger",
+      "requirement": "The migration ledger must record WHAT was applied, not merely that something was, so a migration whose body changed after application cannot be silently skipped.",
+      "code": ["scripts/migrate.ts"],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the recorded checksum is the CANONICAL-LF digest, identical on Windows and in CI"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a CHANGED body of an applied migration REFUSES the run, names the file and both digests"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a row that predates the column stays NULL: no checksum is invented for it"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the ledger refuses a malformed digest and a digest with no algorithm"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "every migration in this repository is recorded under its committed canonical digest"
+        }
+      ]
+    },
+    {
+      "id": "R4-§1-login-admission",
+      "requirement": "Login admission happens in one call at the wire: the transaction claim requires the opaque handle and the exact redirect, refusals are indistinguishable, absence is never agreement, and a pending link creates no privilege.",
+      "code": [
+        "packages/identity-access/src/login-admission.ts",
+        "packages/identity-access/src/login-transaction.ts",
+        "apps/api/src/routes/auth.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a successful callback establishes a session that authenticates the next request"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the login transaction claim requires the OPAQUE HANDLE and the exact redirect"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the refusals are INDISTINGUISHABLE from one another at the wire — every one of them"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "exchangeMatchesVerifiedToken treats ABSENCE as disagreement, never as agreement"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "admitLoginIdentity refuses a PENDING link and creates no privilege"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a BOUND but PENDING link is refused — binding is provenance, not authority",
+          "added_by": "R4 §7, after scripts/mutation-kill.ts reported the pending_link_admitted mutation as SURVIVING against the test above"
+        }
+      ]
+    },
+    {
+      "id": "R4-§2-identity-tuple",
+      "requirement": "The identity tuple is enforced by the database as composite foreign keys, so a partial or cross-tenant tuple is refused by Postgres rather than by convention.",
+      "code": ["migrations/057_identity_boundary_completion.sql"],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED user link cannot be bound to another tenant’s connection"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a PLATFORM-scope link cannot bind to a dealership connection"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED link cannot claim an issuer or organization its connection lacks"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED link cannot be PARTIALLY bound"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a LIVE session cannot claim a provider subject its link does not have"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a LIVE session cannot claim a tenant, issuer or organization off its link"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a STARTED reauthentication cannot name a session that is not its own identity"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a GRANT cannot claim a different tenant, person or action than its transaction"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the nil UUID can never be a tenant id, so it can stand for platform scope"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support access cannot cross a tenant: the session, and the approving grant"
+        }
+      ]
+    },
+    {
+      "id": "R4-§2-policy-evidence-version",
+      "requirement": "A new policy decision cannot be written incomplete: evidence_version 2 requires the presented credential group, the identified actor group and the authority the allow relied on, and a BEFORE INSERT floor refuses a new row at the historic version.",
+      "code": [
+        "migrations/057_identity_boundary_completion.sql",
+        "packages/identity-access/src/policy.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the COMPLETE version-2 allow is accepted, and lands at the current version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a NEW decision missing ANY required evidence is refused"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ALLOW cannot omit the credential group ENTIRELY"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a DENY may record that no credential was presented — and still not half of one"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a new decision cannot opt back into the WEAKER historic version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a HISTORIC version-1 row stays legal, readable, and append-only"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support-access evidence is all three facts or none"
+        }
+      ]
+    },
+    {
+      "id": "R4-§3-reauthentication-authority",
+      "requirement": "The reauthentication row is the authority on its own callback; every provider-side failure reaches exactly one explained terminal state with one audit event; MFA-policy certification fails closed when false, missing, expired or revoked, and only an authorized administrative actor may certify it.",
+      "code": [
+        "packages/identity-access/src/reauthentication.ts",
+        "packages/identity-access/src/audit-inventory.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the login claim requires the OPAQUE HANDLE and the EXACT redirect"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the reauthentication ROW is authoritative for handle, callback, correlation, digests and binding"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "an UNCLAIMED transaction cannot be completed — the claim is not optional"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "every provider-side failure reaches exactly ONE terminal state and ONE audit event"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the expiry sweep records WHY and WHEN, and audits each transaction once"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "MFA certification fails CLOSED when false, missing, expired or revoked"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "only an AUTHORIZED administrative actor may certify an MFA policy"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "a refresh reply naming a DIFFERENT provider session revokes instead of being adopted"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "a refresh PRESERVES the original local expiry and never slides it later"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the audit inventory is complete, and every transition in it writes its event"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the support-use inventory entry names the event the policy engine actually writes"
+        }
+      ]
+    },
+    {
+      "id": "R4-§3-audit-inventory",
+      "requirement": "The identity audit inventory is COMPLETE over the identity. namespace, as far as a static resolver can read the event type, rather than a subset that claims to be complete: every audit event type production code writes is either an inventory entry, mapped to its transition and to a proof file and proof name that exist, or a declared non-audit literal carrying the reason it is not an event; an audit write from an undeclared file is refused. An ASSEMBLED event type is refused only when the shared resolver (scripts/static-string-resolver.ts) can render it or name the unreadable piece. A value crossing a function boundary with an unreadable root, array mutation other than push, and a name formed from object KEYS are NOT seen and pass unlisted; that residue is stated in docs/identity/KNOWN-LIMITATIONS.md and demonstrated by architecture/fixtures/audit-inventory-residue, which the gate is asserted to ACCEPT. An earlier revision of this requirement asserted that run-time assembly was refused without qualification; that was false, and it shipped inside the very artifact meant to stop claims rotting.",
+      "code": [
+        "packages/identity-access/src/audit-inventory.ts",
+        "scripts/check-audit-inventory.ts",
+        "architecture/fixtures/audit-inventory-gap",
+        "architecture/fixtures/audit-inventory-declared",
+        "scripts/static-string-resolver.ts",
+        "architecture/fixtures/audit-inventory-assembly",
+        "architecture/fixtures/audit-inventory-residue",
+        "tests/audit-inventory-rules.test.ts"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Architecture check (dependency rules, ownership manifest, env confinement)"],
+      "tests": [
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the real repository passes the audit-inventory gate"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "EVERY way of writing an uninventoried audit event is REJECTED, each by its own rule"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "a file naming only DECLARED event types is ACCEPTED — the gate is not simply always red"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the gate is part of npm run architecture:check"
+        },
+        {
+          "file": "tests/identity-core.test.ts",
+          "name": "a REFUSED login is audited, in both branches that refuse one"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "EVERY assembly spelling the shared resolver reads is REJECTED, and none passes silently"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the residue the gate cannot see is ACCEPTED, and named in the documents"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "both gates import ONE static string resolver, and neither keeps a private copy"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the BASELINE declaration is clean, so every perturbation below is the cause"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the REAL declaration is clean — the same rules, on the shipped inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: inventory-proof-citation-is-not-verifiable — the NAME must be in that file"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: required-transition-missing-from-inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: audit-event-type-missing-from-inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: inventory-entry-has-no-production-writer"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: audit-writer-declaration-is-stale"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: migration-audit-write-has-no-static-event-type"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the patterns are DERIVED from the declaration, not typed twice"
+        }
+      ]
+    },
+    {
+      "id": "R4-§4-support-context",
+      "requirement": "Active support access is declared non-suppressibly through headers, request context, logs, policy evidence, audit and /auth/session — and the free-text reason lives in exactly one place.",
+      "code": [
+        "packages/identity-access/src/support-access.ts",
+        "packages/platform/src/request-context.ts",
+        "apps/api/src/middleware/request-context.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "EVERY supported response header carries the session AND the expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the request context and every log line carry the whole fact set"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the bound context is NOT suppressible and refuses a second session"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the evidence row and the transactional audit row carry scope, actions and expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "/auth/session declares the grant to the tenant AND to the platform actor"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "/auth/session stays BOUNDED: support facts add no email, profile or token field"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the support REASON lives in exactly one place: its own row"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the header format has ONE writer, and it cannot omit the expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "a request NOT under support access declares nothing"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "a revoked grant disappears from both views immediately"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the logger cannot be talked out of the support facts"
+        }
+      ]
+    },
+    {
+      "id": "R4-§4-support-expiry",
+      "requirement": "A support window closing is a recorded, once-only, idempotent transition that the production worker actually performs, and the database refuses an expiry recorded early or a window claiming both endings.",
+      "code": [
+        "packages/identity-access/src/support-access.ts",
+        "apps/worker/src/index.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Worker support-expiry pass (compiled, against the real schema)"],
+      "tests": [
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a lapsed window is transitioned ONCE, with its version and one audit row"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "repeated processing is idempotent: no second audit row, no second version bump"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "CONCURRENT processors transition each window exactly once"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a LIVE window is not transitioned, and stays visible as an active grant"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a REVOKED window is not re-ended by the processor"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the DATABASE refuses an expiry recorded EARLY"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the DATABASE refuses a window that claims BOTH endings"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the WORKER is where this runs in production"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the batch limit is bounded and validated"
+        }
+      ]
+    },
+    {
+      "id": "R4-§5-owned-mutations",
+      "requirement": "Every organization mutation is attributed, versioned and audited, the repository exports no bare write, and the owned-mutation boundary is enforced by a checker that rejects each reintroduced bypass.",
+      "code": [
+        "packages/organization/src/repository.ts",
+        "packages/identity-access/src/actions.ts",
+        "scripts/check-owned-mutations.ts"
+      ],
+      "proof_kind": "suite + architecture check",
+      "tests": [
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the organization package exports NO write any more"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "creating a unit is attributed, versioned and audited"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "an unattributable create is REFUSED rather than landing unowned"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "archiving a rooftop is a versioned, audited MASS REVOCATION — and it revokes"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a status transition that changes nothing is recorded as nothing"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a department needs its code, and nothing else may carry one"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "fixture bypasses are counted, so the suite can see how many it has"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the real repository passes the owned-mutation guard"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "EVERY reintroduced bypass is REJECTED, each by its own rule"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the sanctioned paths are ACCEPTED — the guard is not simply always red"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a test-side write outside the declared primitive FAILS the guard"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-populated-upgrade",
+      "requirement": "The CI upgrade job applies the retained schema through the last pre-057 migration, seeds NONEMPTY legacy identity data alongside the retained Fixed Ops fixture, applies 057, and verifies deterministic reconciled row states with nonzero before/after counts.",
+      "code": [
+        "tests/fixtures/legacy-identity-seed-pre-057.sql",
+        "scripts/verify-upgrade-state.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "proof_kind": "CI + suite",
+      "ci_steps": [
+        "Stage the pre-057 chain",
+        "Migrate through the last PRE-057 migration (050..056)",
+        "Verify the organization backfill invented no identities (phase=backfill)",
+        "Seed NONEMPTY legacy identity data (pre-057 schema)",
+        "Verify the identity fixture is present and NONEMPTY (phase=pre-057)",
+        "Apply 057 on top of the populated legacy data",
+        "Verify the reconciled state and before/after counts (phase=post-057)"
+      ],
+      "artifacts": [
+        "upgrade-backfill.json",
+        "identity-pre-057.json",
+        "identity-post-057.json",
+        "pre-057-chain.txt"
+      ],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the populated identity fixture exists, is NONEMPTY, and is seeded by CI before 057"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade verifier has three phases and REFUSES to run without one"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade job runs every phase, the negative controls, and gates on their JSON"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-negative-controls",
+      "requirement": "Reconciliation is proved LOAD-BEARING in CI: each critical reconciliation is removed on an isolated copy and the intended constraint or data failure is observed.",
+      "code": ["scripts/upgrade-negative-controls.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI + suite",
+      "ci_steps": ["Reconciliation negative controls (isolated copies of the pre-057 database)"],
+      "artifacts": ["negative-controls.json", "negative-controls.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every negative control names a statement that EXISTS exactly once in migration 057"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "removing a control statement really changes migration 057, and the runner refuses a bad anchor"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-fingerprint-parity",
+      "requirement": "The fresh chain and the upgrade path must produce identical schema fingerprints.",
+      "code": ["scripts/schema-fingerprint.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI",
+      "ci_steps": ["Fingerprints must be identical (fresh chain vs upgrade path)"],
+      "artifacts": [
+        "fresh-schema-fingerprint.json",
+        "upgraded-schema-fingerprint.json",
+        "fingerprint-equality.txt"
+      ],
+      "tests": []
+    },
+    {
+      "id": "R4-§7-test-summary-gate",
+      "requirement": "The test summary parser requires tests, suites, pass, fail, cancelled, skipped, todo AND duration, enforces floors of at least 315 tests and 29 suites, and requires zero failed, cancelled, skipped and todo.",
+      "code": ["scripts/parse-test-summary.ts"],
+      "proof_kind": "suite + CI",
+      "ci_steps": [
+        "Enforce test summary (all eight fields, floors, zero failed/cancelled/skipped/todo)"
+      ],
+      "artifacts": ["test-summary.json"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "all eight summary fields are REQUIRED, todo among them"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a run that SHRANK below the declared floor is refused"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "todo, skipped, cancelled and failed are each independently fatal"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the declared floors never fall below the floors the order fixed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "each floor is bounded by the declarations that actually exist"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-requirement-map",
+      "requirement": "A machine-readable mapping from every R4 requirement to its named tests, checked so it cannot name a test that does not exist.",
+      "code": ["docs/FBL-020-R4-REQUIREMENT-MAP.json", "scripts/check-requirement-map.ts"],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Requirement map (every R4 requirement resolves to tests that exist)"],
+      "artifacts": ["requirement-map-check.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every requirement names tests that exist, and every R4 test file is claimed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a renamed or deleted test BREAKS the map"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-mutation-kill",
+      "requirement": "Targeted mutation-kill checks run in an isolated CI copy and their output is published as an artifact.",
+      "code": ["scripts/mutation-kill.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI + suite",
+      "ci_steps": ["Mutation-kill checks (isolated copy of the tree)"],
+      "artifacts": ["mutation-kill.json", "mutation-kill.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every mutation names code that EXISTS exactly once, in the file it claims"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the mutation-kill job is wired into CI and gates on zero survivors"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-documentation",
+      "requirement": "Documentation tests inspect the ACTUAL delivery report, the runbooks, the README, known-limitations and the governing-order citation; stale claims are removed; figures are pinned to CI artifacts; and no failed mandatory gate is described as residual risk.",
+      "code": [
+        "docs/FBL-020-DELIVERY-REPORT.md",
+        "docs/identity/KNOWN-LIMITATIONS.md",
+        "docs/runbooks/WORKOS-OPERATOR-RUNBOOK.md",
+        "docs/runbooks/TENANT-BOOTSTRAP-RUNBOOK.md",
+        "README.md"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the delivery report cites a governing document this repository can verify"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report is about the revision being delivered, and does not claim an unmeasured CI run"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "a NOT DISCHARGED gate is never filed as residual risk"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the adapter claim is precise: mocked invocation exists, LIVE WorkOS behaviour does not"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every figure the report pins is pinned to a named CI artifact"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report names every migration on disk and every R4 test file"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "known-limitations, the runbooks and the README agree that live certification is BLOCKED"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the runbooks document the operator steps R4 changed"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the README points at the populated upgrade drill and the requirement map"
+        }
+      ]
+    }
+  ]
+}

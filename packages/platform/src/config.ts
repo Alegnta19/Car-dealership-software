@@ -64,6 +64,13 @@ export interface AppConfig {
   readonly shutdownGraceMs: number;
   readonly metricsIntervalMs: number;
   readonly metricsWindowDays: number;
+  /**
+   * FBL-020-R4 §4 — how often the worker records the expiry of lapsed
+   * support-access windows. It bounds how long a closed window can go
+   * UNRECORDED; it never affects when access stops, which is decided by the
+   * session's own `expires_at` on every read.
+   */
+  readonly supportAccessExpiryIntervalMs: number;
   readonly jsonBodyLimit: string;
   readonly logLevel: LogLevel;
   readonly serviceDefaultTimezone: string;
@@ -286,6 +293,10 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     shutdownGraceMs: integer(env, 'SHUTDOWN_GRACE_MS', 30_000, { min: 1_000, max: 600_000 }),
     metricsIntervalMs: integer(env, 'METRICS_INTERVAL_MS', 60_000, { min: 1_000, max: 3_600_000 }),
     metricsWindowDays: integer(env, 'METRICS_WINDOW_DAYS', 30, { min: 1, max: 365 }),
+    supportAccessExpiryIntervalMs: integer(env, 'SUPPORT_ACCESS_EXPIRY_INTERVAL_MS', 60_000, {
+      min: 1_000,
+      max: 3_600_000,
+    }),
     jsonBodyLimit,
     logLevel: logLevelRaw as LogLevel,
     serviceDefaultTimezone: env.SERVICE_DEFAULT_TIMEZONE ?? 'UTC',

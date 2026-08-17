@@ -18,6 +18,8 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/platform/package.json packages/platform/
 COPY packages/database/package.json packages/database/
 COPY packages/fixed-ops/package.json packages/fixed-ops/
+COPY packages/organization/package.json packages/organization/
+COPY packages/identity-access/package.json packages/identity-access/
 COPY packages/test-kit/package.json packages/test-kit/
 COPY packages/ui/package.json packages/ui/
 RUN npm ci --ignore-scripts
@@ -25,8 +27,11 @@ COPY tsconfig.base.json tsconfig.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
-# The image needs the API and the compiled migrate runner; worker/web build in CI, not here.
-RUN npx tsc -b apps/api scripts
+# The image needs the API, the WORKER and the compiled migrate runner. FBL-020-R4 section 4
+# put a real job in the worker (recording expired support-access windows), so the worker is
+# part of the deployment topology now and is built here rather than in CI only. apps/web is
+# still a shell and is still not shipped.
+RUN npx tsc -b apps/api apps/worker scripts
 
 FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS runner
 
@@ -43,6 +48,8 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/platform/package.json packages/platform/
 COPY packages/database/package.json packages/database/
 COPY packages/fixed-ops/package.json packages/fixed-ops/
+COPY packages/organization/package.json packages/organization/
+COPY packages/identity-access/package.json packages/identity-access/
 COPY packages/test-kit/package.json packages/test-kit/
 COPY packages/ui/package.json packages/ui/
 RUN npm ci --ignore-scripts --omit=dev
@@ -51,7 +58,10 @@ COPY --from=builder /app/packages/contracts/dist packages/contracts/dist
 COPY --from=builder /app/packages/platform/dist packages/platform/dist
 COPY --from=builder /app/packages/database/dist packages/database/dist
 COPY --from=builder /app/packages/fixed-ops/dist packages/fixed-ops/dist
+COPY --from=builder /app/packages/organization/dist packages/organization/dist
+COPY --from=builder /app/packages/identity-access/dist packages/identity-access/dist
 COPY --from=builder /app/apps/api/dist apps/api/dist
+COPY --from=builder /app/apps/worker/dist apps/worker/dist
 COPY --from=builder /app/scripts/dist scripts/dist
 # scripts/dist/migrate.js resolves ../../migrations => /app/migrations (dual-layout logic).
 COPY migrations/ ./migrations/

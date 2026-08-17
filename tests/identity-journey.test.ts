@@ -6,6 +6,7 @@ import { after, before, beforeEach, describe, test } from 'node:test';
 import {
   bootstrapAdministrator,
   certifyMfaPolicy,
+  ensureActiveConnection,
   resetDatabase,
   seedRooftopIdentity,
   sessionBindingFor,
@@ -15,10 +16,13 @@ import {
   testOrganizationId,
   type IdentityTestEnv,
   mintReauthGrant,
+  fixtureAuthorizationStateWrite,
+  seedRooftop,
+  seedDealerGroup,
+  seedLegalEntity,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import { ROLES } from '@dealer/contracts';
-import { createRooftop, createDealerGroup, createLegalEntity } from '@dealer/organization';
 import {
   decideSupportAccess,
   activateUserLink,
@@ -119,17 +123,18 @@ describe(
       // ── 1. A legacy tenant exists only as fixed-ops data ──────────────────
       // (Migration 055 already ran on this database; simulate the backfill
       // outcome for a tenant that has retained data: pending, not usable.)
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO tenants (tenant_id, name, status) VALUES ($1, 'Pending configuration', 'pending_configuration')`,
         [tenantId],
       );
-      const group = await createDealerGroup({ tenantId, name: 'Pending configuration' });
-      const entity = await createLegalEntity({
+      const group = await seedDealerGroup({ tenantId, name: 'Pending configuration' });
+      const entity = await seedLegalEntity({
         tenantId,
         dealerGroupId: group.dealerGroupId,
         name: 'Pending configuration',
       });
-      await createRooftop({
+      await seedRooftop({
         tenantId,
         legalEntityId: entity.legalEntityId,
         rooftopId: legacyLocation,
@@ -152,7 +157,15 @@ describe(
         adminEmail: 'admin@delta.example',
       };
       await bootstrapIdentity({ ...bootstrapArgs, apply: false });
-      const afterDryRun = await query(`SELECT COUNT(*)::int AS n FROM user_links`, []);
+      // Scoped to THIS TENANT deliberately (FBL-020-R4 §5). The organization fixtures
+      // that built the legacy world above are attributed now, so a PLATFORM origin
+      // administrator exists in `user_links`; an unqualified count would be asserting
+      // something about the harness rather than about the dry run. What a dry run must
+      // not have written is a link in the tenant being bootstrapped.
+      const afterDryRun = await query(
+        `SELECT COUNT(*)::int AS n FROM user_links WHERE tenant_id = $1`,
+        [tenantId],
+      );
       assert.equal(
         Number((afterDryRun.rows[0] as { n: number }).n),
         0,
@@ -193,9 +206,21 @@ describe(
       );
 
       // The administrator activates the chain the runbook describes.
-      await query(`UPDATE dealer_groups SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
-      await query(`UPDATE legal_entities SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
-      await query(`UPDATE rooftops SET status = 'active' WHERE tenant_id = $1`, [tenantId]);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE dealer_groups SET status = 'active' WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE legal_entities SET status = 'active' WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'active' WHERE tenant_id = $1`,
+        [tenantId],
+      );
 
       // ── 6b. tenant_admin is NOT a service role: deny by default holds ─────
       const adminWrite = await call(adminToken, 'POST', '/api/service/appointments', {
@@ -362,6 +387,25 @@ describe(
         /auth%2Freauth%2Fcallback|auth\/reauth\/callback/,
         'the reauthentication authorization URL must redirect to /auth/reauth/callback',
       );
+      // FBL-020-R4 §2.5: the step-up PRE-CHECK is a real authorization decision about a
+      // real person on a real credential, and it used to pass the engine no session at
+      // all — so the one decision taken immediately before a step-up recorded no
+      // presented session, no authentication instant, no connection and no provider
+      // subject. Its evidence row must now name all four.
+      const preCheck = await query(
+        `SELECT session_id, auth_time, connection_id, actor_provider_subject, evidence_version
+           FROM policy_decisions
+          WHERE action = 'service.ro.transition' AND decision = 'allow'
+          ORDER BY occurred_at DESC LIMIT 1`,
+      );
+      assert.equal(preCheck.rows.length, 1, 'the pre-check wrote its evidence');
+      const preCheckRow = preCheck.rows[0] as Record<string, unknown>;
+      assert.notEqual(preCheckRow.session_id, null, 'the reauth pre-check names its session');
+      assert.notEqual(preCheckRow.auth_time, null);
+      assert.notEqual(preCheckRow.connection_id, null);
+      assert.notEqual(preCheckRow.actor_provider_subject, null);
+      assert.equal(Number(preCheckRow.evidence_version), 2);
+
       const txn = await query(
         `SELECT reauth_txn_id FROM reauthentication_transactions WHERE reauth_txn_id = $1`,
         [started.body!.data.reauth_txn_id],
@@ -430,12 +474,12 @@ describe(
       // R2: the platform connection must exist BEFORE the platform support
       // identity can be activated — activation binds a link to exactly one
       // active connection, and there is nothing to bind to otherwise.
-      await query(
-        `INSERT INTO identity_provider_connections
-         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
-       VALUES ('platform', NULL, 'workos', 'org_platform_support', 'active', $1)`,
-        [testIssuer()],
-      );
+      // FBL-020-R4 §5: through the shared helper rather than a raw INSERT. Migration 055
+      // permits exactly ONE active platform connection (`uq_ipc_active`, NULLS NOT
+      // DISTINCT), and the attributed organization fixtures above already established
+      // it — so a second hand-written one is not "seeding", it is a unique-constraint
+      // violation. The helper is idempotent and returns the one that exists.
+      await ensureActiveConnection(null);
       const supportBinding = await sessionBindingFor(null);
       const supportLink = await observeUserLinkOnLogin({
         tenantId: null,
@@ -463,7 +507,10 @@ describe(
       });
       const supportToken = await env.issuer.signAccessToken({
         sub: 'user_support',
-        org_id: 'org_platform_support',
+        // The organization the ONE active platform connection actually names: the token's
+        // org_id is a mapping input the middleware compares against the connection, so it
+        // has to be read rather than asserted.
+        org_id: supportBinding.providerOrganizationId,
       });
 
       // platform identity alone reaches NOTHING in the tenant
@@ -598,7 +645,8 @@ describe(
       }
 
       // ── 14c. R1: disabling the provider connection denies the next request
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
         [tenantId],
       );
@@ -607,7 +655,8 @@ describe(
         401,
         'a disabled provider connection denies the very next request',
       );
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_provider_connections SET status = 'active' WHERE tenant_id = $1`,
         [tenantId],
       );
@@ -693,8 +742,12 @@ describe(
       expectedTxnId: string,
       connectionId: string,
     ): Promise<string | null> {
-      const { completeReauthentication, oidcNonceDigest, openCookiePayload } =
-        await import('@dealer/identity-access');
+      const {
+        claimReauthentication,
+        completeReauthentication,
+        oidcNonceDigest,
+        openCookiePayload,
+      } = await import('@dealer/identity-access');
       assert.ok(setCookieHeader, 'the reauth start must seal a transaction cookie');
       const match = /dealer_reauth_txn=([^;,]+)/.exec(setCookieHeader);
       assert.ok(match, 'the sealed reauth transaction cookie must be present');
@@ -703,6 +756,19 @@ describe(
       assert.ok(payload, 'the sealed cookie must open with the configured cookie password');
       assert.equal(payload.purpose, 'reauth');
       const nonce = String(payload.nonce);
+
+      // FBL-020-R4 §3: the round trip is CLAIMED against the SERVER ROW before it
+      // can be completed — handle, OAuth state, PKCE verifier and the exact
+      // callback URI, all compared to what the START stored, exactly once. The
+      // state and the verifier in this cookie were generated by the START, not by
+      // the route, which is the correction: they are digests on the row now.
+      const claimed = await claimReauthentication({
+        nonce,
+        state: String(payload.state),
+        codeVerifier: String(payload.code_verifier),
+        callbackUri: 'http://127.0.0.1:3000/auth/reauth/callback',
+      });
+      assert.ok(claimed, 'the step-up callback must claim its own server-side state');
 
       // What a real verified token would carry — read from the CONNECTION and
       // the USER LINK, never from the transaction row we are about to test.

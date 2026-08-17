@@ -28,8 +28,14 @@
  */
 import { randomUUID } from 'node:crypto';
 import { withTransaction, type Executor } from '@dealer/database';
+// Types only. The organization package owns the hierarchy's vocabulary; this module
+// owns the WRITES to it (see the organization-unit section below), and taking the
+// level and status types from their owner keeps one definition of each.
+import type { OrganizationLevel, OrgUnitStatus } from '@dealer/organization';
 import {
+  DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS,
   IDENTITY_PROVIDER_WORKOS,
+  MAX_MFA_CERTIFICATION_VALIDITY_SECONDS,
   type ActorScope,
   type IdentityProviderKind,
   type SupportAccessRequest,
@@ -62,6 +68,17 @@ export class UnattributableMutationError extends Error {}
  * bound at (FBL-020-R3 correction B3).
  */
 export class RoleScopeMismatchError extends Error {}
+
+/**
+ * FBL-020-R4 §3 — raised when the acting person EXISTS but holds no authority
+ * for the mutation they asked for.
+ *
+ * Distinct from `UnattributableMutationError` on purpose: "nobody performed
+ * this" and "this person may not perform this" are different facts, and the
+ * second one is the one that must never quietly succeed. It carries no detail
+ * about which binding was missing — the caller learns only that it was refused.
+ */
+export class MutationAuthorityError extends Error {}
 
 /**
  * The catalog THIS package publishes — the very data the policy engine decides
@@ -283,6 +300,241 @@ export async function changeOrganizationStatus(input: {
   });
 }
 
+// ── ORGANIZATION UNITS (group / entity / rooftop / department) ─────────────
+
+/**
+ * FBL-020-R4 §5 — THE ORGANIZATION UNITS BECOME OWNED MUTATIONS, AND THIS IS THE
+ * WHOLE POINT OF THE SECTION.
+ *
+ * `@dealer/organization`'s repository exported `createDealerGroup`,
+ * `createLegalEntity`, `createRooftop`, `createDepartment` and `setUnitStatus`:
+ * production exports that wrote authorization state with NO acting actor, NO
+ * audit row and NO version advance. That these tables ARE authorization state is
+ * not a matter of opinion — the policy engine's `resolveAncestry` denies every
+ * decision whose ancestry chain contains one ineffective node, so archiving a
+ * rooftop revokes every binding scoped beneath it. `setUnitStatus('archived')`
+ * was therefore a mass revocation that nobody performed, nothing recorded and no
+ * version moved for; and creating a node with `status: 'active'` was the reverse.
+ *
+ * They now obey the same three-part contract as every other mutation in this
+ * file: an existing true actor, an advancing `authorization_version`, and exactly
+ * one `audit_events` row in the same transaction.
+ *
+ * WHY HERE AND NOT IN `@dealer/organization`. The contract needs `requireActor`
+ * and `recordMutation`, which live in this module, and `@dealer/organization` may
+ * not depend on this package — identity-access depends on IT (the policy engine
+ * reads `resolveAncestry`), so the reverse edge would be a cycle the architecture
+ * gate is right to refuse. `createOrganization` (the tenant) has been here since
+ * R3 for exactly this reason; its four children now join it.
+ *
+ * The SQL is written out per level rather than assembled from a table map. Four
+ * literal statements are longer than one interpolated one and they are worth it:
+ * every write to these tables is then greppable, and the owned-mutation guard
+ * (scripts/check-owned-mutations.ts) can see each statement as written instead of
+ * having to resolve a lookup.
+ */
+export type OrganizationUnitLevel = Exclude<OrganizationLevel, 'tenant'>;
+
+export interface OrganizationUnitMutation extends MutationResult {
+  readonly tenantId: string;
+  readonly level: OrganizationUnitLevel;
+  readonly unitId: string;
+  readonly status: OrgUnitStatus;
+}
+
+/** Which parent a level requires, so a missing one is refused before the write. */
+const UNIT_PARENT: Record<OrganizationUnitLevel, OrganizationUnitLevel | 'tenant'> = {
+  dealer_group: 'tenant',
+  legal_entity: 'dealer_group',
+  rooftop: 'legal_entity',
+  department: 'rooftop',
+};
+
+/**
+ * Creates one organization unit, attributed and versioned.
+ *
+ * `parentId` is the id of the node one level up (the tenant's own id at
+ * dealer_group level). It is REQUIRED: migration 055's composite
+ * `(tenant_id, parent_id)` foreign keys make a cross-tenant parent a database
+ * error, and this signature makes a MISSING one a refusal rather than a NULL that
+ * some column default might paper over.
+ */
+export async function createOrganizationUnit(input: {
+  actingUserLinkId: string;
+  tenantId: string;
+  level: OrganizationUnitLevel;
+  parentId: string;
+  name: string;
+  /** Departments carry a code; every other level must not name one. */
+  code?: string | null;
+  unitId?: string;
+  status?: OrgUnitStatus;
+}): Promise<OrganizationUnitMutation> {
+  const status: OrgUnitStatus = input.status ?? 'pending_configuration';
+  if (input.level === 'department') {
+    if (typeof input.code !== 'string' || input.code.length === 0) {
+      throw new Error('a department requires a code');
+    }
+  } else if (input.code !== undefined && input.code !== null) {
+    throw new Error(`a ${input.level} has no code column — refusing to discard the value`);
+  }
+  if (input.level === 'dealer_group' && input.parentId !== input.tenantId) {
+    throw new Error('a dealer group hangs off its own tenant; parentId must be the tenant id');
+  }
+  return withTransaction(async (executor) => {
+    const actor = await requireActor(executor, input.actingUserLinkId);
+    const unitId = input.unitId ?? randomUUID();
+    let created;
+    switch (input.level) {
+      case 'dealer_group':
+        created = await executor.query(
+          `INSERT INTO dealer_groups
+             (dealer_group_id, tenant_id, name, status, created_by_user_link_id,
+              updated_by_user_link_id, authorization_version)
+           VALUES ($1, $2, $3, $4, $5, $5, 1)
+           RETURNING dealer_group_id AS unit_id, status, authorization_version`,
+          [unitId, input.tenantId, input.name, status, actor],
+        );
+        break;
+      case 'legal_entity':
+        created = await executor.query(
+          `INSERT INTO legal_entities
+             (legal_entity_id, tenant_id, dealer_group_id, name, status,
+              created_by_user_link_id, updated_by_user_link_id, authorization_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
+           RETURNING legal_entity_id AS unit_id, status, authorization_version`,
+          [unitId, input.tenantId, input.parentId, input.name, status, actor],
+        );
+        break;
+      case 'rooftop':
+        created = await executor.query(
+          `INSERT INTO rooftops
+             (rooftop_id, tenant_id, legal_entity_id, name, status,
+              created_by_user_link_id, updated_by_user_link_id, authorization_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
+           RETURNING rooftop_id AS unit_id, status, authorization_version`,
+          [unitId, input.tenantId, input.parentId, input.name, status, actor],
+        );
+        break;
+      case 'department':
+        created = await executor.query(
+          `INSERT INTO departments
+             (department_id, tenant_id, rooftop_id, code, name, status,
+              created_by_user_link_id, updated_by_user_link_id, authorization_version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 1)
+           RETURNING department_id AS unit_id, status, authorization_version`,
+          [unitId, input.tenantId, input.parentId, input.code, input.name, status, actor],
+        );
+        break;
+    }
+    const row = created.rows[0] as Row;
+    const result = await recordMutation(executor, {
+      tenantId: input.tenantId,
+      entityType: input.level,
+      entityId: String(row.unit_id),
+      eventType: 'identity.organization_unit.created',
+      actingUserLinkId: actor,
+      authorizationVersion: version(row),
+      details: {
+        level: input.level,
+        status,
+        parent_level: UNIT_PARENT[input.level],
+        parent_id: input.parentId,
+      },
+    });
+    return {
+      ...result,
+      tenantId: input.tenantId,
+      level: input.level,
+      unitId: String(row.unit_id),
+      status: String(row.status) as OrgUnitStatus,
+    };
+  });
+}
+
+/**
+ * Transitions one organization unit's status. There is no delete anywhere in the
+ * hierarchy — retirement IS this transition — and because an ineffective node
+ * breaks the ancestry chain the policy engine walks, this call revokes or restores
+ * the reach of every binding scoped at or beneath the node. That is exactly why it
+ * advances the version and writes an audit row.
+ *
+ * Returns null when no row changed: unknown id, wrong tenant, or the status it
+ * already had. "Nothing happened" must not be recorded as a change.
+ */
+export async function changeOrganizationUnitStatus(input: {
+  actingUserLinkId: string;
+  tenantId: string;
+  level: OrganizationUnitLevel;
+  unitId: string;
+  status: OrgUnitStatus;
+}): Promise<OrganizationUnitMutation | null> {
+  return withTransaction(async (executor) => {
+    const actor = await requireActor(executor, input.actingUserLinkId);
+    let updated;
+    switch (input.level) {
+      case 'dealer_group':
+        updated = await executor.query(
+          `UPDATE dealer_groups
+              SET status = $3, updated_by_user_link_id = $4,
+                  authorization_version = authorization_version + 1
+            WHERE tenant_id = $1 AND dealer_group_id = $2 AND status IS DISTINCT FROM $3
+            RETURNING dealer_group_id AS unit_id, status, authorization_version`,
+          [input.tenantId, input.unitId, input.status, actor],
+        );
+        break;
+      case 'legal_entity':
+        updated = await executor.query(
+          `UPDATE legal_entities
+              SET status = $3, updated_by_user_link_id = $4,
+                  authorization_version = authorization_version + 1
+            WHERE tenant_id = $1 AND legal_entity_id = $2 AND status IS DISTINCT FROM $3
+            RETURNING legal_entity_id AS unit_id, status, authorization_version`,
+          [input.tenantId, input.unitId, input.status, actor],
+        );
+        break;
+      case 'rooftop':
+        updated = await executor.query(
+          `UPDATE rooftops
+              SET status = $3, updated_by_user_link_id = $4,
+                  authorization_version = authorization_version + 1
+            WHERE tenant_id = $1 AND rooftop_id = $2 AND status IS DISTINCT FROM $3
+            RETURNING rooftop_id AS unit_id, status, authorization_version`,
+          [input.tenantId, input.unitId, input.status, actor],
+        );
+        break;
+      case 'department':
+        updated = await executor.query(
+          `UPDATE departments
+              SET status = $3, updated_by_user_link_id = $4,
+                  authorization_version = authorization_version + 1
+            WHERE tenant_id = $1 AND department_id = $2 AND status IS DISTINCT FROM $3
+            RETURNING department_id AS unit_id, status, authorization_version`,
+          [input.tenantId, input.unitId, input.status, actor],
+        );
+        break;
+    }
+    if (updated.rows.length === 0) return null;
+    const row = updated.rows[0] as Row;
+    const result = await recordMutation(executor, {
+      tenantId: input.tenantId,
+      entityType: input.level,
+      entityId: String(row.unit_id),
+      eventType: 'identity.organization_unit.status_changed',
+      actingUserLinkId: actor,
+      authorizationVersion: version(row),
+      details: { level: input.level, status: input.status },
+    });
+    return {
+      ...result,
+      tenantId: input.tenantId,
+      level: input.level,
+      unitId: String(row.unit_id),
+      status: String(row.status) as OrgUnitStatus,
+    };
+  });
+}
+
 // ── PROVIDER MAPPING / ISSUER / MFA CERTIFICATION ──────────────────────────
 
 export interface ProviderConnectionMutation extends MutationResult {
@@ -416,27 +668,148 @@ export async function changeProviderIssuer(input: {
 }
 
 /**
- * Certifies (or withdraws certification of) the organization's MFA policy. The
+ * The MFA-certification authority actions, by the SCOPE of the connection being
+ * certified. Both are published catalog entries, so the gate below reads its
+ * allowed roles from the same data the policy engine decides from.
+ */
+const MFA_CERTIFY_TENANT_ACTION = 'identity.connection.certify_mfa_policy';
+const MFA_CERTIFY_PLATFORM_ACTION = 'platform.connection.certify_mfa_policy';
+
+/**
+ * FBL-020-R4 section 3 — PLATFORM-WIDE authority for a published `platform.*`
+ * action, asked the way the policy engine asks it: a PLATFORM-SCOPE binding in
+ * one of the action's allowed roles, held by an activated, effective platform
+ * link.
+ *
+ * `holdsPlatformSupportAuthority` below is this same shape hard-wired to one
+ * action; this is the general form, and both read `allowedRoles` from the
+ * published definition rather than naming roles inline.
+ */
+async function mayActPlatformWide(
+  executor: Executor,
+  action: string,
+  userLinkId: string,
+): Promise<boolean> {
+  const def = publishedAction(action, true);
+  const r = await executor.query(
+    `SELECT 1
+       FROM role_bindings rb
+       JOIN user_links ul ON ul.user_link_id = rb.user_link_id
+      WHERE rb.user_link_id = $1
+        AND rb.scope_level = 'platform'
+        AND rb.role = ANY($2::text[])
+        AND ${EFFECTIVE_ROLE_BINDING_SQL}
+        AND ul.actor_scope = 'platform'
+        AND ul.status = 'activated'
+        AND ul.effective_from <= NOW()
+        AND (ul.effective_to IS NULL OR ul.effective_to > NOW())
+      LIMIT 1`,
+    [userLinkId, [...def.allowedRoles]],
+  );
+  return r.rows.length > 0;
+}
+
+/**
+ * The connection row an MFA-certification mutation is about to change, LOCKED so
+ * the authority decision and the write cannot straddle a remap.
+ */
+async function lockConnectionForCertification(
+  executor: Executor,
+  connectionId: string,
+): Promise<{ tenantId: string | null } | null> {
+  const found = await executor.query(
+    `SELECT tenant_id FROM identity_provider_connections
+      WHERE connection_id = $1 FOR UPDATE`,
+    [connectionId],
+  );
+  if (found.rows.length === 0) return null;
+  const row = found.rows[0] as Row;
+  return { tenantId: row.tenant_id === null ? null : String(row.tenant_id) };
+}
+
+/**
+ * FBL-020-R4 section 3 — WHO may certify. R3 required only that the acting link
+ * EXIST.
+ *
+ * `requireActor` proves somebody is named; it proves nothing about whether that
+ * somebody is allowed. Certification is the single fact every high-assurance
+ * step-up in the platform rests on, so under R3 any existing user link — the
+ * link of a freshly observed pending identity included — could assert that a
+ * customer's organization enforces MFA. It is now an authorized administrative
+ * act: tenant-wide `tenant_admin` authority in the connection's own tenant, or
+ * platform `platform_admin` authority; a PLATFORM-scope connection admits the
+ * platform authority only, because no tenant administrator owns it.
+ */
+async function requireCertificationAuthority(
+  executor: Executor,
+  actor: string,
+  tenantId: string | null,
+): Promise<void> {
+  if (await mayActPlatformWide(executor, MFA_CERTIFY_PLATFORM_ACTION, actor)) return;
+  if (
+    tenantId !== null &&
+    (await mayActTenantWide(executor, MFA_CERTIFY_TENANT_ACTION, tenantId, actor))
+  ) {
+    return;
+  }
+  throw new MutationAuthorityError(
+    'certifying an organization MFA policy requires administrative authority',
+  );
+}
+
+/**
+ * Certifies the organization's MFA policy for a BOUNDED period. The
  * high-assurance reauthentication path reads this and fails closed without it,
- * so the certification is attributable to a named person and versioned.
+ * so the certification is attributable to a named, AUTHORIZED person, versioned,
+ * and dated at both ends.
+ *
+ * FBL-020-R4 section 3: `certified: false` is no longer the only way back. It
+ * withdraws the flag exactly as before;
+ * `revokeProviderMfaPolicyCertification` records an explicit, attributable
+ * REVOCATION, which is the state migration 057 makes distinguishable from "was
+ * never certified".
  */
 export async function certifyProviderMfaPolicy(input: {
   actingUserLinkId: string;
   connectionId: string;
   certified: boolean;
+  /** How long this certification is good for. Bounded; defaults to 90 days. */
+  validForSeconds?: number;
 }): Promise<ProviderConnectionMutation | null> {
+  const validForSeconds = input.validForSeconds ?? DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS;
+  if (
+    !Number.isFinite(validForSeconds) ||
+    validForSeconds <= 0 ||
+    validForSeconds > MAX_MFA_CERTIFICATION_VALIDITY_SECONDS
+  ) {
+    throw new RangeError('an MFA certification validity window must be positive and bounded');
+  }
   return withTransaction(async (executor) => {
     const actor = await requireActor(executor, input.actingUserLinkId);
+    const connection = await lockConnectionForCertification(executor, input.connectionId);
+    if (connection === null) return null;
+    await requireCertificationAuthority(executor, actor, connection.tenantId);
     const updated = await executor.query(
       `UPDATE identity_provider_connections
           SET mfa_policy_certified = $2,
               mfa_policy_certified_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
               mfa_policy_certified_by_user_link_id = CASE WHEN $2 THEN $3::uuid ELSE NULL END,
+              mfa_policy_certification_expires_at =
+                CASE WHEN $2 THEN NOW() + make_interval(secs => $4) ELSE NULL END,
+              -- A fresh certification CLEARS a previous revocation: the schema
+              -- refuses a row that is simultaneously certified and revoked, and
+              -- re-certifying is exactly the act that supersedes a withdrawal.
+              mfa_policy_certification_revoked_at =
+                CASE WHEN $2 THEN NULL ELSE mfa_policy_certification_revoked_at END,
+              mfa_policy_certification_revoked_by_user_link_id =
+                CASE WHEN $2 THEN NULL
+                     ELSE mfa_policy_certification_revoked_by_user_link_id END,
               updated_by_user_link_id = $3,
               authorization_version = authorization_version + 1
         WHERE connection_id = $1
-        RETURNING connection_id, tenant_id, authorization_version`,
-      [input.connectionId, input.certified, actor],
+        RETURNING connection_id, tenant_id, authorization_version,
+                  mfa_policy_certification_expires_at`,
+      [input.connectionId, input.certified, actor, validForSeconds],
     );
     if (updated.rows.length === 0) return null;
     const row = updated.rows[0] as Row;
@@ -448,7 +821,64 @@ export async function certifyProviderMfaPolicy(input: {
       eventType: 'identity.provider_connection.mfa_policy_certified',
       actingUserLinkId: actor,
       authorizationVersion: version(row),
-      details: { mfa_policy_certified: input.certified },
+      details: {
+        mfa_policy_certified: input.certified,
+        // The DEADLINE is part of the record: a certification whose expiry is
+        // not in the trail cannot be audited for staleness afterwards.
+        certification_expires_at:
+          row.mfa_policy_certification_expires_at === null
+            ? null
+            : ts(row.mfa_policy_certification_expires_at).toISOString(),
+      },
+    });
+    return { ...result, connectionId: input.connectionId, tenantId };
+  });
+}
+
+/**
+ * FBL-020-R4 section 3 — an explicit, attributable WITHDRAWAL of the
+ * certification.
+ *
+ * R3 had no such act. The only way back was to set the same boolean to false,
+ * which is indistinguishable from a connection that was never certified — so
+ * "somebody looked and decided this organization no longer enforces MFA" was
+ * unrecordable. It is a state of its own now, and the schema forbids a revoked
+ * certification from also being in force.
+ */
+export async function revokeProviderMfaPolicyCertification(input: {
+  actingUserLinkId: string;
+  connectionId: string;
+}): Promise<ProviderConnectionMutation | null> {
+  return withTransaction(async (executor) => {
+    const actor = await requireActor(executor, input.actingUserLinkId);
+    const connection = await lockConnectionForCertification(executor, input.connectionId);
+    if (connection === null) return null;
+    await requireCertificationAuthority(executor, actor, connection.tenantId);
+    const updated = await executor.query(
+      `UPDATE identity_provider_connections
+          SET mfa_policy_certified = FALSE,
+              mfa_policy_certified_at = NULL,
+              mfa_policy_certified_by_user_link_id = NULL,
+              mfa_policy_certification_expires_at = NULL,
+              mfa_policy_certification_revoked_at = NOW(),
+              mfa_policy_certification_revoked_by_user_link_id = $2::uuid,
+              updated_by_user_link_id = $2,
+              authorization_version = authorization_version + 1
+        WHERE connection_id = $1
+        RETURNING connection_id, tenant_id, authorization_version`,
+      [input.connectionId, actor],
+    );
+    if (updated.rows.length === 0) return null;
+    const row = updated.rows[0] as Row;
+    const tenantId = row.tenant_id === null ? null : String(row.tenant_id);
+    const result = await recordMutation(executor, {
+      tenantId,
+      entityType: 'identity_provider_connection',
+      entityId: input.connectionId,
+      eventType: 'identity.provider_connection.mfa_policy_certification_revoked',
+      actingUserLinkId: actor,
+      authorizationVersion: version(row),
+      details: { mfa_policy_certified: false, certification_revoked: true },
     });
     return { ...result, connectionId: input.connectionId, tenantId };
   });
@@ -1382,4 +1812,159 @@ export async function revokeSupportSession(input: {
     });
     return true;
   });
+}
+
+// ── SUPPORT ACCESS EXPIRY (the transition nobody was making) ───────────────
+
+/**
+ * FBL-020-R4 §4 — the event type an EXPIRED support window is recorded under.
+ *
+ * Deliberately distinct from `identity.support.revoked`: a revocation names the
+ * person who ended the access early, an expiry names nobody because nobody acted.
+ * Collapsing them would make the trail claim a decision where there was only a
+ * clock.
+ */
+export const SUPPORT_SESSION_EXPIRED_EVENT = 'identity.support.expired';
+
+/** How many lapsed sessions ONE pass will transition. Bounded on purpose. */
+export const SUPPORT_EXPIRY_DEFAULT_BATCH = 200;
+const SUPPORT_EXPIRY_MAX_BATCH = 1000;
+
+/** What the processor reports about ONE recorded expiry. */
+export interface SupportSessionExpiry {
+  readonly supportSessionId: string;
+  readonly requestId: string;
+  readonly tenantId: string;
+  /** The platform-support person whose window closed. */
+  readonly actorUserLinkId: string;
+  readonly expiresAt: Date;
+  readonly expiredAt: Date;
+  /** The version the row now carries — always exactly one more than before. */
+  readonly authorizationVersion: number;
+  /** The single audit row written in the transition's own transaction. */
+  readonly auditEventId: string;
+}
+
+/**
+ * FBL-020-R4 §4 — RECORDS THE EXPIRY OF EVERY LAPSED SUPPORT SESSION, EXACTLY
+ * ONCE, WITH NO QUEUE AND NO OUTBOX.
+ *
+ * WHAT WAS MISSING. `support-access.ts` FILTERED expired sessions out of its
+ * reads and the policy engine did the same, so access stopped at the right
+ * instant — and that was the whole of it. No row changed, no authorization
+ * version advanced, and no audit event was written, so `audit_events` recorded
+ * every support window that a person ended and none that simply ran out. This is
+ * the transition, and it is the only writer of `expired_at`.
+ *
+ * HOW EXACTLY-ONCE IS OBTAINED WITHOUT A QUEUE. The claim and the transition are
+ * ONE statement: `expired_at IS NULL` is both the predicate that selects the work
+ * and the predicate the write invalidates, so the row leaves the claim set by
+ * being processed, under the row lock the UPDATE itself holds until it commits.
+ * Two things follow, and they are the two properties the order demands:
+ *
+ *   - REPETITION is idempotent: a second pass finds `expired_at IS NOT NULL` and
+ *     matches nothing, so it writes no second audit row and advances no version.
+ *   - CONCURRENCY is safe for THE SAME REASON, not a different one: the loser of a
+ *     race re-checks `expired_at IS NULL` against the row as the winner left it and
+ *     matches zero rows.
+ *
+ * `FOR UPDATE SKIP LOCKED` sits on top of that as a LIVENESS choice, and it is
+ * worth being exact about what it does and does not buy — it stops N workers from
+ * convoying behind one row, and nothing more. Removing it was MEASURED: every
+ * assertion in `tests/support-expiry.test.ts` still passes without it, including the
+ * concurrent one, because READ COMMITTED re-evaluates the predicate after a lock
+ * wait. Removing the `expired_at IS NULL` predicate instead fails both the
+ * idempotency test and the concurrency test. That is the honest statement of where
+ * the correctness lives, and it is written here so the next reader does not mistake
+ * the throughput hint for the guarantee.
+ *
+ * WHY THE AUDIT ROW NAMES NO ACTOR. `actor_user_id` is NULL and the details say
+ * `actor_type: 'system'`. Attributing a clock to a person would be a lie of
+ * exactly the kind the attribution rules exist to prevent, and the platform actor
+ * whose window closed is recorded as the SUBJECT of the event (`actor_user_link_id`
+ * in the details), not as its author. The row is still written in the SAME
+ * transaction as the transition, so a recorded expiry without its audit event —
+ * or an audit event for a transition that rolled back — is not a reachable state.
+ *
+ * The free-text support reason is not read, not joined and not recorded.
+ */
+export async function expireDueSupportSessions(options?: {
+  limit?: number;
+}): Promise<SupportSessionExpiry[]> {
+  const requested = options?.limit ?? SUPPORT_EXPIRY_DEFAULT_BATCH;
+  if (!Number.isInteger(requested) || requested < 1 || requested > SUPPORT_EXPIRY_MAX_BATCH) {
+    throw new RangeError(
+      `support expiry batch limit must be an integer in 1..${SUPPORT_EXPIRY_MAX_BATCH}`,
+    );
+  }
+  const recorded: SupportSessionExpiry[] = [];
+  for (let i = 0; i < requested; i += 1) {
+    const one = await withTransaction<SupportSessionExpiry | null>(async (executor) => {
+      // ONE statement claims and transitions. The subquery's SKIP LOCKED is what
+      // makes a second worker take a different row instead of waiting for this
+      // one, and `expired_at IS NULL` is what makes it take no row at all once
+      // there are none left to record.
+      const claimed = await executor.query(
+        `UPDATE support_access_sessions
+            SET expired_at = NOW(),
+                authorization_version = authorization_version + 1
+          WHERE support_session_id = (
+            SELECT s.support_session_id
+              FROM support_access_sessions s
+             WHERE s.revoked_at IS NULL
+               AND s.expired_at IS NULL
+               AND s.expires_at <= NOW()
+             ORDER BY s.expires_at
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1
+          )
+          RETURNING support_session_id, request_id, tenant_id, actor_user_link_id,
+                    expires_at, expired_at, authorization_version`,
+        [],
+      );
+      if (claimed.rows.length === 0) return null;
+      const row = claimed.rows[0] as Row;
+      const supportSessionId = String(row.support_session_id);
+      const tenantId = String(row.tenant_id);
+      const actorUserLinkId = String(row.actor_user_link_id);
+      const requestId = String(row.request_id);
+      const authorizationVersion = version(row);
+      // The audit row is written HERE, in the transition's transaction, and it
+      // names no author because none exists. `recordMutation` is deliberately not
+      // reused: its contract is an attributable human actor, and pretending to
+      // have one is the failure this comment exists to refuse.
+      const written = await executor.query(
+        `INSERT INTO audit_events
+           (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+         VALUES ($1, $2, 'support_access_session', $3, NULL, $4)
+         RETURNING event_id`,
+        [
+          tenantId,
+          SUPPORT_SESSION_EXPIRED_EVENT,
+          supportSessionId,
+          JSON.stringify({
+            actor_type: 'system',
+            processor: 'support_access_expiry',
+            request_id: requestId,
+            actor_user_link_id: actorUserLinkId,
+            expires_at: ts(row.expires_at).toISOString(),
+            authorization_version: authorizationVersion,
+          }),
+        ],
+      );
+      return {
+        supportSessionId,
+        requestId,
+        tenantId,
+        actorUserLinkId,
+        expiresAt: ts(row.expires_at),
+        expiredAt: ts(row.expired_at),
+        authorizationVersion,
+        auditEventId: String((written.rows[0] as Row).event_id),
+      };
+    });
+    if (one === null) break;
+    recorded.push(one);
+  }
+  return recorded;
 }

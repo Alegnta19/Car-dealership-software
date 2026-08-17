@@ -9,10 +9,13 @@ import {
   skipIntegration,
   testIssuer,
   mintReauthGrant,
+  TEST_REAUTH_CALLBACK_URI,
+  fixtureAuthorizationStateWrite,
+  seedTenantViaService,
 } from '@dealer/test-kit';
 import { closePool, query, withTransaction } from '@dealer/database';
-import { createTenant } from '@dealer/organization';
 import {
+  claimReauthentication,
   completeReauthentication,
   consumeReauthenticationGrant,
   decideSupportAccess,
@@ -51,7 +54,7 @@ describe(
 
     beforeEach(async () => {
       await resetDatabase();
-      const tenant = await createTenant({ name: 'Reauth Motors', status: 'active' });
+      const tenant = await seedTenantViaService({ name: 'Reauth Motors', status: 'active' });
       tenantId = tenant.tenantId;
       userLinkId = await makeUser(tenantId);
       sessionId = (await seedLocalSession(userLinkId)).sessionId;
@@ -59,7 +62,8 @@ describe(
 
     async function makeUser(tenant: string | null): Promise<string> {
       await ensureActiveConnection(tenant);
-      const result = await query(
+      const result = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links
          (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
           connection_id, issuer, provider_organization_id)
@@ -118,6 +122,9 @@ describe(
         action: 'service.ro.authorization.record',
         resourceType: 'repair_order',
         resourceId: RO,
+        // FBL-020-R4 §3: the EXACT callback this leg is issued for, stored on the
+        // server row and re-compared when the callback claims it.
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
       };
     }
 
@@ -127,6 +134,16 @@ describe(
     ): Promise<StartedReauthentication> {
       const started = await startReauthentication({ ...startInput(), sessionId, ...overrides });
       assert.ok(started, 'the starting identity chain must hold');
+      // FBL-020-R4 §3: the round trip is CLAIMED before it can be completed —
+      // exactly the sequence /auth/reauth/callback performs. Tests that are about
+      // the claim itself call `claimReauthentication` directly.
+      const claimed = await claimReauthentication({
+        nonce: started.nonce,
+        state: started.state,
+        codeVerifier: started.codeVerifier,
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
+      });
+      assert.ok(claimed, 'the callback state claim must succeed for a fresh leg');
       return started;
     }
 
@@ -319,7 +336,8 @@ describe(
 
     test('a step-up cannot start from — or complete without — a live local session', async () => {
       // revoked before the start: there is nothing to step up FROM
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET revoked_at = NOW(), revoked_reason = 'test' WHERE session_id = $1`,
         [sessionId],
       );
@@ -329,7 +347,8 @@ describe(
       // it steps up, so the completion refuses and mints nothing
       sessionId = (await seedLocalSession(userLinkId)).sessionId;
       const started = await start();
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET revoked_at = NOW(), revoked_reason = 'test' WHERE session_id = $1`,
         [sessionId],
       );
@@ -343,7 +362,7 @@ describe(
       const completed = await completeReauthentication(completionFor(started));
       assert.ok(completed);
 
-      const otherTenant = await createTenant({ name: 'Other Reauth', status: 'active' });
+      const otherTenant = await seedTenantViaService({ name: 'Other Reauth', status: 'active' });
       const otherUser = await makeUser(tenantId);
       interface ConsumeBinding {
         tenantId: string;
@@ -406,7 +425,7 @@ describe(
       assert.equal(await completeReauthentication(completionFor(started)), null);
 
       await resetDatabase();
-      const tenant = await createTenant({ name: 'Reauth Motors 2', status: 'active' });
+      const tenant = await seedTenantViaService({ name: 'Reauth Motors 2', status: 'active' });
       tenantId = tenant.tenantId;
       userLinkId = await makeUser(tenantId);
       sessionId = (await seedLocalSession(userLinkId)).sessionId;
@@ -493,9 +512,20 @@ describe(
       assert.ok(session);
       assert.ok(session.expiresAt.getTime() - session.grantedAt.getTime() <= 60 * 60_000);
 
+      // FBL-020-R4 §4: the live indicator carries the WHOLE grant, not a bare id — the
+      // approving request, the target tenant, the approved scope and action set and the
+      // expiry, because a tenant told only "somebody is in here" cannot judge whether
+      // to wait or to revoke.
       const live = await listActiveSupportSessions(tenantId);
       assert.equal(live.length, 1);
-      assert.equal(live[0]!.actorUserLinkId, supportActor);
+      assert.equal(live[0]!.supportActorUserLinkId, supportActor);
+      assert.equal(live[0]!.supportSessionId, session.supportSessionId);
+      assert.equal(live[0]!.supportRequestId, request.requestId);
+      assert.equal(live[0]!.targetTenantId, tenantId);
+      assert.equal(live[0]!.approvedScopeLevel, 'tenant');
+      assert.equal(live[0]!.approvedScopeId, null);
+      assert.deepEqual(live[0]!.approvedActions, ['service.ro.view']);
+      assert.equal(live[0]!.expiresAt.getTime(), session.expiresAt.getTime());
 
       assert.equal(
         await revokeSupportSession({

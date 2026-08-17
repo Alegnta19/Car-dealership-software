@@ -1,0 +1,42 @@
+{
+  "ul_deterministic_binding": {
+    "from": "UPDATE user_links ul\n   SET connection_id = c.connection_id,",
+    "to": "   ) = 1;"
+  },
+  "ul_ambiguous_deactivation": {
+    "from": "UPDATE user_links\n   SET status = 'deactivated',",
+    "to": "   AND (connection_id IS NULL OR provider_organization_id IS NULL OR issuer IS NULL);"
+  },
+  "is_unprovable_provenance_revoked": {
+    "from": "UPDATE identity_sessions\n   SET revoked_at = COALESCE(revoked_at, NOW()),",
+    "to": "   AND (connection_id IS NULL OR issuer IS NULL);"
+  },
+  "is_subject_and_org_derived": {
+    "from": "UPDATE identity_sessions s\n   SET provider_subject = ul.provider_user_id,",
+    "to": "   AND (s.provider_subject IS NULL OR s.provider_organization_id IS NULL);"
+  },
+  "is_unprovable_identity_revoked": {
+    "from": "UPDATE identity_sessions\n   SET revoked_at = NOW(),\n       revoked_reason = COALESCE(revoked_reason, 'fbl_020_r3_unprovable_subject_or_org')",
+    "to": "   AND (provider_subject IS NULL OR provider_organization_id IS NULL);"
+  },
+  "rat_started_expired": {
+    "from": "UPDATE reauthentication_transactions\n   SET state = 'expired'\n WHERE state = 'started'",
+    "to": "        OR session_id IS NULL OR oidc_nonce_hash IS NULL);"
+  },
+  "sar_approval_without_grant_superseded": {
+    "from": "UPDATE support_access_requests\n   SET superseded_decided_by_user_link_id = decided_by_user_link_id,",
+    "to": "   AND approval_grant_id IS NULL;"
+  },
+  "ipc_unbounded_certification_withdrawn": {
+    "from": "UPDATE identity_provider_connections\n   SET mfa_policy_certified = FALSE,",
+    "to": "   AND mfa_policy_certification_expires_at IS NULL;"
+  },
+  "rat_terminal_explained": {
+    "from": "UPDATE reauthentication_transactions\n   SET terminal_at = COALESCE(terminal_at, completed_at, updated_at, started_at),",
+    "to": " WHERE state IN ('completed', 'failed', 'expired');"
+  },
+  "pd_evidence_version_floor": {
+    "from": "CREATE TRIGGER trg_policy_decisions_current_evidence",
+    "to": "  FOR EACH ROW EXECUTE FUNCTION policy_decisions_require_current_evidence();"
+  }
+}

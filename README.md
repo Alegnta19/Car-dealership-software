@@ -220,27 +220,21 @@ a new time series per distinct value.
 npm test
 ```
 
-**39 unit tests** cover the repair-order state machine, authorization and estimate-status
-derivation, step-up token binding and expiry, JWT verification (algorithm confusion, missing or
-non-numeric expiry, non-object payloads), tenant-override rejection, and role enforcement. They run
-without a database.
+The suite spans **unit tests with no database** (the repair-order state machine, authorization and
+estimate-status derivation, JWT verification against algorithm confusion and malformed expiry,
+tenant-override rejection, role enforcement, and the CI gates themselves) and **database-backed
+tests** that need a real PostgreSQL instance — the service layer for what a mock cannot express
+(cross-tenant reads and writes, check-in idempotency and its unique-index backstop, transaction
+rollback, step-up consumption and release, queue and waitlist lifecycles, the seeded MPI
+checklist), plus the identity boundary and the real HTTP stack via `createApp()`, which is where
+role boundaries actually live.
 
-**4 documentation tests** compare `docs/PHASE-248-SERVICE-COCKPIT-V2.md` against the code: every
-error code the API can return must be listed in the appendix and every listed code must still be
-thrown, each metric's documented labels must match its declaration, and every migration on disk must
-appear. Three review rounds turned up the same drift, so it is now a failing test rather than
-something a reader has to catch by hand. They need no database either.
-
-**72 database-backed tests** need a real PostgreSQL instance. 46 exercise the service layer for
-what a mock cannot express — cross-tenant reads and writes, check-in idempotency and its
-unique-index backstop, transaction rollback, the authorization gate, step-up consumption and
-release, queue lifecycle, waitlist transitions and the atomic waitlist→appointment conversion,
-the seeded MPI checklist, clock sequencing, and the populations behind the metrics and the
-estimate status. The other 26 go through the real HTTP stack via `createApp()`, which is where
-role boundaries actually live: that a technician cannot rewrite `price_ref` or `sold_hours`,
-cannot assign themselves work, cannot put customers on the waitlist, and cannot touch a line they
-were not dispatched to; that an approved price is frozen; that a vehicle with a chargeable
-undecided line cannot be handed back.
+**Counts are not repeated here on purpose.** They go stale, and a stale count in a README is how
+a reader learns to distrust the document. The authoritative figure is the CI artifact
+`test-summary.json`, and `scripts/parse-test-summary.ts` enforces a FLOOR on it: all eight summary
+fields must be present (`todo` included), `failed`/`cancelled`/`skipped`/`todo` must be zero, and
+the run must be at least as large as the declared floor — so a suite that SHRANK fails the build
+instead of passing quietly.
 
 Point `TEST_DATABASE_URL` at a throwaway database and run:
 
@@ -250,10 +244,34 @@ npm run test:integration
 
 CI (`.github/workflows/ci.yml`) runs the whole suite against a real, digest-pinned
 PostgreSQL 16 with `REQUIRE_DB_TESTS=1`, so the database-backed suites can never be
-silently skipped there, plus a migration-upgrade job from the earliest retained schema
-fixture, a container build, and a full-history secret scan. Quality debt is ratcheted:
-`npm run ratchet:check` fails on any new strict-mode or lint finding beyond
+silently skipped there, plus a container build and a full-history secret scan. Quality debt is
+ratcheted: `npm run ratchet:check` fails on any new strict-mode or lint finding beyond
 `quality-baselines.json`. See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+### The gates that check the checks
+
+A green suite is not by itself evidence that the suite is holding anything, so four gates exist to
+make the evidence mechanical rather than trusted:
+
+- **The populated upgrade drill.** `tests/fixtures/legacy-identity-seed-pre-057.sql` seeds NONEMPTY
+  legacy identity data against the schema as it stood before migration `057`, and
+  `scripts/verify-upgrade-state.ts` (`--phase=backfill|pre-057|post-057`) asserts the exact
+  reconciled state of every seeded row afterwards, with nonzero and unchanged before/after counts.
+  Before R4 the drill ran on empty tables, which could not exercise a single reconciliation.
+- **Reconciliation negative controls.** `scripts/upgrade-negative-controls.ts` copies that database,
+  deletes ONE reconciliation from `057`, and requires the intended refusal — a named Postgres
+  constraint or a named verifier assertion. A control whose removal changes nothing fails the build.
+- **Mutation-kill checks.** `scripts/mutation-kill.ts` copies the tree, removes one security control,
+  and requires the named test to die. It has already found a real gap: a status predicate whose
+  removal broke no test.
+- **The requirement map.** `docs/FBL-020-R4-REQUIREMENT-MAP.json` maps every FBL-020-R4 requirement
+  to its named tests, CI steps and artifacts; `scripts/check-requirement-map.ts` fails if any named
+  test, path, step or artifact does not exist, so the map cannot rot.
+
+**LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Every provider property is proven against a
+deterministic local issuer and a provider-neutral fake, and the WorkOS adapter itself is invoked
+only over a mocked transport. See `docs/identity/KNOWN-LIMITATIONS.md` and
+`docs/FBL-020-DELIVERY-REPORT.md` §15.
 
 The database-backed suites TRUNCATE every table, so two guards stand in front of them:
 `TEST_DATABASE_URL` is read on its own and never falls back to `DATABASE_URL`, and the database

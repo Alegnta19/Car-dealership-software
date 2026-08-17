@@ -29,16 +29,28 @@
  * this package never queries a fixed-ops table.
  */
 import { randomUUID } from 'node:crypto';
-import { query } from '@dealer/database';
-import { getRequestContext } from '@dealer/platform';
+import { query, withTransaction } from '@dealer/database';
+import { getRequestContext, type SupportAccessFacts } from '@dealer/platform';
 import { resolveAncestry, type OrganizationNodeRef } from '@dealer/organization';
 // Role NAMES only, from the package's dependency-free contract module — the
 // engine still owns no action semantics and reads no catalog. R3 correction F1
 // needs the platform-support role list to re-judge a live support session's
 // actor, and that list has exactly one home.
-import { PLATFORM_SUPPORT_AUTHORITY_ROLES } from './contracts';
+import { EFFECTIVE_MFA_CERTIFICATION_SQL, PLATFORM_SUPPORT_AUTHORITY_ROLES } from './contracts';
 
 export const POLICY_VERSION = 'fbl-020.1';
+
+/**
+ * FBL-020-R4 §2.2 — the evidence contract every NEW decision is written under.
+ *
+ * Migration 057 versions `policy_decisions`: version-1 rows are the historic
+ * ones and stay legal and readable exactly as written; version-2 rows must
+ * carry the complete evidence set, and a BEFORE INSERT trigger refuses
+ * anything below the current version, so the number cannot be used to opt back
+ * into the weaker class. It is stated here, once, and interpolated into the one
+ * INSERT that writes evidence — there is no second place for it to drift to.
+ */
+export const CURRENT_EVIDENCE_VERSION = 2;
 
 /**
  * FBL-020-R3 — how long a provider authentication counts as FRESH for the
@@ -143,11 +155,21 @@ export interface PolicyInput {
    * and grant state, and no caller can assert them.
    */
   readonly supportRequestId?: string | null;
-  /** R2: identity facts drawn from the generated request context. */
-  readonly authTime?: Date | null;
-  readonly connectionId?: string | null;
+  /**
+   * The LOCAL session this request PRESENTED — the one the authenticate
+   * middleware resolved from the cookie or the bearer credential, and the one
+   * an operator can revoke.
+   *
+   * FBL-020-R4 §2: `authTime`, `connectionId` and `actorProviderSubject` are
+   * GONE from this input, and their absence is the correction. They used to be
+   * caller-asserted identity facts: a route passed whatever it believed, the
+   * engine wrote it to append-only evidence unexamined, and a route that
+   * believed nothing (`POST /auth/reauth/start` passed none of them) produced
+   * an evidence row that named no credential at all. They are now DERIVED here
+   * from the presented session row, so the evidence describes the credential
+   * the database can see rather than the one a caller described.
+   */
   readonly sessionId?: string | null;
-  readonly actorProviderSubject?: string | null;
 }
 
 export interface PolicyDecisionResult {
@@ -163,6 +185,19 @@ export interface PolicyDecisionResult {
    */
   readonly resourceVisible: boolean;
   readonly supportSessionId: string | null;
+  /**
+   * FBL-020-R4 §4 — the WHOLE delegated-access fact set when this decision was
+   * allowed under a support session, null otherwise.
+   *
+   * `supportSessionId` above stays because a great deal of existing evidence and
+   * test code asks exactly that one question, but it is not enough to propagate:
+   * a caller holding only an id cannot put the expiry in a response header, bind
+   * the approved scope to the request context, or say in a log line what the
+   * session was approved to do. Those were R3's omissions, and an id alone is
+   * what caused them — so the facts travel as one object that cannot be
+   * assembled with pieces missing.
+   */
+  readonly support: SupportAccessFacts | null;
   readonly sensitive: boolean;
 }
 
@@ -271,6 +306,59 @@ function evidenceIds(): { requestId: string; correlationId: string } {
 }
 
 /**
+ * FBL-020-R4 §2 — the PRESENTED CREDENTIAL, read once from the database.
+ *
+ * Everything a decision records about the credential behind it comes from this
+ * one row: the authentication instant, the connection it was established
+ * through, the provider subject it belongs to, and whether that connection
+ * certifies the organization's MFA policy. `null` means no live session was
+ * presented — revoked, expired, belonging to someone else, or simply absent.
+ *
+ * It is deliberately keyed on BOTH the session id and the user link: a session
+ * id that belongs to another person proves nothing about this actor, and
+ * resolving it anyway is how a decision ends up recording somebody else's
+ * authentication as its own.
+ */
+export interface PresentedCredential {
+  readonly sessionId: string;
+  readonly authTime: Date;
+  readonly connectionId: string;
+  readonly providerSubject: string;
+  readonly mfaPolicyCertified: boolean;
+}
+
+export async function readPresentedCredential(
+  userLinkId: string,
+  sessionId: string | null,
+): Promise<PresentedCredential | null> {
+  if (sessionId === null) return null;
+  const result = await query(
+    `SELECT s.session_id, s.auth_time, s.connection_id, s.provider_subject,
+            COALESCE(${EFFECTIVE_MFA_CERTIFICATION_SQL}, FALSE) AS mfa_policy_certified
+       FROM identity_sessions s
+       LEFT JOIN identity_provider_connections c ON c.connection_id = s.connection_id
+      WHERE s.session_id = $2::uuid AND s.user_link_id = $1
+        AND s.revoked_at IS NULL AND s.expires_at > NOW()`,
+    [userLinkId, sessionId],
+  );
+  const row = result.rows[0] as Row | undefined;
+  if (row === undefined) return null;
+  // A live session cannot hold NULL in any of these — `is_live_session_fully_bound`
+  // (migration 057) forbids it — so the narrowing below is a type boundary, not a
+  // fallback that could quietly produce a half-populated credential.
+  if (row.auth_time === null || row.connection_id === null || row.provider_subject === null) {
+    return null;
+  }
+  return {
+    sessionId: String(row.session_id),
+    authTime: row.auth_time instanceof Date ? row.auth_time : new Date(String(row.auth_time)),
+    connectionId: String(row.connection_id),
+    providerSubject: String(row.provider_subject),
+    mfaPolicyCertified: row.mfa_policy_certified === true,
+  };
+}
+
+/**
  * FBL-020-R3 correction B2 — assurance is COMPUTED, and it is computed about
  * the CREDENTIAL THIS REQUEST PRESENTED.
  *
@@ -303,6 +391,19 @@ function evidenceIds(): { requestId: string; correlationId: string } {
  * atomically, on the action it was minted for. It is excluded here for the same
  * reason the spend predicate excludes it.
  *
+ * FBL-020-R4 §2.4 — AND NEITHER DOES AN UNRELATED UNSPENT ONE, WHICH IS THE
+ * CORRECTION. R3 read "the actor's most recent live unconsumed grant" and let
+ * it raise this classification to `fresh` / `certified`. A grant is minted for
+ * ONE action on ONE resource; holding a live grant for
+ * `service.ro.void_line:9` said nothing whatever about the request being judged
+ * — yet the evidence row for that unrelated request recorded a strengthened
+ * assurance, and `GET /auth/session` showed the operator `fresh` while the
+ * presented cookie was hours old. Assurance now derives from the PRESENTED
+ * SESSION, or from the EXACT grant being evaluated when there is one, and from
+ * nothing else. `grant` is therefore not "a grant the actor has" but "the grant
+ * THIS decision is about": the caller must name it, and the id is verified to
+ * belong to this actor and to still be live and unspent before it counts.
+ *
  * Exported because `GET /auth/session` reports the SAME two classifications it
  * would get on its next decision, for the SAME presented session. Two
  * definitions of "fresh" — one for the evidence row, one for the page — would
@@ -312,6 +413,8 @@ function evidenceIds(): { requestId: string; correlationId: string } {
 export async function classifyActorAssurance(
   userLinkId: string,
   sessionId: string | null,
+  /** The EXACT grant being evaluated, when a grant is what is being evaluated. */
+  evaluatedGrantId: string | null = null,
 ): Promise<AssuranceClassification> {
   const result = await query(
     `SELECT
@@ -319,20 +422,20 @@ export async function classifyActorAssurance(
           FROM identity_sessions s
          WHERE s.session_id = $2::uuid AND s.user_link_id = $1
            AND s.revoked_at IS NULL AND s.expires_at > NOW()) AS session_auth_time,
-       (SELECT COALESCE(c.mfa_policy_certified, FALSE)
+       (SELECT COALESCE(${EFFECTIVE_MFA_CERTIFICATION_SQL}, FALSE)
           FROM identity_sessions s
           LEFT JOIN identity_provider_connections c ON c.connection_id = s.connection_id
          WHERE s.session_id = $2::uuid AND s.user_link_id = $1
            AND s.revoked_at IS NULL AND s.expires_at > NOW()) AS session_mfa_certified,
        (SELECT g.grant_id
           FROM reauthentication_grants g
-         WHERE g.user_link_id = $1 AND g.expires_at > NOW() AND g.consumed_at IS NULL
-         ORDER BY g.issued_at DESC LIMIT 1) AS live_grant_id,
+         WHERE g.grant_id = $3::uuid AND g.user_link_id = $1
+           AND g.expires_at > NOW() AND g.consumed_at IS NULL) AS evaluated_grant_id,
        (SELECT (g.assurance_level = 'fresh_and_mfa_policy' AND g.mfa_policy_certified_at_issue)
           FROM reauthentication_grants g
-         WHERE g.user_link_id = $1 AND g.expires_at > NOW() AND g.consumed_at IS NULL
-         ORDER BY g.issued_at DESC LIMIT 1) AS grant_mfa_certified`,
-    [userLinkId, sessionId],
+         WHERE g.grant_id = $3::uuid AND g.user_link_id = $1
+           AND g.expires_at > NOW() AND g.consumed_at IS NULL) AS grant_mfa_certified`,
+    [userLinkId, sessionId, evaluatedGrantId],
   );
   const row = (result.rows[0] ?? {}) as Row;
   const sessionAuthTime =
@@ -341,9 +444,9 @@ export async function classifyActorAssurance(
       : row.session_auth_time instanceof Date
         ? row.session_auth_time
         : new Date(String(row.session_auth_time));
-  const hasGrant = row.live_grant_id !== null && row.live_grant_id !== undefined;
+  const hasEvaluatedGrant = row.evaluated_grant_id !== null && row.evaluated_grant_id !== undefined;
 
-  if (sessionAuthTime === null && !hasGrant) {
+  if (sessionAuthTime === null && !hasEvaluatedGrant) {
     return { freshness: 'not_applicable', mfaAssurance: 'not_applicable' };
   }
   const withinWindow =
@@ -351,7 +454,7 @@ export async function classifyActorAssurance(
     Date.now() - sessionAuthTime.getTime() <= AUTHENTICATION_FRESHNESS_WINDOW_SECONDS * 1000;
   const certified = row.session_mfa_certified === true || row.grant_mfa_certified === true;
   return {
-    freshness: hasGrant || withinWindow ? 'fresh' : 'stale',
+    freshness: hasEvaluatedGrant || withinWindow ? 'fresh' : 'stale',
     mfaAssurance: certified ? 'certified' : 'uncertified',
   };
 }
@@ -381,10 +484,23 @@ export function createPolicyEngine(options: {
     freshness: FreshnessClassification;
     mfaAssurance: MfaAssuranceClassification;
     supportRequestId?: string | null | undefined;
-    authTime?: Date | null | undefined;
-    connectionId?: string | null | undefined;
-    sessionId?: string | null | undefined;
-    actorProviderSubject?: string | null | undefined;
+    supportSessionExpiresAt?: Date | null | undefined;
+    /**
+     * FBL-020-R4 §4 — the whole delegated-access fact set, present on exactly the
+     * decisions that were allowed under one. The `policy_decisions` COLUMNS carry
+     * the session, request and expiry (they are authorization evidence); the
+     * approved SCOPE and ACTION SET go into the audit row's details, because the
+     * request row they come from can be superseded later and an operator reading
+     * the trail must still be able to see what this access was approved for.
+     */
+    support?: SupportAccessFacts | null | undefined;
+    /**
+     * The presented credential, or null when none was presented. It arrives as
+     * ONE object precisely so that no caller can supply three of its four
+     * facts: the database's `pd_credential_group_is_atomic` refuses that shape,
+     * and this signature makes it unreachable before the database has to.
+     */
+    credential: PresentedCredential | null;
   }): Promise<string> {
     // Fail closed rather than write evidence that cannot be correlated: an
     // identified actor's decision MUST carry both generated ids.
@@ -396,42 +512,95 @@ export function createPolicyEngine(options: {
     }
     // A deny never claims a matched binding (also a database CHECK).
     const matched = input.decision === 'allow' ? (input.matched ?? []) : [];
-    const result = await query(
-      `INSERT INTO policy_decisions
+    // FBL-020-R4 §3 — SUPPORT USE IS AN AUDITED TRANSITION.
+    //
+    // A request SERVED under delegated support access is a platform person
+    // reaching into a customer's data. The evidence row already recorded it, but
+    // `policy_decisions` is the authorization ledger — the audit trail an
+    // operator reads for "who touched this tenant" is `audit_events`, and support
+    // use appeared in it nowhere. It is written in the SAME transaction as the
+    // evidence row, so a served support request cannot exist without its audit
+    // row and an audit row cannot exist for a decision that was never recorded.
+    const auditsSupportUse = input.decision === 'allow' && input.supportSessionId !== null;
+    return withTransaction(async (executor) => {
+      const result = await executor.query(
+        `INSERT INTO policy_decisions
          (tenant_id, actor_user_link_id, actor_type, action, resource_type, resource_id,
           scope_level, scope_id, decision, reason_code, policy_version, request_id,
           support_session_id, matched_role_binding_ids, matched_authorization_versions,
           freshness_classification, mfa_assurance_classification, correlation_id,
-          support_request_id, auth_time, connection_id, session_id, actor_provider_subject)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+          support_request_id, auth_time, connection_id, session_id, actor_provider_subject,
+          support_session_expires_at, evidence_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+               $24, ${CURRENT_EVIDENCE_VERSION})
        RETURNING decision_id`,
-      [
-        input.tenantId,
-        input.actorUserLinkId,
-        input.actorType,
-        input.action,
-        input.resourceType,
-        input.resourceId,
-        input.scopeLevel,
-        input.scopeId,
-        input.decision,
-        input.reasonCode,
-        POLICY_VERSION,
-        input.requestId,
-        input.supportSessionId,
-        matched.map((m) => m.roleBindingId),
-        matched.map((m) => m.authorizationVersion),
-        input.freshness,
-        input.mfaAssurance,
-        input.correlationId,
-        input.supportRequestId ?? null,
-        input.authTime ?? null,
-        input.connectionId ?? null,
-        input.sessionId ?? null,
-        input.actorProviderSubject ?? null,
-      ],
-    );
-    return String((result.rows[0] as Row).decision_id);
+        [
+          input.tenantId,
+          input.actorUserLinkId,
+          input.actorType,
+          input.action,
+          input.resourceType,
+          input.resourceId,
+          input.scopeLevel,
+          input.scopeId,
+          input.decision,
+          input.reasonCode,
+          POLICY_VERSION,
+          input.requestId,
+          input.supportSessionId,
+          matched.map((m) => m.roleBindingId),
+          matched.map((m) => m.authorizationVersion),
+          input.freshness,
+          input.mfaAssurance,
+          input.correlationId,
+          input.supportRequestId ?? null,
+          input.credential?.authTime ?? null,
+          input.credential?.connectionId ?? null,
+          input.credential?.sessionId ?? null,
+          input.credential?.providerSubject ?? null,
+          input.supportSessionExpiresAt ?? null,
+        ],
+      );
+      const decisionId = String((result.rows[0] as Row).decision_id);
+      if (auditsSupportUse) {
+        await executor.query(
+          `INSERT INTO audit_events
+           (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+         VALUES ($1, 'identity.support.used', 'support_access_session', $2, $3, $4)`,
+          [
+            input.tenantId,
+            input.supportSessionId,
+            input.actorUserLinkId,
+            // Ids, codes, classifications and instants only — never the free-text
+            // support reason, never a resource payload, never a provider profile.
+            //
+            // FBL-020-R4 §4: the approved SCOPE, the approved ACTION SET, the true
+            // support actor and the EXPIRY are recorded here. R3 wrote the action
+            // and the request id, so the trail said a platform person did one thing
+            // under some request and left "how far did that request reach, and how
+            // long for" answerable only by joining to a row that can later be
+            // superseded — i.e. not answerable at all after the fact.
+            JSON.stringify({
+              action: input.action,
+              resource_type: input.resourceType,
+              decision_id: decisionId,
+              support_request_id: input.supportRequestId ?? null,
+              reason_code: input.reasonCode,
+              support_actor_user_link_id: input.support?.supportActorUserLinkId ?? null,
+              support_target_tenant_id: input.support?.targetTenantId ?? null,
+              support_approved_scope_level: input.support?.approvedScopeLevel ?? null,
+              support_approved_scope_id: input.support?.approvedScopeId ?? null,
+              support_approved_actions: input.support?.approvedActions ?? null,
+              support_session_expires_at:
+                input.supportSessionExpiresAt?.toISOString() ??
+                input.support?.expiresAt.toISOString() ??
+                null,
+            }),
+          ],
+        );
+      }
+      return decisionId;
+    });
   }
 
   return {
@@ -440,13 +609,22 @@ export function createPolicyEngine(options: {
       // any rule runs, so every path out of this function records the same
       // facts and no path can quietly omit them.
       const { requestId, correlationId } = evidenceIds();
+      // FBL-020-R4 §2: the presented credential is READ from the database once,
+      // here, and every evidence row this call writes describes THAT row. No
+      // caller asserts an auth_time, a connection or a provider subject any
+      // more, so no route can record a credential fact it merely believed.
+      const credential = await readPresentedCredential(
+        input.actor.userLinkId,
+        input.sessionId ?? null,
+      );
       // R3 correction B2: the assurance recorded is the assurance of the
       // session THIS request presented — the very id written to the evidence
       // row below — not of whichever session the actor authenticated most
-      // recently on some other credential.
+      // recently on some other credential. R4 §2.4: and no unrelated grant can
+      // raise it, because `decide` evaluates no grant and names none.
       const assurance = await classifyActorAssurance(
         input.actor.userLinkId,
-        input.sessionId ?? null,
+        credential?.sessionId ?? null,
       );
       const actor = input.actor;
       const targetTenantId = input.targetTenantId ?? actor.tenantId;
@@ -478,10 +656,7 @@ export function createPolicyEngine(options: {
           freshness: assurance.freshness,
           mfaAssurance: assurance.mfaAssurance,
           supportRequestId: input.supportRequestId ?? null,
-          authTime: input.authTime ?? null,
-          connectionId: input.connectionId ?? null,
-          sessionId: input.sessionId ?? null,
-          actorProviderSubject: input.actorProviderSubject ?? null,
+          credential,
         });
         return {
           decision: 'deny',
@@ -490,6 +665,7 @@ export function createPolicyEngine(options: {
           matchedBindings: [],
           resourceVisible: detail?.resourceVisible ?? true,
           supportSessionId: null,
+          support: null,
           sensitive: detail?.sensitive ?? false,
         };
       };
@@ -650,10 +826,7 @@ export function createPolicyEngine(options: {
             freshness: assurance.freshness,
             mfaAssurance: assurance.mfaAssurance,
             supportRequestId: input.supportRequestId ?? null,
-            authTime: input.authTime ?? null,
-            connectionId: input.connectionId ?? null,
-            sessionId: input.sessionId ?? null,
-            actorProviderSubject: input.actorProviderSubject ?? null,
+            credential,
           });
           return {
             decision: 'allow',
@@ -662,6 +835,7 @@ export function createPolicyEngine(options: {
             matchedBindings: matched,
             resourceVisible: true,
             supportSessionId: null,
+            support: null,
             sensitive,
           };
         }
@@ -701,10 +875,7 @@ export function createPolicyEngine(options: {
             correlationId,
             freshness: assurance.freshness,
             mfaAssurance: assurance.mfaAssurance,
-            authTime: input.authTime ?? null,
-            connectionId: input.connectionId ?? null,
-            sessionId: input.sessionId ?? null,
-            actorProviderSubject: input.actorProviderSubject ?? null,
+            credential,
           });
           return {
             decision: 'allow',
@@ -718,6 +889,7 @@ export function createPolicyEngine(options: {
             ],
             resourceVisible: true,
             supportSessionId: null,
+            support: null,
             sensitive,
           };
         }
@@ -767,7 +939,8 @@ export function createPolicyEngine(options: {
 
       const sessions = (
         await query(
-          `SELECT s.support_session_id, r.request_id, r.requested_actions, r.scope_level, r.scope_id
+          `SELECT s.support_session_id, s.expires_at, r.request_id, r.requested_actions,
+                  r.scope_level, r.scope_id
              FROM support_access_sessions s
              JOIN support_access_requests r ON r.request_id = s.request_id
             WHERE s.actor_user_link_id = $1 AND s.tenant_id = $2
@@ -777,6 +950,7 @@ export function createPolicyEngine(options: {
         )
       ).rows as unknown as Array<{
         support_session_id: string;
+        expires_at: Date | string;
         request_id: string;
         requested_actions: string[];
         scope_level: string;
@@ -792,6 +966,25 @@ export function createPolicyEngine(options: {
 
       const live = sessions.find(sessionCovers);
       if (live !== undefined) {
+        // FBL-020-R4 §4 — THE FACTS ARE ASSEMBLED ONCE, HERE, AND EVERY CARRIER
+        // GETS THE SAME OBJECT.
+        //
+        // The evidence row, the transactional audit row, the response header, the
+        // request context and every log line inside this request all describe this
+        // one delegated grant, so there is no path on which one of them names the
+        // session and another names its expiry. R3's omissions were exactly that
+        // shape: each carrier decided for itself which fields it happened to have.
+        const support: SupportAccessFacts = {
+          supportSessionId: live.support_session_id,
+          supportRequestId: live.request_id,
+          supportActorUserLinkId: actor.userLinkId,
+          targetTenantId: targetTenantId as string,
+          approvedScopeLevel: live.scope_level,
+          approvedScopeId: live.scope_id,
+          approvedActions: [...live.requested_actions],
+          expiresAt:
+            live.expires_at instanceof Date ? live.expires_at : new Date(String(live.expires_at)),
+        };
         const decisionId = await record({
           tenantId: targetTenantId,
           actorUserLinkId: actor.userLinkId,
@@ -804,7 +997,7 @@ export function createPolicyEngine(options: {
           decision: 'allow',
           reasonCode: 'ALLOW_SUPPORT_SESSION',
           requestId,
-          supportSessionId: live.support_session_id,
+          supportSessionId: support.supportSessionId,
           // Support access is authorized by an approved REQUEST, not by a
           // role binding — so the matched-binding list is truthfully empty
           // and the request/session ids carry the evidence instead.
@@ -812,11 +1005,16 @@ export function createPolicyEngine(options: {
           correlationId,
           freshness: assurance.freshness,
           mfaAssurance: assurance.mfaAssurance,
-          supportRequestId: live.request_id,
-          authTime: input.authTime ?? null,
-          connectionId: input.connectionId ?? null,
-          sessionId: input.sessionId ?? null,
-          actorProviderSubject: input.actorProviderSubject ?? null,
+          supportRequestId: support.supportRequestId,
+          // R4 §2.2: the WINDOW the support allow fell inside, recorded on the
+          // decision itself so a stored allow can be re-judged against it later.
+          supportSessionExpiresAt: support.expiresAt,
+          // R4 §4: the approved SCOPE and ACTION SET reach the audit row too — an
+          // operator asking "what was this platform person allowed to do" must not
+          // have to re-derive it from a request row that may since have been
+          // superseded.
+          support,
+          credential,
         });
         return {
           decision: 'allow',
@@ -824,7 +1022,8 @@ export function createPolicyEngine(options: {
           decisionId,
           matchedBindings: [],
           resourceVisible: true,
-          supportSessionId: live.support_session_id,
+          supportSessionId: support.supportSessionId,
+          support,
           sensitive,
         };
       }

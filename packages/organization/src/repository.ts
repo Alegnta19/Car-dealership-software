@@ -98,98 +98,42 @@ function mapDepartment(r: Row): Department {
   };
 }
 
-export async function createTenant(input: {
-  name: string;
-  tenantId?: string;
-  status?: TenantStatus;
-}): Promise<Tenant> {
-  const result = await query(
-    `INSERT INTO tenants (tenant_id, name, status)
-     VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, COALESCE($3, 'pending_configuration'))
-     RETURNING *`,
-    [input.tenantId ?? null, input.name, input.status ?? null],
-  );
-  return mapTenant(result.rows[0] as Row);
-}
-
+/**
+ * FBL-020-R4 §5 — THE WRITES ARE GONE FROM THIS MODULE, AND THEIR ABSENCE IS THE
+ * CORRECTION.
+ *
+ * Until this revision it exported seven production writes — `createTenant`,
+ * `setTenantStatus`, `createDealerGroup`, `createLegalEntity`, `createRooftop`,
+ * `createDepartment` and `setUnitStatus` — and not one of them named an acting
+ * user, advanced `authorization_version`, or wrote an audit row.
+ *
+ * They were not incidental bookkeeping. `resolveAncestry` below denies any decision
+ * whose chain contains an ineffective node, so `setUnitStatus(..., 'archived')`
+ * revoked the reach of every role binding scoped at or beneath that node: a mass
+ * revocation performed by nobody, recorded nowhere, and invisible to the
+ * `authorization_version` that policy evidence is written against. Creating a node
+ * `active` was the same act in reverse.
+ *
+ * The attributed replacements live in `@dealer/identity-access`:
+ *
+ *     createTenant / setTenantStatus       ->  createOrganization /
+ *                                              changeOrganizationStatus
+ *     create{DealerGroup,LegalEntity,
+ *            Rooftop,Department}           ->  createOrganizationUnit
+ *     setUnitStatus                        ->  changeOrganizationUnitStatus
+ *
+ * They cannot live HERE, for a structural reason rather than a stylistic one: the
+ * attribution contract needs `requireActor` and the transactional audit writer, both
+ * of which live in identity-access, and identity-access already depends on this
+ * package (the policy engine calls `resolveAncestry`). An edge back would be a
+ * cycle. So this module keeps what it can honestly own — the row shapes, the
+ * effectiveness rule and the READS — and the writes sit beside the actor contract
+ * they have to satisfy. `scripts/check-owned-mutations.ts` fails the build if one
+ * ever reappears here.
+ */
 export async function getTenant(tenantId: string): Promise<Tenant | null> {
   const result = await query(`SELECT * FROM tenants WHERE tenant_id = $1`, [tenantId]);
   return result.rows.length > 0 ? mapTenant(result.rows[0] as Row) : null;
-}
-
-export async function setTenantStatus(
-  tenantId: string,
-  status: TenantStatus,
-): Promise<Tenant | null> {
-  const result = await query(`UPDATE tenants SET status = $2 WHERE tenant_id = $1 RETURNING *`, [
-    tenantId,
-    status,
-  ]);
-  return result.rows.length > 0 ? mapTenant(result.rows[0] as Row) : null;
-}
-
-export async function createDealerGroup(input: {
-  tenantId: string;
-  name: string;
-  status?: OrgUnitStatus;
-}): Promise<DealerGroup> {
-  const result = await query(
-    `INSERT INTO dealer_groups (tenant_id, name, status)
-     VALUES ($1, $2, COALESCE($3, 'pending_configuration')) RETURNING *`,
-    [input.tenantId, input.name, input.status ?? null],
-  );
-  return mapDealerGroup(result.rows[0] as Row);
-}
-
-export async function createLegalEntity(input: {
-  tenantId: string;
-  dealerGroupId: string;
-  name: string;
-  status?: OrgUnitStatus;
-}): Promise<LegalEntity> {
-  const result = await query(
-    `INSERT INTO legal_entities (tenant_id, dealer_group_id, name, status)
-     VALUES ($1, $2, $3, COALESCE($4, 'pending_configuration')) RETURNING *`,
-    [input.tenantId, input.dealerGroupId, input.name, input.status ?? null],
-  );
-  return mapLegalEntity(result.rows[0] as Row);
-}
-
-export async function createRooftop(input: {
-  tenantId: string;
-  legalEntityId: string;
-  name: string;
-  rooftopId?: string;
-  status?: OrgUnitStatus;
-}): Promise<Rooftop> {
-  const result = await query(
-    `INSERT INTO rooftops (rooftop_id, tenant_id, legal_entity_id, name, status)
-     VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, COALESCE($5, 'pending_configuration'))
-     RETURNING *`,
-    [
-      input.rooftopId ?? null,
-      input.tenantId,
-      input.legalEntityId,
-      input.name,
-      input.status ?? null,
-    ],
-  );
-  return mapRooftop(result.rows[0] as Row);
-}
-
-export async function createDepartment(input: {
-  tenantId: string;
-  rooftopId: string;
-  code: string;
-  name: string;
-  status?: OrgUnitStatus;
-}): Promise<Department> {
-  const result = await query(
-    `INSERT INTO departments (tenant_id, rooftop_id, code, name, status)
-     VALUES ($1, $2, $3, $4, COALESCE($5, 'pending_configuration')) RETURNING *`,
-    [input.tenantId, input.rooftopId, input.code, input.name, input.status ?? null],
-  );
-  return mapDepartment(result.rows[0] as Row);
 }
 
 export async function listRooftops(tenantId: string): Promise<Rooftop[]> {
@@ -200,26 +144,49 @@ export async function listRooftops(tenantId: string): Promise<Rooftop[]> {
   return (result.rows as Row[]).map(mapRooftop);
 }
 
-const UNIT_TABLES: Record<Exclude<OrganizationLevel, 'tenant'>, { table: string; pk: string }> = {
-  dealer_group: { table: 'dealer_groups', pk: 'dealer_group_id' },
-  legal_entity: { table: 'legal_entities', pk: 'legal_entity_id' },
-  rooftop: { table: 'rooftops', pk: 'rooftop_id' },
-  department: { table: 'departments', pk: 'department_id' },
-};
-
-/** Status transition for any non-tenant node. There is no delete. */
-export async function setUnitStatus(
+/**
+ * One organization unit as stored, or null when this tenant has no such node.
+ *
+ * A READ, and it exists because the writes left: a caller that used to learn a
+ * node's status from the row a write returned now asks for it. Per-level statements
+ * rather than an interpolated table name, so every reference to these tables is
+ * greppable and statically visible.
+ */
+export async function getUnit(
   level: Exclude<OrganizationLevel, 'tenant'>,
   tenantId: string,
   id: string,
-  status: OrgUnitStatus,
-): Promise<boolean> {
-  const { table, pk } = UNIT_TABLES[level];
-  const result = await query(
-    `UPDATE ${table} SET status = $3 WHERE tenant_id = $1 AND ${pk} = $2`,
-    [tenantId, id, status],
-  );
-  return (result.rowCount ?? 0) > 0;
+): Promise<DealerGroup | LegalEntity | Rooftop | Department | null> {
+  switch (level) {
+    case 'dealer_group': {
+      const r = await query(
+        `SELECT * FROM dealer_groups WHERE tenant_id = $1 AND dealer_group_id = $2`,
+        [tenantId, id],
+      );
+      return r.rows.length > 0 ? mapDealerGroup(r.rows[0] as Row) : null;
+    }
+    case 'legal_entity': {
+      const r = await query(
+        `SELECT * FROM legal_entities WHERE tenant_id = $1 AND legal_entity_id = $2`,
+        [tenantId, id],
+      );
+      return r.rows.length > 0 ? mapLegalEntity(r.rows[0] as Row) : null;
+    }
+    case 'rooftop': {
+      const r = await query(`SELECT * FROM rooftops WHERE tenant_id = $1 AND rooftop_id = $2`, [
+        tenantId,
+        id,
+      ]);
+      return r.rows.length > 0 ? mapRooftop(r.rows[0] as Row) : null;
+    }
+    case 'department': {
+      const r = await query(
+        `SELECT * FROM departments WHERE tenant_id = $1 AND department_id = $2`,
+        [tenantId, id],
+      );
+      return r.rows.length > 0 ? mapDepartment(r.rows[0] as Row) : null;
+    }
+  }
 }
 
 /**

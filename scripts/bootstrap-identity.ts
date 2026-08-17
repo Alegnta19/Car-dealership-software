@@ -13,333 +13,43 @@
  * default and nothing is guessed.
  *
  * DRY-RUN BY DEFAULT: without --apply it prints the plan and writes nothing.
- * Idempotent: re-running against an already-bootstrapped tenant changes
- * nothing and says so. Ambiguity refuses loudly: a provider organization
- * already mapped to a DIFFERENT tenant, a tenant already carrying a
- * different active organization, or an existing mapping whose issuer DISAGREES
- * with the one named here, all abort before any write. Prints identifiers
- * only — never a credential, an API key or a cookie value.
+ * Idempotent: re-running against an already-bootstrapped tenant changes nothing
+ * and says so. Ambiguity refuses loudly. Prints identifiers only — never a
+ * credential, an API key or a cookie value.
  *
- * Every applied step lands in audit_events inside the same transaction
- * (durable outbox delivery is FBL-040 scope and is not claimed here).
+ * FBL-020-R4 §5 — THIS FILE NO LONGER WRITES ANYTHING, AND THAT IS THE POINT.
+ *
+ * It used to hold six raw writes — tenant, provider connection, user link, role
+ * binding — none of which named an acting user on the row, advanced
+ * `authorization_version`, or wrote a per-step audit event; and it decided what to
+ * write from reads taken BEFORE its transaction, so two concurrent runs could each
+ * see "nothing here yet". Every one of those writes now lives in
+ * `bootstrapIdentityOrigin` in @dealer/identity-access, which is the module that
+ * owns the identity tables and the attribution contract, and which does the reads,
+ * the refusals and the writes inside ONE transaction.
+ *
+ * What is left here is what a script should be: argument parsing, one call, and
+ * printing. `scripts/check-owned-mutations.ts` fails the build if a write to an
+ * authorization-state table ever reappears in this file.
  */
-import { randomUUID } from 'node:crypto';
-import { closePool, withTransaction, type Executor } from '@dealer/database';
-import { TENANT_ADMIN_ROLE } from '@dealer/identity-access';
+import { closePool } from '@dealer/database';
+import {
+  BootstrapRefused,
+  bootstrapIdentityOrigin,
+  type BootstrapOptions,
+  type BootstrapStep,
+} from '@dealer/identity-access';
 
-export interface BootstrapOptions {
-  tenantId: string;
-  tenantName: string;
-  providerOrganizationId: string;
-  /**
-   * The token issuer this connection trusts (R1 section C). Every request is
-   * refused unless the verified token issuer agrees with it, so bootstrap
-   * must record it explicitly rather than leave it to be guessed.
-   */
-  issuer: string;
-  adminProviderUserId: string;
-  adminEmail: string | null;
-  apply: boolean;
-}
+export { BootstrapRefused };
+export type { BootstrapOptions, BootstrapStep };
 
-export interface BootstrapStep {
-  step: string;
-  action: 'create' | 'update' | 'exists' | 'refused';
-  detail: string;
-}
-
-export class BootstrapRefused extends Error {}
-
-interface Row {
-  [key: string]: unknown;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+/**
+ * The name this command has always been called by, kept as the entry point so
+ * operator runbooks and the identity suites do not have to learn a new one. The
+ * implementation is the attributed service.
+ */
 export async function bootstrapIdentity(options: BootstrapOptions): Promise<BootstrapStep[]> {
-  if (!UUID_RE.test(options.tenantId)) {
-    throw new BootstrapRefused('--tenant-id must be a UUID');
-  }
-  const steps: BootstrapStep[] = [];
-  await withTransaction(async (executor) => {
-    await planTenant(executor, options, steps);
-    await planConnection(executor, options, steps);
-    const userLinkId = await planUserLink(executor, options, steps);
-    await planRoleBinding(executor, options, steps, userLinkId);
-
-    if (options.apply) {
-      await executor.query(
-        `INSERT INTO audit_events (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
-         VALUES ($1, 'identity.bootstrap.applied', 'tenant', $1, NULL, $2)`,
-        [
-          options.tenantId,
-          JSON.stringify({
-            steps: steps.map((s) => `${s.step}:${s.action}`),
-            provider: 'workos',
-          }),
-        ],
-      );
-    }
-  });
-  return steps;
-}
-
-async function planTenant(
-  executor: Executor,
-  options: BootstrapOptions,
-  steps: BootstrapStep[],
-): Promise<void> {
-  const existing = await executor.query(`SELECT name, status FROM tenants WHERE tenant_id = $1`, [
-    options.tenantId,
-  ]);
-  if (existing.rows.length === 0) {
-    steps.push({
-      step: 'tenant',
-      action: 'create',
-      detail: `create active tenant ${options.tenantId}`,
-    });
-    if (options.apply) {
-      await executor.query(
-        `INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')`,
-        [options.tenantId, options.tenantName],
-      );
-    }
-    return;
-  }
-  const row = existing.rows[0] as Row;
-  if (String(row.status) === 'pending_configuration') {
-    steps.push({
-      step: 'tenant',
-      action: 'update',
-      detail: 'activate pending_configuration tenant and set its name',
-    });
-    if (options.apply) {
-      await executor.query(`UPDATE tenants SET name = $2, status = 'active' WHERE tenant_id = $1`, [
-        options.tenantId,
-        options.tenantName,
-      ]);
-    }
-    return;
-  }
-  steps.push({ step: 'tenant', action: 'exists', detail: `tenant already ${String(row.status)}` });
-}
-
-async function planConnection(
-  executor: Executor,
-  options: BootstrapOptions,
-  steps: BootstrapStep[],
-): Promise<void> {
-  const byOrg = await executor.query(
-    `SELECT tenant_id, status, issuer FROM identity_provider_connections
-      WHERE provider = 'workos' AND provider_organization_id = $1`,
-    [options.providerOrganizationId],
-  );
-  if (byOrg.rows.length > 0) {
-    const row = byOrg.rows[0] as Row;
-    if (row.tenant_id === null || String(row.tenant_id) !== options.tenantId) {
-      throw new BootstrapRefused(
-        'provider organization is already mapped to a different internal home — refusing an ambiguous mapping',
-      );
-    }
-    // R3: ISSUER DRIFT. The issuer is the trust anchor, so re-running the
-    // bootstrap with a different one is either a typo or an attempt to move a
-    // live tenant's trust to another environment. Either way it is a decision
-    // an operator makes deliberately (and audibly), never a side effect of a
-    // re-run: this command reports the disagreement and writes nothing.
-    if (String(row.issuer) !== options.issuer) {
-      throw new BootstrapRefused(
-        'the existing mapping records a DIFFERENT issuer than --issuer — refusing issuer drift; change it deliberately, not via bootstrap',
-      );
-    }
-    if (String(row.status) === 'active') {
-      steps.push({
-        step: 'connection',
-        action: 'exists',
-        detail: 'active connection already maps this organization at the named issuer',
-      });
-      return;
-    }
-    throw new BootstrapRefused(
-      'provider organization is mapped but the connection is disabled — re-enable it explicitly, not via bootstrap',
-    );
-  }
-  const activeForTenant = await executor.query(
-    `SELECT provider_organization_id FROM identity_provider_connections
-      WHERE provider = 'workos' AND tenant_id = $1 AND status = 'active'`,
-    [options.tenantId],
-  );
-  if (activeForTenant.rows.length > 0) {
-    throw new BootstrapRefused(
-      'tenant already has an active connection to a different provider organization — refusing an ambiguous mapping',
-    );
-  }
-  steps.push({
-    step: 'connection',
-    action: 'create',
-    detail: 'map provider organization to this tenant',
-  });
-  if (options.apply) {
-    await executor.query(
-      `INSERT INTO identity_provider_connections
-         (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
-       VALUES ('dealership', $1, 'workos', $2, 'active', $3)`,
-      [options.tenantId, options.providerOrganizationId, options.issuer],
-    );
-  }
-}
-
-async function planUserLink(
-  executor: Executor,
-  options: BootstrapOptions,
-  steps: BootstrapStep[],
-): Promise<string | null> {
-  // R3: (provider, tenant, subject) is not an identity. The lookup also reads
-  // whether the existing link's BINDING — connection, issuer, organization —
-  // still agrees with the tenant's active connection, so a link that belongs to
-  // a different provider organization is refused rather than adopted. An
-  // as-yet-unbound PENDING link agrees by definition; the schema only demands a
-  // binding once a link is activated.
-  const existing = await executor.query(
-    `SELECT ul.user_link_id,
-            ul.status,
-            COALESCE(
-              ul.connection_id IS NULL
-              OR (ul.connection_id = c.connection_id
-                  AND ul.issuer = c.issuer
-                  AND ul.provider_organization_id = c.provider_organization_id),
-              FALSE
-            ) AS binding_agrees
-       FROM user_links ul
-       LEFT JOIN identity_provider_connections c
-              ON c.tenant_id = ul.tenant_id
-             AND c.provider = ul.provider
-             AND c.status = 'active'
-      WHERE ul.provider = 'workos' AND ul.tenant_id = $1 AND ul.provider_user_id = $2`,
-    [options.tenantId, options.adminProviderUserId],
-  );
-  if (existing.rows.length > 0) {
-    const row = existing.rows[0] as Row;
-    const id = String(row.user_link_id);
-    if (row.binding_agrees !== true) {
-      throw new BootstrapRefused(
-        'the named administrator link is bound to a different provider connection — re-home it explicitly, not via bootstrap',
-      );
-    }
-    if (String(row.status) === 'deactivated') {
-      throw new BootstrapRefused(
-        'the named administrator link is deactivated — refusing to resurrect it here',
-      );
-    }
-    if (String(row.status) === 'pending') {
-      steps.push({
-        step: 'user_link',
-        action: 'update',
-        detail: 'activate pending administrator link',
-      });
-      if (options.apply) {
-        await executor.query(
-          `UPDATE user_links ul
-              SET status = 'activated', activated_at = NOW(),
-                  email = COALESCE($2, ul.email),
-                  connection_id = c.connection_id,
-                  issuer = c.issuer,
-                  provider_organization_id = c.provider_organization_id
-             FROM identity_provider_connections c
-            WHERE ul.user_link_id = $1
-              AND c.tenant_id IS NOT DISTINCT FROM ul.tenant_id
-              AND c.provider = ul.provider AND c.status = 'active'`,
-          [id, options.adminEmail],
-        );
-      }
-      return id;
-    }
-    steps.push({
-      step: 'user_link',
-      action: 'exists',
-      detail: 'administrator link already activated',
-    });
-    return id;
-  }
-  const id = randomUUID();
-  steps.push({
-    step: 'user_link',
-    action: 'create',
-    detail: 'create activated administrator link (no roles yet)',
-  });
-  if (options.apply) {
-    await executor.query(
-      // R2: the administrator link is bound to the exact connection this
-      // bootstrap mapped — an activated link that cannot name its connection,
-      // issuer and organization is refused by the schema.
-      `INSERT INTO user_links
-         (user_link_id, actor_scope, tenant_id, provider, provider_user_id, email, status,
-          activated_at, connection_id, issuer, provider_organization_id)
-       SELECT $1, 'dealership', $2, 'workos', $3, $4, 'activated', NOW(),
-              c.connection_id, c.issuer, c.provider_organization_id
-         FROM identity_provider_connections c
-        WHERE c.tenant_id = $2 AND c.provider = 'workos' AND c.status = 'active'
-        LIMIT 1`,
-      [id, options.tenantId, options.adminProviderUserId, options.adminEmail],
-    );
-    return id;
-  }
-  return null;
-}
-
-async function planRoleBinding(
-  executor: Executor,
-  options: BootstrapOptions,
-  steps: BootstrapStep[],
-  userLinkId: string | null,
-): Promise<void> {
-  if (userLinkId === null) {
-    // dry-run for a link that does not exist yet
-    steps.push({
-      step: 'role_binding',
-      action: 'create',
-      detail: `grant ${TENANT_ADMIN_ROLE} at tenant scope`,
-    });
-    return;
-  }
-  // role-binding-effectiveness-opt-out(all-bindings-including-ineffective): an
-  // IDEMPOTENCY probe against the
-  // unrevoked-binding uniqueness rule, not an authorization read. It must see a
-  // binding whose window has not opened or has already closed — those rows still
-  // occupy the unique slot, so an effectiveness-filtered probe would report
-  // "absent", insert a second grant and fail on the index. The bootstrap decides
-  // whether a row EXISTS; it never decides what a row authorizes.
-  const existing = await executor.query(
-    `SELECT role_binding_id FROM role_bindings
-      WHERE tenant_id = $1 AND user_link_id = $2 AND role = $3
-        AND scope_level = 'tenant' AND scope_id = $1 AND status = 'active'`,
-    [options.tenantId, userLinkId, TENANT_ADMIN_ROLE],
-  );
-  if (existing.rows.length > 0) {
-    steps.push({
-      step: 'role_binding',
-      action: 'exists',
-      detail: `${TENANT_ADMIN_ROLE} already granted`,
-    });
-    return;
-  }
-  steps.push({
-    step: 'role_binding',
-    action: 'create',
-    detail: `grant ${TENANT_ADMIN_ROLE} at tenant scope`,
-  });
-  if (options.apply) {
-    // The bootstrap is the ORIGIN of trust: before it runs there is no actor to
-    // attribute anything to, so this one grant is attributed to the
-    // administrator link it just minted. Every LATER authorization change goes
-    // through the owned mutation services in @dealer/identity-access.
-    await executor.query(
-      `INSERT INTO role_bindings
-         (tenant_id, user_link_id, role, scope_level, scope_id,
-          granted_by_user_link_id, created_by_user_link_id, updated_by_user_link_id)
-       VALUES ($1, $2, $3, 'tenant', $1, $2, $2, $2)`,
-      [options.tenantId, userLinkId, TENANT_ADMIN_ROLE],
-    );
-  }
+  return bootstrapIdentityOrigin(options);
 }
 
 function parseArgs(argv: readonly string[]): BootstrapOptions {

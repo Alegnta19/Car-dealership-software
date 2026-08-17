@@ -99,7 +99,7 @@
     "@dealer/worker": {
       "path": "apps/worker",
       "owner": "platform-architecture",
-      "purpose": "Worker process shell. No jobs, queues or schedulers until FBL-040.",
+      "purpose": "Background process. Runs the FBL-020-R4 section 4 support-access expiry transition on a bounded interval; no queues, outbox or schedulers (FBL-040).",
       "publicEntry": "apps/worker/src/index.ts",
       "allowedDealerDeps": [
         "@dealer/contracts",
@@ -109,9 +109,14 @@
         "@dealer/organization",
         "@dealer/identity-access"
       ],
-      "prohibited": ["business workflows in FBL-010", "SQL", "direct pg usage"],
+      "prohibited": [
+        "queues, outbox tables and schedulers until FBL-040",
+        "dealership business workflows",
+        "SQL",
+        "direct pg usage"
+      ],
       "database": "none",
-      "status": "shell \u2014 not deployed"
+      "status": "active \u2014 deployed beside the API; runs the support-access expiry job"
     },
     "@dealer/web": {
       "path": "apps/web",

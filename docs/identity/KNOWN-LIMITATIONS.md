@@ -24,28 +24,34 @@ drift-guard fixture corpus stops biting.
 
 ## Not proven by deterministic CI
 
-- **Live WorkOS behaviour.** Every verifier property — issuer/audience pinning,
-  algorithm allowlist, JWKS caching and bounded refresh, rotation without
-  restart, fail-closed outage, `auth_time` proof, nonce binding, impossible
-  times — is proven against a deterministic local RSA issuer. WorkOS-specific
-  behaviour (real AuthKit redirect parameters, real token claim shapes, real
-  `max_age=0` semantics, real organization membership, and the **actual
-  MFA-required organization policy**) is **not** exercised. That is Gate B, the
-  live certification gate.
-- **The provider adapter's SDK calls.** `createWorkosProvider` compiles and is
-  architecture-tested for confinement, but no test invokes the real SDK. The
-  refresh, exchange, authorization-URL and logout-URL behaviours are proven
-  through the provider-neutral port with a fake, which proves the platform side
-  of the contract and nothing about WorkOS.
-  The **wiring** of the refresh, by contrast, is proven end to end: a request
-  carrying a session cookie whose provider token is near expiry is driven over
-  real HTTP through the real middleware, and the rotation, the non-extension of
-  the local session, the transient-failure survival and the revoking outcomes are
-  all asserted against the database (`tests/auth.test.ts`, the `C1:` tests). Only
-  the port behind it is substituted, via `useIdentityProviderForTests`.
-  What is therefore **not** proven: that WorkOS's own refresh endpoint returns the
-  shapes the adapter maps, and that a real WorkOS access token's `exp` produces a
-  sensible refresh cadence in production. Both are Gate B.
+- **Live WorkOS behaviour — LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Every
+  verifier property — issuer/audience pinning, algorithm allowlist, JWKS caching
+  and bounded refresh, rotation without restart, fail-closed outage, `auth_time`
+  proof, nonce binding, impossible times — is proven against a deterministic local
+  RSA issuer. WorkOS-specific behaviour (real AuthKit redirect parameters, real
+  token claim shapes, real `max_age=0` semantics, real organization membership, and
+  the **actual MFA-required organization policy**) is **not** exercised. This is a
+  gate that has not been discharged, not a risk somebody may accept: it needs
+  credentials and an operator.
+- **The provider adapter, precisely.** FBL-020-R4 §7 correction: R3 stated here that
+  "no test invokes the real SDK". **That was wrong, and the wrong version of the
+  claim made the untested part sound larger than it is.** The adapter IS invoked, in
+  process: `tests/identity-config.test.ts` builds the real adapter with
+  `createWorkosProvider(...)` and calls `provider.refreshSession(...)` over a
+  **mocked transport** — `globalThis.fetch` is substituted before construction,
+  because the SDK captures its transport there — and asserts that the exchange is
+  bounded, aborts its socket rather than merely abandoning it, and surfaces silence
+  as `transient` instead of as a definitive refusal. No SDK type escapes the adapter.
+  The **wiring** of the refresh is proven end to end as well: a request carrying a
+  session cookie whose provider token is near expiry is driven over real HTTP through
+  the real middleware, and the rotation, the non-extension of the local session, the
+  transient-failure survival and the revoking outcomes are all asserted against the
+  database (`tests/auth.test.ts`, the `C1:` tests). Only the port behind it is
+  substituted, via `useIdentityProviderForTests`.
+  What is therefore **not** proven is exactly this: that WorkOS's own endpoints
+  return the shapes the adapter maps, and that a real WorkOS access token's `exp`
+  produces a sensible refresh cadence in production. That is live behaviour, and
+  **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.**
 - **The reauthentication CALLBACK end-to-end.** The journey test drives
   `POST /auth/reauth/start` over real HTTP and then completes the exact
   transaction the route opened through the production completion service; the
@@ -61,23 +67,42 @@ re-run the drill.
   in `migrations/057_identity_boundary_completion.sql` is written ahead of the
   CHECK, NOT NULL or unique index that depends on it, and several match zero rows
   on a database that migrates in order — they exist because the ORDERING is the
-  property, not the row count. This is demonstrated by running 057 on a populated
-  pre-057 database (the CI `migration-upgrade` job, and the hand drill recorded in
-  `docs/FBL-020-DELIVERY-REPORT.md` §8, whose negative control reproduces
-  `check constraint "is_live_session_fully_bound" … is violated by some row` when
-  the reconciliation is removed). **`npm test` does not fail if the file is
-  reordered.**
+  property, not the row count.
+  **FBL-020-R4 §6 turned this from a hand drill into a CI gate.** The
+  `migration-upgrade` job now applies the retained schema through the last pre-057
+  migration, seeds the committed populated fixture
+  `tests/fixtures/legacy-identity-seed-pre-057.sql`, applies `057`, and asserts the
+  exact reconciled state of every seeded row with nonzero, unchanged before/after
+  counts (`scripts/verify-upgrade-state.ts`). `scripts/upgrade-negative-controls.ts`
+  then removes each load-bearing reconciliation on an isolated copy of that database
+  and requires the intended refusal — ten controls, each declaring the stage it must
+  fail at and the constraint or assertion the failure must name. R3's version of this
+  was a local, prose-only exercise and was rejected as evidence; that rejection was
+  correct.
+  Two limits remain, and they are the reason this entry stays in this section.
+  **`npm test` alone still does not fail if the file is reordered** — a mutated
+  migration cannot change a database that has already been migrated, so the gate has
+  to be the upgrade job. And **eight statements in `057` cannot be shown load-bearing
+  by any pre-057 fixture**, because they operate on columns `057` itself creates; they
+  are enumerated with their reasons in the `negative-controls.json` artifact rather
+  than counted as proven.
 - **Fresh chain and upgrade path converge on one schema.** Asserted by the CI
   `migration-upgrade` job comparing two fingerprints. Local runs corroborate only:
   catalog text differs across PostgreSQL builds, so a local value is not the
   authoritative one.
 - **The delivery report's own numbers.** `docs/FBL-020-DELIVERY-REPORT.md`
   carries test counts, checksums, ratchet values and CI evidence. **No gate pins
-  any of them**, which is how the R2 report came to describe a head two commits
-  and **94** working-tree paths in the past (53 modified + 41 new; the report's
-  §7 separately and correctly uses **93** for the prettier scan, which is the
-  same set minus `migrations/057_identity_boundary_completion.sql` — Prettier has
-  no SQL parser. Two different populations, not two values for one fact).
+  any of them**, which is how the R2 report came to describe a head two commits and
+  a working-tree path count in the past.
+  **This bullet deliberately quotes none of those figures**, and that is a
+  correction, not a style choice: it previously restated §7's prettier count and
+  §10's changed-path split, and both went stale the moment R4 rewrote those
+  sections — a bullet whose entire warning is "re-measure before quoting" was
+  quoting stale numbers. The populations live where they are measured: **§7** for
+  the Prettier scan (which excludes the files Prettier has no parser for), **§10**
+  for the changed-path list against the acceptance base, and **§2** for the count
+  of paths R2's head is behind. They are three different populations, not three
+  values for one fact, and each is reproducible from the command printed beside it.
   Migration checksums are the one part with a defence: they are published beside
   their git blob OIDs, so a stale value can be caught by re-deriving it. Treat
   every other figure in that report as true-when-written and re-measure before
@@ -92,14 +117,98 @@ re-run the drill.
   excludes itself from its own table and is therefore a reachable fixed point.
   Re-derive it with `git diff --numstat <base> -- <path>`; do not copy it here.
 
-- **The ratchet ceilings are a document, not a gate.**
-  `docs/adr/ADR-005-technology-selections.md:19` declares 59 / 136 / 29 and is
-  the sole definition site. `scripts/quality-ratchet.ts` implements no ceiling
-  concept whatsoever (`grep -c ceiling` → 0); `check` refuses growth against
-  `quality-baselines.json` per-total and per-file, and nothing more. Any claim
-  that "no ceiling was raised" is an assertion about ADR-005, not a verified
-  property. Correspondence during FBL-020 repeatedly quoted the third ceiling as
-  23; the ADR says 29.
+- **The ratchet ceilings are a document, not a gate.** The ceilings are
+  **59 / 136 / 23**, defined by the GOVERNING blueprint
+  (`Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, sha256
+  `556d4e10…`, §14.3, "R2 gate and stop rule": _"Quality ceilings remain tsc-strict
+  <=59, eslint <=136 and format <=23."_).
+  `docs/adr/ADR-005-technology-selections.md` RESTATES them and is not the
+  definition site — it read 29 for the third value until R4, and R3 wrongly
+  "corrected" the reporting to match the ADR on the grounds that it was the only
+  place in the repository that stated them. Both are reconciled to the blueprint
+  now; `docs/FBL-020-DELIVERY-REPORT.md` §7 carries the full history.
+  Independently of which number is right: `scripts/quality-ratchet.ts` implements
+  no ceiling concept whatsoever (`grep -c ceiling` → 0); `check` refuses growth
+  against `quality-baselines.json` per-total and per-file, and nothing more. Any
+  claim that "no ceiling was raised" is an assertion about a document, not a
+  verified property, and NOTHING IN CI WOULD FAIL IF A CEILING WERE EXCEEDED.
+
+- **The audit inventory is complete over the `identity.` names the shared resolver
+  can READ, not over `audit_events`.** `scripts/check-audit-inventory.ts` (in
+  `npm run architecture:check`) accounts for every `identity.`-namespaced name it
+  can resolve in production code against
+  `packages/identity-access/src/audit-inventory.ts`, refuses a name it can only
+  partly read, and refuses an `INSERT INTO audit_events` in any file that is not a
+  declared writer.
+  **The scope of "can read" is the whole of the claim**, and it is not a synonym
+  for "spelled in one string literal". Names are resolved through the ONE shared
+  static string resolver, `scripts/static-string-resolver.ts`, which
+  `scripts/check-role-binding-effectiveness.ts` also uses: concatenation, `+=`
+  accumulation, `.join`, `String.prototype.concat`, `String.raw`, `String(x)`,
+  indexed fragments and `.at(i)`, array literals/spreads/`push`/`Array.from`/
+  `Object.values`, lookup maps under an unresolvable key, `?:`/`??`/`||`
+  alternatives, `for … of` element bindings, and named, aliased, namespaced and
+  re-exported imports across files.
+  `architecture/fixtures/audit-inventory-assembly/` is twelve of those spellings,
+  **every one of which the current gate rejects** — asserted by _EVERY assembly
+  spelling the shared resolver reads is REJECTED, and none passes silently_, and
+  reproducible today. The R4 first-pass gate read one regular expression over
+  `node.text` plus `node.head.text` and missed most of them, which is why this entry
+  no longer says "refuses an event type assembled at run time" as an absolute.
+  **How many it missed is deliberately not stated here.** Two documents published
+  that count as eleven and two tests as ten; at most one was right, and none was
+  re-measured before publishing. The figure is withdrawn rather than adjudicated —
+  it is not evidence this delivery needs, and choosing between two unverified
+  readings would repeat, in miniature, the defect this order exists to correct.
+  Four limits follow from the shape, and each of the first two is DEMONSTRATED by a
+  fixture in `architecture/fixtures/audit-inventory-residue/` that the gate ACCEPTS
+  — pinned by _the residue the gate cannot see is ACCEPTED, and named in the
+  documents_ in `tests/architecture.test.ts`, so closing a residue turns that test
+  red and forces this entry to change with it:
+
+  - A name where **neither the root nor a declared family** can be read —
+    `${root}.${family}.renamed`, `${a}${b}.renamed`. The gate refuses a readable
+    root with an unreadable tail (`identity.support.${x}` →
+    `audit-event-type-assembled-at-run-time`) and an unreadable root followed by a
+    declared family (`${ns}.support.quarantined` →
+    `audit-event-type-namespace-root-assembled-at-run-time`); with NEITHER
+    readable, nothing marks the string as an event type, and reporting every
+    unresolvable string in the repository would make the gate unusable. Such a
+    write is still confined to a declared writer file.
+  - An audit event type OUTSIDE the `identity.` namespace is reached only by the
+    declared-writer rule, which is a rule about FILES rather than names. One
+    writer is declared non-enumerable —
+    `packages/fixed-ops/src/legacy/service-cockpit-service.ts`, pre-existing
+    Phase-248 code that assembles `service.${action}` at run time — so its event
+    types are not enumerated anywhere. FBL-020 does not touch that file, and the
+    gate would refuse a NEW file writing a new namespace, but the existing
+    `service.*` set is uninventoried.
+  - A migration that assembled an event type in PL/pgSQL `format()` is caught only
+    by the "this `INSERT INTO audit_events` carries no static event-type literal"
+    rule, which is position-free and therefore coarse: it proves a literal is
+    present in the statement, not that the literal occupies the `event_type`
+    column. No migration in this repository does this — 057's two audit writes
+    both name their event type as a literal in the SELECT list. The coarseness is
+    exercised, not just described, by _rule:
+    migration-audit-write-has-no-static-event-type_ in
+    `tests/audit-inventory-rules.test.ts`, which feeds the rule a statement whose
+    literal sits in `details` rather than `event_type` and records that it passes.
+  - Everything the shared resolver states it cannot see: values crossing a function
+    boundary, array mutation other than `push`, object KEYS, strings produced at
+    run time (`JSON.parse`, a database read), and its depth and breadth limits.
+    Operations that REWRITE rather than assemble — `.replace`, `.slice`, a case
+    fold, `.reduce`, a template tag other than `String.raw` — are not a residue:
+    their input is rendered and the operation is refused
+    (`architecture/fixtures/audit-inventory-assembly/evasion-k-opaque-rewrites.ts`).
+
+- **One inventory citation is a CI gate, not a suite test.**
+  `identity.support.approval_superseded` is written by migration 057's §5 / §A2
+  reconciliation, which can only happen once, on a database that predates the
+  migration. Its `provenIn` / `provenBy` therefore name
+  `scripts/verify-upgrade-state.ts` and its check id
+  `audit_supersession_is_recorded` rather than a `test(…)`. The audit-inventory
+  gate verifies the file contains that string; the assertion itself runs in the
+  CI upgrade job, not in `npm test`.
 
 - **The refresh-lease conditional write is unpinned defence-in-depth.** The claim
   UPDATE in `packages/identity-access/src/session.ts` carries
@@ -115,6 +224,56 @@ re-run the drill.
   _Reproduce: make that substitution and run
   `tests/identity-boundary.test.ts`; contrast the D1 transaction-across-network
   mutation on the same file, which kills two named tests._
+
+## Open at R4 submission — disclosed, not closed
+
+These four were found by R4's own final gate and are being submitted **open**, at the
+repository owner's explicit instruction, rather than held for a further correction pass.
+None is a runtime authorization defect; all four are gaps in the R4 **guard scaffolding**
+or in the precision of a header. They are listed here so the architect can weigh them
+directly instead of discovering them.
+
+- **Three declared residues have no fixture behind them.** The three "not enforced"
+  sections name four residue classes for the audit-inventory gate. Two —
+  root-and-family-both-assembled, and a name outside the namespace — are
+  DEMONSTRATED by `architecture/fixtures/audit-inventory-residue/`, which the gate is
+  asserted to ACCEPT. The other three (**a value crossing a function boundary with an
+  unreadable root**, **array mutation other than `push`** — `parts[0]=`, `unshift`,
+  `splice` — and **a name formed from object KEYS**, `Object.keys(FRAGMENTS).join('')`)
+  are prose only. Each was reproduced by probe during review, so they are real and
+  correctly described; what is missing is a fixture asserting the gate accepts them, which
+  is the standard the other two meet. _Consequence: a future edit could close or widen one
+  of those three and no test would notice._
+
+- **One audit-inventory rule has no test, under a header saying every rule does.**
+  `scripts/check-audit-inventory.ts` states "EVERY RULE IN THIS FILE IS TESTED". The
+  variant-overflow branch — a third, independently-conditioned raise of
+  `audit-event-type-assembled-at-run-time` when the resolver's variant cap is exceeded —
+  is not reached by any fixture or rule test. Twenty-one of the twenty-two rules are
+  pinned; this is the twenty-second. The header sentence is therefore **still slightly
+  broader than the code**, and that is disclosed here rather than silently left.
+
+- **The sibling owned-mutation gate has an untested rule of the same shape.**
+  `owned-mutation-owner-declaration-is-stale` in `scripts/check-owned-mutations.ts` fires
+  only on a whole-tree run, so the fixture-driven test in `tests/owned-mutations.test.ts`
+  cannot reach it. The remedy applied to the audit gate — export the rule functions and
+  drive them directly — was not applied here. _Consequence: an owner declaration that
+  stops matching a real writer can sit unnoticed._
+
+- **The shared resolver's header is marginally broader than its code.**
+  `scripts/static-string-resolver.ts` paragraph 1 lists `.reduce` accumulation and
+  template tags among what it "resolves"; the code treats a `.reduce` fold and a
+  non-`String.raw` tag as OPAQUE (it names the unreadable piece rather than rendering it,
+  which is fail-loud and safe, but it is not resolution). Its "WHAT IT CANNOT SEE" list
+  also omits `.padStart`/`.padEnd`/`.repeat`/`.normalize`/`.substring`/`.substr`. The
+  behaviour is correct and fail-closed in every case; the prose overstates the reading
+  power.
+
+Two things these four are **not**: none of them is a failed mandatory gate — every §0–§7
+obligation is discharged and CI-proven — and none is a runtime access-control hole. A
+developer must author the code in question, and the identity boundary itself (admission,
+tuple constraints, evidence completeness, lifecycle audit, support expiry, owned
+mutations) is pinned by tests proven to fail when the control is reverted.
 
 ## Deliberately out of scope (named owners)
 

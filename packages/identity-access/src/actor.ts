@@ -4,7 +4,11 @@
  * app-SQL guard keeps query primitives out of apps entirely.
  */
 import { query } from '@dealer/database';
-import { IDENTITY_PROVIDER_WORKOS, type IdentityProviderKind } from './contracts';
+import {
+  EFFECTIVE_MFA_CERTIFICATION_SQL,
+  IDENTITY_PROVIDER_WORKOS,
+  type IdentityProviderKind,
+} from './contracts';
 import { EFFECTIVE_ROLE_BINDING_SQL } from './policy';
 import { findBoundUserLink } from './user-link';
 import type { ActorScope, UserLink } from './contracts';
@@ -52,11 +56,17 @@ export async function resolveActiveConnection(
   provider: IdentityProviderKind = IDENTITY_PROVIDER_WORKOS,
 ): Promise<ActiveConnection | null> {
   const result = await query(
-    `SELECT * FROM identity_provider_connections
-      WHERE provider = $1 AND provider_organization_id = $2
-        AND status = 'active'
-        AND effective_from <= NOW()
-        AND (effective_to IS NULL OR effective_to > NOW())`,
+    `SELECT c.connection_id, c.connection_scope, c.tenant_id, c.issuer,
+            c.provider_organization_id, c.authorization_version,
+            -- R4 §3: "certified" is the FOUR-condition fact, not the raw column.
+            -- Selecting the predicate rather than the boolean is what stops a
+            -- revoked or expired certification reaching a step-up decision.
+            ${EFFECTIVE_MFA_CERTIFICATION_SQL} AS mfa_policy_certified
+       FROM identity_provider_connections c
+      WHERE c.provider = $1 AND c.provider_organization_id = $2
+        AND c.status = 'active'
+        AND c.effective_from <= NOW()
+        AND (c.effective_to IS NULL OR c.effective_to > NOW())`,
     [provider, providerOrganizationId],
   );
   return result.rows.length > 0 ? mapConnection(result.rows[0] as Row) : null;
@@ -67,10 +77,16 @@ export async function findActiveConnectionById(
   connectionId: string,
 ): Promise<ActiveConnection | null> {
   const result = await query(
-    `SELECT * FROM identity_provider_connections
-      WHERE connection_id = $1 AND status = 'active'
-        AND effective_from <= NOW()
-        AND (effective_to IS NULL OR effective_to > NOW())`,
+    `SELECT c.connection_id, c.connection_scope, c.tenant_id, c.issuer,
+            c.provider_organization_id, c.authorization_version,
+            -- R4 §3: "certified" is the FOUR-condition fact, not the raw column.
+            -- Selecting the predicate rather than the boolean is what stops a
+            -- revoked or expired certification reaching a step-up decision.
+            ${EFFECTIVE_MFA_CERTIFICATION_SQL} AS mfa_policy_certified
+       FROM identity_provider_connections c
+      WHERE c.connection_id = $1 AND c.status = 'active'
+        AND c.effective_from <= NOW()
+        AND (c.effective_to IS NULL OR c.effective_to > NOW())`,
     [connectionId],
   );
   return result.rows.length > 0 ? mapConnection(result.rows[0] as Row) : null;

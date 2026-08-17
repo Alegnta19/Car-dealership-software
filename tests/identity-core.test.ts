@@ -5,10 +5,12 @@ import {
   bootstrapAdministrator,
   resetDatabase,
   sessionBindingFor,
+  sessionBindingForLink,
   skipIntegration,
+  fixtureAuthorizationStateWrite,
+  seedTenantViaService,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
-import { createTenant } from '@dealer/organization';
 import {
   createSession,
   csrfTokenForSession,
@@ -38,8 +40,12 @@ describe(
     });
 
     async function seedTenantWithConnection(orgId: string) {
-      const tenant = await createTenant({ name: 'Identity Tenant ' + orgId, status: 'active' });
-      await query(
+      const tenant = await seedTenantViaService({
+        name: 'Identity Tenant ' + orgId,
+        status: 'active',
+      });
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO identity_provider_connections
          (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
        VALUES ('dealership', $1, 'workos', $2, 'active', $3)`,
@@ -70,7 +76,8 @@ describe(
 
       assert.equal(await resolveConnectionByOrganization(pool, 'workos', 'org_unknown'), null);
 
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_provider_connections SET status = 'disabled' WHERE provider_organization_id = 'org_resolve'`,
       );
       assert.equal(await resolveConnectionByOrganization(pool, 'workos', 'org_resolve'), null);
@@ -116,7 +123,12 @@ describe(
       assert.equal(again.userLinkId, link.userLinkId);
       assert.equal(again.email, 'renamed@example.com');
       assert.equal(again.status, 'pending', 'repeated login must never activate');
-      const count = await query(`SELECT COUNT(*)::int AS n FROM user_links`, []);
+      // Scoped to the tenant (FBL-020-R4 §5): the attributed organization fixture leaves
+      // a PLATFORM origin administrator, and what this assertion is about is that a
+      // repeated login created no SECOND link for this tenant's subject.
+      const count = await query(`SELECT COUNT(*)::int AS n FROM user_links WHERE tenant_id = $1`, [
+        tenant.tenantId,
+      ]);
       assert.equal(Number((count.rows[0] as { n: number }).n), 1);
 
       // the attempted pending login left policy/audit evidence
@@ -210,6 +222,196 @@ describe(
         }),
         null,
         'deactivated links are not re-activated by the activation path either',
+      );
+    });
+
+    /**
+     * FBL-020-R4 §3 — THE REFUSED LOGIN, AUDITED, IN BOTH BRANCHES.
+     *
+     * `identity.user_link.login_refused` is written from two places in
+     * `observeUserLinkOnLogin` — a DEACTIVATED identity presenting a valid token, and
+     * a subject whose claim is already BOUND TO ANOTHER CONNECTION after an
+     * organization remap. It was the one production audit event type in the identity
+     * namespace that NO test asserted: the deactivated path was exercised above for
+     * its return value only, and the foreign-binding path was exercised nowhere. The
+     * audit-inventory gate now demands a proof file and a proof name for every entry,
+     * and this is that proof.
+     *
+     * The two branches are separated on purpose. They record DIFFERENT reasons and
+     * different actors — a person's own deactivated login names them, while a foreign
+     * claim names NOBODY, because whoever is presenting the token is not the holder of
+     * the row being refused. Collapsing them would lose exactly that distinction.
+     */
+    test('a REFUSED login is audited, in both branches that refuse one', async () => {
+      const tenant = await seedTenantWithConnection('org_refused_first');
+      const origin = await bootstrapAdministrator(tenant.tenantId);
+
+      /** The refusal rows against one link: reason plus whether an actor was named. */
+      async function refusalsFor(userLinkId: string) {
+        const rows = await query(
+          `SELECT details->>'reason' AS reason, actor_user_id
+             FROM audit_events
+            WHERE entity_type = 'user_link' AND entity_id = $1
+              AND event_type = 'identity.user_link.login_refused'
+            ORDER BY created_at`,
+          [userLinkId],
+        );
+        return (rows.rows as Array<{ reason: unknown; actor_user_id: unknown }>).map((r) => ({
+          reason: String(r.reason),
+          named: r.actor_user_id !== null,
+        }));
+      }
+
+      /** Links in this tenant — a refusal must never add one. */
+      async function linkCount(): Promise<number> {
+        const row = (
+          await query(`SELECT COUNT(*)::int AS n FROM user_links WHERE tenant_id = $1`, [
+            tenant.tenantId,
+          ])
+        ).rows[0] as { n: number };
+        return Number(row.n);
+      }
+
+      async function bindingForOrganization(organizationId: string) {
+        const row = (
+          await query(
+            `SELECT connection_id, issuer, provider_organization_id
+               FROM identity_provider_connections
+              WHERE tenant_id = $1 AND provider_organization_id = $2`,
+            [tenant.tenantId, organizationId],
+          )
+        ).rows[0] as {
+          connection_id: unknown;
+          issuer: unknown;
+          provider_organization_id: unknown;
+        };
+        assert.ok(row, `the fixture must have seeded connection ${organizationId}`);
+        return {
+          connectionId: String(row.connection_id),
+          issuer: String(row.issuer),
+          providerOrganizationId: String(row.provider_organization_id),
+        };
+      }
+
+      // ── branch 1: a DEACTIVATED identity presenting a valid token ────────
+      //
+      // Provisioned, activated (which BINDS it to the tenant's one active
+      // connection), then deactivated. The claim lookup still finds it on all six
+      // facts, and the deactivated branch refuses it.
+      const dropped = await provisionUserLink({
+        tenantId: tenant.tenantId,
+        providerUserId: 'user_refused_deactivated',
+        email: null,
+        provisionedByUserLinkId: origin,
+      });
+      assert.ok(
+        await activateUserLink({
+          userLinkId: dropped.userLinkId,
+          activatedByUserLinkId: origin,
+        }),
+      );
+      assert.ok(
+        await deactivateUserLink({
+          userLinkId: dropped.userLinkId,
+          deactivatedByUserLinkId: origin,
+        }),
+      );
+      const first = await bindingForOrganization('org_refused_first');
+      const linksBeforeFirstRefusal = await linkCount();
+      assert.equal(
+        await observeUserLinkOnLogin({
+          ...first,
+          tenantId: tenant.tenantId,
+          providerUserId: 'user_refused_deactivated',
+          email: 'still@example.com',
+          displayName: 'Still Trying',
+        }),
+        null,
+        'a deactivated identity is refused, not resurrected',
+      );
+      assert.equal(
+        await linkCount(),
+        linksBeforeFirstRefusal,
+        'a refused login creates no further link',
+      );
+      assert.deepEqual(
+        await refusalsFor(dropped.userLinkId),
+        [{ reason: 'deactivated', named: true }],
+        'exactly one refusal row, naming the identity it refused',
+      );
+
+      // ── branch 2: a claim BOUND TO ANOTHER CONNECTION ────────────────────
+      //
+      // The organization-remap shape. The link is bound to the first connection;
+      // that connection is then RETIRED and a new one takes its place — which is
+      // the only way two connections can exist for one tenant, because
+      // `uq_ipc_active` (migration 055) permits exactly one ACTIVE connection per
+      // provider per tenant. The login then arrives through the new one. Adopting
+      // the row would re-home an identity into an organization it does not belong
+      // to, so the login is refused and the refusal is recorded against the link
+      // that actually holds the claim. `relinkUserLink` is the sanctioned answer;
+      // a login is not.
+      const home = await provisionUserLink({
+        tenantId: tenant.tenantId,
+        providerUserId: 'user_refused_foreign',
+        email: null,
+        provisionedByUserLinkId: origin,
+      });
+      assert.ok(
+        await activateUserLink({ userLinkId: home.userLinkId, activatedByUserLinkId: origin }),
+      );
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE identity_provider_connections SET status = 'disabled'
+          WHERE tenant_id = $1 AND provider_organization_id = $2`,
+        [tenant.tenantId, 'org_refused_first'],
+      );
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO identity_provider_connections
+           (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
+         VALUES ('dealership', $1, 'workos', $2, 'active', $3)`,
+        [tenant.tenantId, 'org_refused_second', 'https://issuer.test.local'],
+      );
+      const second = await bindingForOrganization('org_refused_second');
+      assert.notEqual(second.connectionId, first.connectionId, 'the fixture needs TWO connections');
+      const linksBeforeSecondRefusal = await linkCount();
+      assert.equal(
+        await observeUserLinkOnLogin({
+          ...second,
+          tenantId: tenant.tenantId,
+          providerUserId: 'user_refused_foreign',
+          email: null,
+          displayName: null,
+        }),
+        null,
+        'a login through another connection must not adopt this claim',
+      );
+      assert.deepEqual(
+        await refusalsFor(home.userLinkId),
+        [{ reason: 'bound_to_another_connection', named: false }],
+        'one refusal row, naming NOBODY — the presenter is not the holder',
+      );
+      assert.equal(
+        await linkCount(),
+        linksBeforeSecondRefusal,
+        'the foreign-claim refusal inserted no second row for the same subject',
+      );
+
+      // Neither refusal re-homed, re-activated or minted a session.
+      const sessions = (await query(`SELECT COUNT(*)::int AS n FROM identity_sessions`))
+        .rows[0] as { n: number };
+      assert.equal(Number(sessions.n), 0, 'a refused login mints no session');
+      const stillBound = (
+        await query(`SELECT status, connection_id FROM user_links WHERE user_link_id = $1`, [
+          home.userLinkId,
+        ])
+      ).rows[0] as { status: string; connection_id: unknown };
+      assert.equal(String(stillBound.status), 'activated');
+      assert.equal(
+        String(stillBound.connection_id),
+        first.connectionId,
+        'the refused login did not re-bind the link it refused',
       );
     });
 
@@ -329,7 +531,7 @@ describe(
       assert.ok(link);
 
       const created = await createSession({
-        ...(await sessionBindingFor(tenant.tenantId)),
+        ...(await sessionBindingForLink(link.userLinkId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: 'sid_abc',
@@ -349,14 +551,16 @@ describe(
       assert.equal(await validateSessionToken('forged-token-value'), null);
 
       // expiry (simulated by moving the clock of the ROW, not sleeping)
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions
           SET issued_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
         WHERE session_id = $1`,
         [created.session.sessionId],
       );
       assert.equal(await validateSessionToken(created.sessionToken), null);
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET expires_at = NOW() + INTERVAL '1 hour' WHERE session_id = $1`,
         [created.session.sessionId],
       );
@@ -372,7 +576,7 @@ describe(
 
       // deactivating the user kills remaining sessions at READ time
       const second = await createSession({
-        ...(await sessionBindingFor(tenant.tenantId)),
+        ...(await sessionBindingForLink(link.userLinkId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,
@@ -402,7 +606,7 @@ describe(
       });
       assert.ok(link);
       await createSession({
-        ...(await sessionBindingFor(tenant.tenantId)),
+        ...(await sessionBindingForLink(link.userLinkId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,
@@ -410,7 +614,7 @@ describe(
         ttlSeconds: 3600,
       });
       await createSession({
-        ...(await sessionBindingFor(tenant.tenantId)),
+        ...(await sessionBindingForLink(link.userLinkId)),
         tenantId: tenant.tenantId,
         userLinkId: link.userLinkId,
         providerSessionId: null,
@@ -482,11 +686,40 @@ describe(
         [tenantId, admin.userLinkId],
       );
       assert.equal(Number((binding.rows[0] as { n: number }).n), 1);
-      const audit = await query(
-        `SELECT COUNT(*)::int AS n FROM audit_events WHERE event_type = 'identity.bootstrap.applied'`,
-        [],
+      // FBL-020-R4 §5 — PER-STEP, ATTRIBUTED AUDIT, not one summary line.
+      //
+      // R3's bootstrap wrote a single `identity.bootstrap.applied` event listing step
+      // names, with `actor_user_id` NULL, so "who created this tenant, this connection,
+      // this administrator" had no answer. Every step now writes its own event, in the
+      // bootstrap's transaction, attributed to the administrator link it minted — the
+      // origin of trust, which is the only true answer available at bootstrap.
+      const events = await query(
+        `SELECT event_type, entity_type, actor_user_id FROM audit_events
+          WHERE tenant_id = $1 ORDER BY created_at, event_type`,
+        [tenantId],
       );
-      assert.equal(Number((audit.rows[0] as { n: number }).n), 1);
+      const rows = events.rows as Array<{
+        event_type: string;
+        entity_type: string;
+        actor_user_id: string | null;
+      }>;
+      assert.deepEqual(
+        [...new Set(rows.map((r) => `${r.entity_type}:${r.event_type}`))].sort(),
+        [
+          'identity_provider_connection:identity.provider_connection.created',
+          'role_binding:identity.role_binding.granted',
+          'tenant:identity.organization.created',
+          'user_link:identity.user_link.provisioned',
+        ],
+        'every bootstrap step leaves its own audit event',
+      );
+      for (const row of rows) {
+        assert.equal(
+          row.actor_user_id,
+          admin.userLinkId,
+          'every bootstrap event names the administrator it minted',
+        );
+      }
 
       // idempotent second apply: no new rows anywhere
       const second = await bootstrapIdentity({ ...base, apply: true });
@@ -498,6 +731,40 @@ describe(
         ((await query(`SELECT COUNT(*)::int AS n FROM user_links`, [])).rows[0] as { n: number }).n,
       );
       assert.equal(links, 1);
+      // …and the second apply added no audit events either: nothing happened, so nothing
+      // is recorded as having happened.
+      assert.equal(
+        Number(
+          (
+            (
+              await query(`SELECT COUNT(*)::int AS n FROM audit_events WHERE tenant_id = $1`, [
+                tenantId,
+              ])
+            ).rows[0] as { n: number }
+          ).n,
+        ),
+        rows.length,
+      );
+
+      // FBL-020-R4 §5 — the tenant and the connection NAME their creator.
+      //
+      // R3 left `created_by_user_link_id` NULL on both, because the script wrote them
+      // before any actor existed and never came back. The service now attributes them to
+      // the administrator inside the same transaction, so an operator asking "who
+      // established this tenant's trust" gets an answer rather than a NULL.
+      const attribution = await query(
+        `SELECT t.created_by_user_link_id AS tenant_creator,
+                t.updated_by_user_link_id AS tenant_updater,
+                c.created_by_user_link_id AS connection_creator
+           FROM tenants t
+           JOIN identity_provider_connections c ON c.tenant_id = t.tenant_id
+          WHERE t.tenant_id = $1`,
+        [tenantId],
+      );
+      const attributed = attribution.rows[0] as Record<string, string | null>;
+      assert.equal(attributed.tenant_creator, admin.userLinkId);
+      assert.equal(attributed.tenant_updater, admin.userLinkId);
+      assert.equal(attributed.connection_creator, admin.userLinkId);
 
       // ambiguity: the SAME provider org claimed for a DIFFERENT tenant refuses
       await assert.rejects(

@@ -6,7 +6,8 @@ import {
   AppError,
   ValidationError,
   NotFoundError,
-  acceptOrGenerateId,
+  UntrustedClientTrace,
+  generateRequestId,
   bindRequestActor,
   getRequestContext,
   isSafeId,
@@ -104,15 +105,51 @@ describe('configuration boundary — database slice', () => {
 });
 
 describe('request context', () => {
-  test('caller-provided ids are accepted only in the bounded safe format', () => {
-    assert.equal(acceptOrGenerateId('gateway-req-0001'), 'gateway-req-0001');
+  /**
+   * FBL-020-R4 section 2.3 - the authoritative id is GENERATED, and a caller-supplied
+   * trace value cannot become one. `acceptOrGenerateId` used to return a well-formed
+   * `x-request-id` unchanged, which made it the id of the request everywhere: logs, the
+   * response header, and `policy_decisions.request_id`, which is append-only.
+   */
+  test('the authoritative request id is always generated, never adopted from a caller', () => {
+    const ids = new Set([generateRequestId(), generateRequestId(), generateRequestId()]);
+    assert.equal(ids.size, 3, 'each call mints a distinct id');
+    for (const id of ids) assert.match(id, /^[0-9a-f-]{36}$/);
+
+    // The bounded format still exists - it is what keeps a hostile header out of the
+    // untrusted box below - but it no longer promotes anything to authoritative.
     assert.equal(isSafeId('a'.repeat(128)), true);
     assert.equal(isSafeId('a'.repeat(129)), false, 'over-length ids are refused');
     assert.equal(isSafeId('short'), false, 'under-length ids are refused');
     assert.equal(isSafeId('bad id with spaces'), false);
     assert.equal(isSafeId('log\ninjection-attempt'), false);
-    const generated = acceptOrGenerateId('nope');
-    assert.match(generated, /^[0-9a-f-]{36}$/, 'invalid input yields a generated UUID');
+  });
+
+  test('caller trace headers are retained ONLY as untrusted metadata, unreadable as an id', () => {
+    const trace = new UntrustedClientTrace('edge-gateway-0042', 'bad id with spaces');
+    assert.equal(trace.present(), true);
+    assert.deepEqual(trace.describe(), {
+      client_request_id_untrusted: 'edge-gateway-0042',
+      client_correlation_id_untrusted: null,
+    });
+
+    // THE SEPARATION IS STRUCTURAL. The box has no string form at all, so it cannot be
+    // interpolated into, assigned to, or mistaken for an id anywhere: the only way at
+    // the value is through a field whose name states that it is untrusted.
+    assert.equal(`${trace}`, '[object Object]', 'no string form leaks the caller value');
+    assert.equal(String(trace), '[object Object]');
+    assert.equal(JSON.stringify(trace), '{}', 'and it does not serialize into a payload');
+    const asRecord = trace as unknown as Record<string, unknown>;
+    for (const key of ['requestId', 'correlationId', 'id', 'value']) {
+      assert.equal(asRecord[key], undefined, `nothing is exposed as ${key}`);
+    }
+
+    const empty = new UntrustedClientTrace(undefined, undefined);
+    assert.equal(empty.present(), false);
+    assert.deepEqual(empty.describe(), {
+      client_request_id_untrusted: null,
+      client_correlation_id_untrusted: null,
+    });
   });
 
   test('concurrent contexts do not leak into each other across await points', async () => {
@@ -377,37 +414,52 @@ describe('request-context middleware over HTTP', () => {
     }
   }
 
-  test('a valid caller id is echoed; an invalid one is replaced, never trusted', async () => {
+  test('a caller-supplied x-request-id NEVER becomes the request id, well-formed or not', async () => {
     await withServer(async (base) => {
-      const valid = await fetch(`${base}/healthz`, {
+      // A PERFECTLY well-formed value: this is the case that used to be adopted, and it
+      // is the whole defect. The response must come back under OUR id.
+      const wellFormed = await fetch(`${base}/healthz`, {
         headers: { 'x-request-id': 'edge-gateway-0042' },
       });
-      assert.equal(valid.headers.get('x-request-id'), 'edge-gateway-0042');
+      const echoed = wellFormed.headers.get('x-request-id') ?? '';
+      assert.notEqual(echoed, 'edge-gateway-0042', 'the caller does not name the request');
+      assert.match(echoed, /^[0-9a-f-]{36}$/, 'a generated id is echoed instead');
 
       // Note: a literal \n in a header value would be rejected by fetch itself, so the
-      // invalid-format case here uses spaces — same policy branch, transportable value.
-      const invalid = await fetch(`${base}/healthz`, {
+      // malformed case here uses spaces - same branch, transportable value.
+      const malformed = await fetch(`${base}/healthz`, {
         headers: { 'x-request-id': 'bad id with spaces' },
       });
-      const echoed = invalid.headers.get('x-request-id');
-      assert.ok(echoed && echoed !== 'bad id with spaces');
-      assert.match(echoed, /^[0-9a-f-]{36}$/);
+      const second = malformed.headers.get('x-request-id') ?? '';
+      assert.notEqual(second, 'bad id with spaces');
+      assert.match(second, /^[0-9a-f-]{36}$/);
+
+      // And a correlation header cannot name the correlation id either.
+      const correlated = await fetch(`${base}/healthz`, {
+        headers: { 'x-correlation-id': 'edge-gateway-c001' },
+      });
+      assert.notEqual(correlated.headers.get('x-request-id'), 'edge-gateway-c001');
 
       const absent = await fetch(`${base}/healthz`);
       assert.match(absent.headers.get('x-request-id') ?? '', /^[0-9a-f-]{36}$/);
     });
   });
 
-  test('concurrent requests each get their own id back', async () => {
+  test('concurrent requests each get their own GENERATED id, and no two share one', async () => {
     await withServer(async (base) => {
-      const ids = ['concurrent-req-a1', 'concurrent-req-b2', 'concurrent-req-c3'];
+      // Every request presents the SAME caller id. Before the correction all three
+      // responses came back under it, so three requests were one in the audit trail.
       const responses = await Promise.all(
-        ids.map((id) => fetch(`${base}/healthz`, { headers: { 'x-request-id': id } })),
+        [1, 2, 3].map(() =>
+          fetch(`${base}/healthz`, { headers: { 'x-request-id': 'collide-req-0001' } }),
+        ),
       );
-      assert.deepEqual(
-        responses.map((r) => r.headers.get('x-request-id')),
-        ids,
-      );
+      const echoed = responses.map((r) => r.headers.get('x-request-id') ?? '');
+      for (const id of echoed) {
+        assert.notEqual(id, 'collide-req-0001');
+        assert.match(id, /^[0-9a-f-]{36}$/);
+      }
+      assert.equal(new Set(echoed).size, 3, 'three requests, three distinct server ids');
     });
   });
 });

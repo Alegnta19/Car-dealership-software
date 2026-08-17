@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
-import { resetDatabase, skipIntegration } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { resetDatabase, skipIntegration, fixtureAuthorizationStateWrite } from '@dealer/test-kit';
+import { closePool } from '@dealer/database';
 import { FederationNotEnabled, createSamlPort, createScimPort } from '@dealer/identity-access';
 
 /**
@@ -69,14 +69,16 @@ describe(
     });
 
     test('a saml or scim provider connection is rejected by migration 055', async () => {
-      const tenant = await query(
+      const tenant = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO tenants (name, status) VALUES ('Federation Tenant', 'active') RETURNING tenant_id`,
       );
       const tenantId = String((tenant.rows[0] as { tenant_id: unknown }).tenant_id);
       for (const provider of ['saml', 'scim', 'okta']) {
         await assert.rejects(
           () =>
-            query(
+            fixtureAuthorizationStateWrite(
+              'seed-authorization-state',
               `INSERT INTO identity_provider_connections
                (connection_scope, tenant_id, provider, provider_organization_id, issuer)
              VALUES ('dealership', $1, $2, 'org_x', 'https://issuer.test.local')`,

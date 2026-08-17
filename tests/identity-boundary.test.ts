@@ -7,6 +7,7 @@ import { after, beforeEach, describe, test } from 'node:test';
 import {
   INTEGRATION_DATABASE_URL,
   bootstrapAdministrator,
+  ensureActiveConnection,
   certifyMfaPolicy,
   mintReauthGrant,
   resetDatabase,
@@ -14,11 +15,15 @@ import {
   seedRooftopIdentity,
   seedTenantIdentity,
   sessionBindingFor,
+  sessionBindingForLink,
+  withPresentedSession,
   skipIntegration,
   startIdentityTestEnv,
   testIssuer,
   testOrganizationId,
+  TEST_REAUTH_CALLBACK_URI,
   type IdentityTestEnv,
+  fixtureAuthorizationStateWrite,
 } from '@dealer/test-kit';
 import {
   DatabaseConnectionLostError,
@@ -34,11 +39,13 @@ import {
   TokenVerificationError,
   UnattributableMutationError,
   activateUserLink,
+  classifyActorAssurance,
   certifyProviderMfaPolicy,
   changeOrganizationStatus,
   changeProviderIssuer,
   changeRole,
   claimLoginTransactionAtomically,
+  claimReauthentication,
   completeReauthentication,
   consumeReauthenticationGrant,
   createAccessTokenVerifier,
@@ -124,8 +131,38 @@ describe(
       await seedRooftopIdentity(tenantId, randomUUID());
     });
 
+    /**
+     * FBL-020-R4 §2.1 — A PLATFORM ACTOR IS BOUND TO THE PLATFORM CONNECTION.
+     *
+     * The fixtures below used to build a dealership link and then rewrite it with
+     * `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL`, leaving a
+     * platform-scope identity still bound to a TENANT'S provider connection and
+     * organization. `ul_connection_identity_tuple` refuses that row now, and it is right
+     * to: a platform support person who resolves through a customer's WorkOS
+     * organization is precisely the cross-boundary identity this order exists to make
+     * impossible. The helper binds the platform link to the platform-scope connection,
+     * which is the only connection it can honestly belong to.
+     */
+    async function makePlatformLink(subject: string): Promise<string> {
+      await ensureActiveConnection(null);
+      const r = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO user_links
+           (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+            connection_id, issuer, provider_organization_id)
+         SELECT 'platform', NULL, 'workos', $1, 'activated', NOW(),
+                c.connection_id, c.issuer, c.provider_organization_id
+           FROM identity_provider_connections c
+          WHERE c.tenant_id IS NULL AND c.status = 'active' LIMIT 1
+         RETURNING user_link_id`,
+        [subject],
+      );
+      return String((r.rows[0] as { user_link_id: unknown }).user_link_id);
+    }
+
     async function makeLink(subject = 'user_boundary'): Promise<string> {
-      const r = await query(
+      const r = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links
            (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
             connection_id, issuer, provider_organization_id)
@@ -164,6 +201,14 @@ describe(
       organizationId?: string | null;
       impersonated?: boolean;
       fail?: 'definitive' | 'transient';
+      /**
+       * FBL-020-R4 §3: the provider session id the reply carries. A REFRESH keeps
+       * the provider session it refreshes, so the honest default is the sid the
+       * seeded session was established with — and the refresh now BINDS it
+       * exactly, so a reply naming a different one revokes rather than being
+       * adopted (proved separately).
+       */
+      providerSessionId?: string;
       /** Holds the exchange open, so a parallel caller must queue on the row lock. */
       delayMs?: number;
     }): FakeProvider {
@@ -182,7 +227,7 @@ describe(
             accessToken: 'fake.access.token',
             refreshToken: behaviour.replacement ?? 'provider-refresh-next',
             providerUserId: behaviour.providerUserId ?? 'user_r3_refresh',
-            providerSessionId: 'sid_fake_refreshed',
+            providerSessionId: behaviour.providerSessionId ?? 'sid_initial',
             organizationId:
               behaviour.organizationId === undefined
                 ? testOrganizationId(tenantId)
@@ -320,6 +365,22 @@ describe(
      * START generated and stored, plus the four identity facts a verified token
      * proves. Every one is REQUIRED — a missing value fails closed.
      */
+    /**
+     * FBL-020-R4 §3: a step-up round trip must CLAIM its own callback state before
+     * it can be completed — the server row judges the handle, the OAuth state, the
+     * PKCE verifier and the exact callback URI, exactly once. This is the sequence
+     * /auth/reauth/callback performs, so the boundary suite performs it too.
+     */
+    async function claimStepUp(started: StartedReauthentication): Promise<void> {
+      const claimed = await claimReauthentication({
+        nonce: started.nonce,
+        state: started.state,
+        codeVerifier: started.codeVerifier,
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
+      });
+      assert.ok(claimed, 'a fresh leg must claim its callback state');
+    }
+
     function completionFor(started: StartedReauthentication, userLinkId: string) {
       return {
         nonce: started.nonce,
@@ -341,6 +402,10 @@ describe(
         returnTo: '/',
       });
       const args = {
+        // FBL-020-R4 §1: the claim names the OPAQUE HANDLE and the EXACT
+        // registered redirect, on top of purpose, state, nonce and PKCE.
+        loginTxnId: started.loginTxnId,
+        redirectUri: 'http://127.0.0.1:3000/auth/callback',
         state: started.state,
         purpose: 'login' as const,
         nonce: started.nonce,
@@ -374,6 +439,8 @@ describe(
       );
       assert.equal(
         await claimLoginTransactionAtomically({
+          loginTxnId: started.loginTxnId,
+          redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
           purpose: 'login',
           nonce: started.nonce,
@@ -438,6 +505,8 @@ describe(
       return {
         started,
         args: {
+          loginTxnId: started.loginTxnId,
+          redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
           purpose: 'login' as const,
           nonce: started.nonce,
@@ -695,7 +764,8 @@ describe(
       const link = await makeLink('user_unbound');
       await assert.rejects(
         () =>
-          query(
+          fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
             `INSERT INTO identity_sessions
                (tenant_id, user_link_id, session_token_hash, auth_time, expires_at)
              VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '1 hour')`,
@@ -717,7 +787,8 @@ describe(
         ttlSeconds: 3600,
       });
       assert.ok(await validateSessionToken(created.sessionToken));
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
         [tenantId],
       );
@@ -891,7 +962,8 @@ describe(
 
     test('a refresh through a DISABLED connection is an identity mismatch', async () => {
       const s = await seedRefreshableSession('user_r3_conn', 'provider-refresh-1');
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
         [tenantId],
       );
@@ -930,7 +1002,9 @@ describe(
       const verifyAccessToken = (): Promise<VerifiedAccessToken> =>
         Promise.resolve({
           providerUserId: 'user_r3_imp_token',
-          providerSessionId: 'sid_fake_refreshed',
+          // R4 §3: a VERIFIED refresh reply must name the SAME provider session
+          // the local session was established from, or the session is revoked.
+          providerSessionId: 'sid_initial',
           organizationId: testOrganizationId(tenantId),
           authTime: new Date(),
           issuedAt: new Date(),
@@ -1016,7 +1090,9 @@ describe(
       const verifiedFor = (subject: string): Promise<VerifiedAccessToken> =>
         Promise.resolve({
           providerUserId: subject,
-          providerSessionId: 'sid_fake_refreshed',
+          // R4 §3: a VERIFIED refresh reply must name the SAME provider session
+          // the local session was established from, or the session is revoked.
+          providerSessionId: 'sid_initial',
           organizationId: testOrganizationId(tenantId),
           authTime: new Date(Date.now() - 120_000),
           issuedAt: new Date(),
@@ -1369,7 +1445,8 @@ describe(
       // Exactly what a process that died mid-exchange leaves behind: a claim, and
       // no claimant. Written straight to the row, because "the attempt is gone" is
       // precisely the state no code path can produce on purpose.
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions
             SET refresh_lease_id = gen_random_uuid(),
                 refresh_lease_expires_at = NOW() + make_interval(secs => 30)
@@ -1397,7 +1474,8 @@ describe(
       // …and then the lease expires. THE POINT: this must be recoverable without
       // an operator, or a crash during a refresh would leave the session unable to
       // refresh for the rest of its life.
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET refresh_lease_expires_at = NOW() - make_interval(secs => 1)
           WHERE session_id = $1`,
         [s.sessionId],
@@ -1426,7 +1504,9 @@ describe(
       const verifiedFor = (subject: string): Promise<VerifiedAccessToken> =>
         Promise.resolve({
           providerUserId: subject,
-          providerSessionId: 'sid_fake_refreshed',
+          // R4 §3: a VERIFIED refresh reply must name the SAME provider session
+          // the local session was established from, or the session is revoked.
+          providerSessionId: 'sid_initial',
           organizationId: testOrganizationId(tenantId),
           authTime: new Date(Date.now() - 120_000),
           issuedAt: new Date(),
@@ -1505,8 +1585,10 @@ describe(
         resourceType: 'repair_order',
         resourceId: roId,
         requiredAssurance: 'fresh_only',
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
       });
       assert.ok(started);
+      await claimStepUp(started);
       const completed = await completeReauthentication(completionFor(started, link));
       assert.ok(completed, 'a fresh_only transaction completes without MFA certification');
 
@@ -1556,8 +1638,10 @@ describe(
         resourceType: 'repair_order',
         resourceId: randomUUID(),
         requiredAssurance: 'fresh_and_mfa_policy',
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
       });
       assert.ok(started);
+      await claimStepUp(started);
       // uncertified: mints nothing. R3 reads the certification off the
       // CONNECTION ROW at completion time, so no caller can assert it.
       assert.equal(await completeReauthentication(completionFor(started, link)), null);
@@ -1576,8 +1660,10 @@ describe(
         resourceType: 'repair_order',
         resourceId: randomUUID(),
         requiredAssurance: 'fresh_and_mfa_policy',
+        callbackUri: TEST_REAUTH_CALLBACK_URI,
       });
       assert.ok(started);
+      await claimStepUp(started);
 
       // a token proving a DIFFERENT subject is not a reauthentication of this actor
       assert.equal(
@@ -1592,12 +1678,7 @@ describe(
 
     // ── R3 section I: support APPROVER AUTHORITY (test-gate item 16) ──────
     test('only a current tenant admin of the TARGET tenant may approve support access', async () => {
-      const requester = await makeLink('user_r3_req');
-      // the requester must be a platform-support actor
-      await query(
-        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
-        [requester],
-      );
+      const requester = await makePlatformLink('user_r3_req');
       await grantRole({
         actingUserLinkId: await bootstrapAdministrator(null),
         tenantId: null,
@@ -1631,7 +1712,8 @@ describe(
       const otherTenant = randomUUID();
       await seedTenantIdentity(otherTenant);
       const foreignAdmin = await (async () => {
-        const r = await query(
+        const r = await fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links
              (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
               connection_id, issuer, provider_organization_id)
@@ -1698,13 +1780,10 @@ describe(
     });
 
     test('support revocation is authorized, scoped and attributable', async () => {
-      const requester = await makeLink('user_r3_rev_req');
-      await query(
-        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
-        [requester],
-      );
+      const requester = await makePlatformLink('user_r3_rev_req');
       const outsider = await makeLink('user_r3_outsider');
-      const request = await query(
+      const request = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_requests
            (tenant_id, requester_user_link_id, requested_actions, reason,
             requested_duration_minutes, status)
@@ -1712,7 +1791,8 @@ describe(
          RETURNING request_id`,
         [tenantId, requester],
       );
-      const session = await query(
+      const session = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
          VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
          RETURNING support_session_id`,
@@ -1751,11 +1831,7 @@ describe(
     test('support approval without a high-assurance grant is refused', async () => {
       // R3: the requester must be a current active platform-support actor,
       // and the approver a current tenant administrator of this tenant.
-      const requester = await makeLink('user_support_req');
-      await query(
-        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
-        [requester],
-      );
+      const requester = await makePlatformLink('user_support_req');
       await grantRole({
         actingUserLinkId: await bootstrapAdministrator(null),
         tenantId: null,
@@ -1828,11 +1904,7 @@ describe(
 
     /** A platform-support actor entitled to FILE support requests. */
     async function makePlatformSupportRequester(subject: string): Promise<string> {
-      const link = await makeLink(subject);
-      await query(
-        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
-        [link],
-      );
+      const link = await makePlatformLink(subject);
       await grantRole({
         actingUserLinkId: await bootstrapAdministrator(null),
         tenantId: null,
@@ -1895,11 +1967,15 @@ describe(
 
     /** The REAL published identity catalog, decided by the REAL engine. */
     function identityEngine() {
-      return createPolicyEngine({
-        catalog: createIdentityActionCatalog(),
-        // every identity action names no resource, so this is never consulted
-        resolveResourceScope: () => Promise.resolve(null),
-      });
+      // FBL-020-R4 §2.2: an ALLOW must name the session the request presented, so the
+      // fixture engine presents the actor's own live one unless a test names one itself.
+      return withPresentedSession(
+        createPolicyEngine({
+          catalog: createIdentityActionCatalog(),
+          // every identity action names no resource, so this is never consulted
+          resolveResourceScope: () => Promise.resolve(null),
+        }),
+      );
     }
 
     // ── A1 ────────────────────────────────────────────────────────────────
@@ -1995,7 +2071,8 @@ describe(
         requestedDurationMinutes: 30,
       });
       await mintApprovalGrant(tenantAdmin, sessionless.requestId);
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE support_access_requests
             SET status = 'approved',
                 decided_by_user_link_id = $2,
@@ -2146,7 +2223,8 @@ describe(
       // carries a partial unique index, so a second request can never name a
       // grant that already approved one, whatever the code above does.
       await assert.rejects(
-        query(
+        fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
           `UPDATE support_access_requests
               SET approval_grant_id = (
                 SELECT approval_grant_id FROM support_access_requests WHERE request_id = $2
@@ -2254,7 +2332,8 @@ describe(
 
       // move the binding's effective window entirely into the PAST — status
       // stays 'active', which is exactly the shape the old predicate accepted
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE role_bindings
             SET effective_from = NOW() - INTERVAL '2 days',
                 effective_to = NOW() - INTERVAL '1 day'
@@ -2457,7 +2536,8 @@ describe(
       // `decideSupportAccess` never leaves behind, so it is built directly —
       // naming a real grant, because the schema demands one.
       await mintApprovalGrant(approver, filed.requestId);
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE support_access_requests
             SET status = 'approved',
                 decided_by_user_link_id = $2,
@@ -2546,6 +2626,8 @@ describe(
         // this action names no resource, so the resolver is never consulted
         resolveResourceScope: () => Promise.resolve(null),
       });
+      // NOT wrapped: this test names its own presented session on every call, because
+      // WHICH session is presented is the property under test.
       /**
        * R3 correction B2: a decision is made ON A PRESENTED CREDENTIAL, so the
        * session id is part of the call. `null` is the truthful value for a
@@ -2585,7 +2667,7 @@ describe(
         scopeId: tenantId,
       });
       const liveSession = await createSession({
-        ...(await sessionBindingFor(tenantId)),
+        ...(await sessionBindingForLink(live)),
         tenantId,
         userLinkId: live,
         providerSessionId: null,
@@ -2639,14 +2721,15 @@ describe(
         scopeId: tenantId,
       });
       const staleSession = await createSession({
-        ...(await sessionBindingFor(tenantId)),
+        ...(await sessionBindingForLink(stale)),
         tenantId,
         userLinkId: stale,
         providerSessionId: null,
         authTime: new Date(),
         ttlSeconds: 3600,
       });
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET auth_time = NOW() - INTERVAL '6 hours' WHERE session_id = $1`,
         [staleSession.session.sessionId],
       );
@@ -2838,7 +2921,8 @@ describe(
       // Minting seeds its own fresh session. Revoke it, so the ONLY live
       // credential this actor holds is stale and the ONLY thing that can make
       // the classification 'fresh' or 'certified' is the grant itself.
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET revoked_at = NOW(), revoked_reason = 'test isolation'
           WHERE user_link_id = $1 AND revoked_at IS NULL`,
         [spender],
@@ -2853,11 +2937,71 @@ describe(
         ttlSeconds: 12 * 3600,
       });
 
-      // CONTROL: the grant is live and UNSPENT, so it supplies both facts the
-      // presented session cannot — freshness, and MFA certification at issue.
-      const beforeSpend = await recorded(spender, staleOnly.session.sessionId);
-      assert.equal(beforeSpend.freshness, 'fresh', 'a live unspent grant is fresh');
-      assert.equal(beforeSpend.mfa, 'certified', 'and carries its certification at issue');
+      // ── FBL-020-R4 §2.4: AN UNRELATED GRANT STRENGTHENS NOTHING ────────────
+      //
+      // THE DEFECT R4 FOUND. R3 read "the actor's most recent live unconsumed grant"
+      // and let it raise the classification, so a live grant for
+      // `service.ro.void` on ONE repair order reported this decision — about
+      // `identity.tenant.read`, a different action on nothing — as fresh and certified.
+      // A grant is minted for one action on one resource and proves exactly that;
+      // borrowing it for an unrelated decision put an assurance in append-only evidence
+      // that the presented credential did not have.
+      //
+      // The grant below is live, unspent, high-assurance and certified at issue, and
+      // the presented session is six hours old. The decision must be STALE.
+      const liveGrantId = String(
+        (
+          await query(
+            `SELECT grant_id FROM reauthentication_grants
+              WHERE user_link_id = $1 AND consumed_at IS NULL AND expires_at > NOW()
+              ORDER BY issued_at DESC LIMIT 1`,
+            [spender],
+          )
+        ).rows[0]?.grant_id,
+      );
+      assert.match(liveGrantId, /^[0-9a-f-]{36}$/, 'the fixture really does hold a live grant');
+      const unrelated = await recorded(spender, staleOnly.session.sessionId);
+      assert.equal(
+        unrelated.freshness,
+        'stale',
+        'a live grant for ANOTHER action must not make this decision fresh',
+      );
+      assert.equal(
+        unrelated.mfa,
+        'uncertified',
+        'and must not lend this decision its certification either',
+      );
+      // The page cannot contradict the evidence row: same credential, same verdict.
+      const unrelatedView = await describeAuthenticatedSession({
+        userLinkId: spender,
+        tenantId,
+        actorScope: 'dealership',
+        sessionId: staleOnly.session.sessionId,
+      });
+      assert.equal(unrelatedView.freshness, 'stale');
+      assert.equal(unrelatedView.mfaAssurance, 'uncertified');
+
+      // …and the CONVERSE, so the rule is "the exact grant" rather than "no grant":
+      // asked about the very grant being evaluated, the classification IS strengthened.
+      const evaluatingIt = await classifyActorAssurance(
+        spender,
+        staleOnly.session.sessionId,
+        liveGrantId,
+      );
+      assert.equal(evaluatingIt.freshness, 'fresh', 'the EXACT grant under evaluation counts');
+      assert.equal(evaluatingIt.mfaAssurance, 'certified', 'with its certification at issue');
+
+      // A grant belonging to SOMEBODY ELSE counts for nothing even when named.
+      const foreignHolder = await classifyActorAssurance(
+        holder,
+        staleOnly.session.sessionId,
+        liveGrantId,
+      );
+      assert.equal(
+        foreignHolder.freshness,
+        'not_applicable',
+        'a named grant is still verified to belong to this actor, on this session',
+      );
 
       // spend it, once, on the action it was minted for
       assert.equal(
@@ -2876,7 +3020,8 @@ describe(
         'the grant was spent',
       );
 
-      // THE DEFECT: a spent grant went on reporting fresh and certified.
+      // THE R3 DEFECT: a spent grant went on reporting fresh and certified. It now
+      // proves nothing even when it IS the grant being evaluated.
       const afterSpend = await recorded(spender, staleOnly.session.sessionId);
       assert.equal(
         afterSpend.freshness,
@@ -2889,6 +3034,13 @@ describe(
         'and it certifies nothing either once it has been spent',
       );
       assert.equal(afterSpend.sessionId, staleOnly.session.sessionId);
+      const evaluatingSpent = await classifyActorAssurance(
+        spender,
+        staleOnly.session.sessionId,
+        liveGrantId,
+      );
+      assert.equal(evaluatingSpent.freshness, 'stale', 'not even as the evaluated grant');
+      assert.equal(evaluatingSpent.mfaAssurance, 'uncertified');
       // the page agrees, again, on the same credential
       const spentView = await describeAuthenticatedSession({
         userLinkId: spender,
@@ -2940,10 +3092,17 @@ describe(
             `${String(r.event_type)} must name the true actor`,
           );
           const details = r.details as { authorization_version?: unknown };
-          assert.ok(
-            Number(details.authorization_version) >= 1,
-            `${String(r.event_type)} must record the version it landed at`,
-          );
+          // FBL-020-R4 §3: a reauthentication GRANT is not a versioned record —
+          // it is minted once, spent once and never edited, so
+          // `authorization_version` is a fact it does not have. Its consumption
+          // event is named explicitly rather than admitted by a weaker
+          // assertion, so nothing else can slip past this check.
+          if (String(r.event_type) !== 'identity.reauthentication.grant_consumed') {
+            assert.ok(
+              Number(details.authorization_version) >= 1,
+              `${String(r.event_type)} must record the version it landed at`,
+            );
+          }
         }
         return value;
       }
@@ -2989,12 +3148,28 @@ describe(
       );
       assert.ok(issuerChanged);
       assert.ok(issuerChanged.authorizationVersion > mapping.authorizationVersion);
-      const mfa = await audited(origin, ['identity.provider_connection.mfa_policy_certified'], () =>
-        certifyProviderMfaPolicy({
-          actingUserLinkId: origin,
-          connectionId: mapping.connectionId,
-          certified: true,
-        }),
+      // FBL-020-R4 §3: certifying an organization's MFA policy is an AUTHORIZED
+      // administrative act, not merely an attributable one. The bootstrap origin
+      // holds no role binding by design, so a platform administrator performs it —
+      // and the mutation is attributed to that administrator, not to the origin.
+      const mfaCertifier = await makePlatformLink('user_r4_mfa_certifier');
+      await grantRole({
+        actingUserLinkId: await bootstrapAdministrator(null),
+        tenantId: null,
+        userLinkId: mfaCertifier,
+        role: 'platform_admin',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
+      const mfa = await audited(
+        mfaCertifier,
+        ['identity.provider_connection.mfa_policy_certified'],
+        () =>
+          certifyProviderMfaPolicy({
+            actingUserLinkId: mfaCertifier,
+            connectionId: mapping.connectionId,
+            certified: true,
+          }),
       );
       assert.ok(mfa);
       assert.ok(mfa.authorizationVersion > issuerChanged.authorizationVersion);
@@ -3083,11 +3258,7 @@ describe(
       assert.ok((await versionOf('user_links', 'user_link_id', subject)) > afterRelink);
 
       // SUPPORT ACCESS — request, deny, approve (+ session start), revoke
-      const requester = await makeLink('user_r3_mut_support');
-      await query(
-        `UPDATE user_links SET actor_scope = 'platform', tenant_id = NULL WHERE user_link_id = $1`,
-        [requester],
-      );
+      const requester = await makePlatformLink('user_r3_mut_support');
       await grantRole({
         actingUserLinkId: await bootstrapAdministrator(null),
         tenantId: null,
@@ -3147,7 +3318,14 @@ describe(
       // session start — so it writes exactly two rows, both naming the approver
       const session = await audited(
         approver,
-        ['identity.support.approved', 'identity.support.session_started'],
+        [
+          // R4 §3: spending the approver's step-up grant is itself an audited
+          // transition, and it commits in the SAME transaction as the approval it
+          // paid for.
+          'identity.reauthentication.grant_consumed',
+          'identity.support.approved',
+          'identity.support.session_started',
+        ],
         () =>
           decideSupportAccess({
             requestId: toApprove.requestId,
@@ -3212,7 +3390,8 @@ describe(
       fromSeconds: number,
       toSeconds: number | null,
     ): Promise<void> {
-      const moved = await query(
+      const moved = await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE role_bindings
             SET effective_from = NOW() + ($3::int * INTERVAL '1 second'),
                 effective_to = CASE

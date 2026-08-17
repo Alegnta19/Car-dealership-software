@@ -253,3 +253,54 @@ effective `tenant_admin` of that tenant** (checked before anything else, and
 required for a denial too) and must have freshly re-authenticated under a
 certified MFA policy — the approval records the consumed grant that backed it.
 Separation of duty alone no longer approves.
+
+## R4 corrections (FBL-020-R4) — a BOUND link is not an ACTIVATED one
+
+**LIVE WORKOS CERTIFICATION IS NOT DISCHARGED**, so every step here is a
+platform-side procedure against a local issuer or a real WorkOS organization you
+configure yourself; the live gate is not closed (see
+`docs/FBL-020-DELIVERY-REPORT.md` §15).
+
+### Binding is provenance. Activation is authority. Do not confuse them.
+
+A `user_links` row carries two independent facts:
+
+- **its binding** — `connection_id`, `issuer`, `provider_organization_id` — which
+  says _which external identity this row is about_; and
+- **its `status`** — `pending`, `activated` or `deactivated` — which says _whether
+  an administrator has admitted this person_.
+
+Migration `057` §1 binds a link from its tenant's single active connection
+**without regard to status**, deliberately. So after an upgrade you will see
+`pending` links that are **fully bound**, and that is correct and expected. It is
+**not** an activation, it grants nothing, and login refuses it:
+
+```sql
+-- pending links that are bound: normal after an upgrade, and NOT authorized
+SELECT user_link_id, status, connection_id, provider_organization_id
+  FROM user_links WHERE status = 'pending' AND connection_id IS NOT NULL;
+```
+
+Do not read a populated `connection_id` as "this person is set up". The only thing
+that admits somebody is an explicit activation through the audited administrative
+path, and `activated_at` is what records it. R4 added a test for exactly this
+confusion — `tests/login-admission.test.ts`, _a BOUND but PENDING link is refused —
+binding is provenance, not authority_ — because a mutation-kill run showed the
+suite had no test that would notice if the status check were widened.
+
+### What an upgrade does to the links you already have
+
+Run on a populated pre-057 database (this is a CI gate now, not a hand drill —
+`docs/FBL-020-DELIVERY-REPORT.md` §8):
+
+| Before                                                | After `057`                                                    |
+| ----------------------------------------------------- | -------------------------------------------------------------- |
+| `activated`, tenant has exactly ONE active connection | stays `activated`, **bound**, version unchanged                |
+| `activated`, tenant has NO active connection          | **`deactivated`**, binding cleared, `authorization_version` +1 |
+| `pending`                                             | stays `pending`, bound if its tenant has one active connection |
+
+The middle row is the one to plan for: a tenant whose connection is `disabled` at
+upgrade time has every one of its people closed out, because there is nothing they
+can honestly be bound to and guessing is exactly what this boundary refuses to do.
+Re-enable the connection **before** upgrading, or re-activate the people afterwards
+through the administrative path.

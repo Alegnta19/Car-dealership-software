@@ -16,7 +16,16 @@ rewrites for fashion.
 - npm workspaces, ONE root package-lock.json; private packages, never published.
 - Modular monolith plus worker processes (ADR-001).
 - dependency-cruiser (locked in the root lockfile) for architecture checking in CI.
-- Prettier + ESLint + tsc-strict ratchets with per-file baselines (59/136/29 ceilings).
+- Prettier + ESLint + tsc-strict ratchets with per-file baselines. The ceilings are
+  **59 / 136 / 23** (tsc-strict / eslint / format), RESTATED here from the GOVERNING
+  blueprint — `Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, sha256
+  `556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf`, §14.3 under "R2 gate
+  and stop rule": _"Quality ceilings remain tsc-strict <=59, eslint <=136 and format
+  <=23."_ This ADR does not DEFINE them, and where the two disagree the blueprint wins. It
+  read `29` for the third value until FBL-020-R4; that was wrong, and
+  `docs/FBL-020-DELIVERY-REPORT.md` §7 records how the error was made and corrected. Note
+  also that no tool enforces a ceiling: `scripts/quality-ratchet.ts` has no ceiling concept
+  and only refuses growth against `quality-baselines.json`.
 - Container: digest-pinned node:20-alpine, non-root, healthchecked.
 
 ## Deferred, deliberately (recorded, not implemented)

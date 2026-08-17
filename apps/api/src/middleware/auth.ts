@@ -35,10 +35,13 @@ import {
   NotFoundError,
   UnauthorizedError,
   bindRequestActor,
+  bindSupportContext,
   getConfig,
   isUuid,
+  logger,
 } from '@dealer/platform';
 import {
+  SUPPORT_ACCESS_HEADER,
   TokenVerificationError,
   createAccessTokenVerifier,
   createIdentityActionCatalog,
@@ -53,6 +56,7 @@ import {
   resolveOrEstablishBearerSession,
   revalidateSessionIdentity,
   rolesForUserLink,
+  supportAccessHeaderValue,
   validateSessionToken,
   verifyCsrfToken,
   type AccessTokenVerifier,
@@ -510,14 +514,17 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     targetTenantId,
     resource,
     scopeHint,
-    // R2 §8: identity facts from the generated request context
-    authTime: identity.authTime,
-    connectionId: identity.connectionId,
     // R3: the LOCAL session id, for both credential kinds. A bearer request
     // now has one, so the evidence row names the object an operator can
     // actually revoke instead of recording nothing.
+    //
+    // FBL-020-R4 §2: this is now the ONLY identity fact this middleware passes.
+    // It used to hand over `authTime`, `connectionId` and `providerSubject` as
+    // well, and the engine wrote them into append-only evidence unexamined —
+    // three caller-asserted claims about a credential the engine could read for
+    // itself. It reads them from the presented session row now, so the evidence
+    // describes what the database can see rather than what this layer believed.
     sessionId: identity.sessionId,
-    actorProviderSubject: identity.providerSubject,
     // FBL-020-R3: the request and correlation ids are NOT passed from here any
     // more. They used to be read off `x-request-id` / `x-correlation-id`, so a
     // client decided what the append-only evidence row recorded — and recorded
@@ -536,10 +543,36 @@ async function requireActionAsync(action: string, req: Request, res: Response): 
     });
   }
 
-  // Non-suppressible support indicator: every response served under support
-  // access says so, and the policy evidence row already recorded it.
-  if (decision.supportSessionId !== null) {
-    res.setHeader('x-support-access', `active; support_session=${decision.supportSessionId}`);
+  // FBL-020-R4 §4 — THE NON-SUPPRESSIBLE SUPPORT INDICATOR, IN FULL.
+  //
+  // R3 set a header naming the session id and did nothing else, so a tenant knew
+  // delegated access was in force without knowing when it ends — the one fact that
+  // decides whether to wait or to revoke — and the request context and every log
+  // line inside the request said nothing about it at all.
+  //
+  // Two things happen here now, and neither is optional:
+  //   - the header is built by the ONE formatter in @dealer/identity-access, whose
+  //     input type makes an expiry-less value impossible to construct;
+  //   - the facts are BOUND to the request context, so every log line this request
+  //     goes on to write names the session, the approving request, the true support
+  //     actor, the target tenant, the approved scope and action set, and the expiry.
+  //     `bindSupportContext` defines that field non-writable and non-configurable, so
+  //     nothing downstream — route, middleware or error handler — can blank it out.
+  if (decision.support !== null) {
+    const header = supportAccessHeaderValue([decision.support]);
+    if (header !== null) res.setHeader(SUPPORT_ACCESS_HEADER, header);
+    bindSupportContext(decision.support);
+    // ONE line per support-served request, and it is written HERE rather than left to
+    // whatever the route happens to log. An ordinary request logs nothing on the happy
+    // path, so without this the log stream would only ever mention delegated access when
+    // something else went wrong — and "a platform person read this customer's data" is
+    // exactly the event an operator greps for. The fields come from the bound context, so
+    // this call carries the whole set without naming any of it (and cannot name the
+    // reason).
+    logger.info(
+      { component: 'api.authorization', event: 'support_access_served', action },
+      'request served under delegated support access',
+    );
   }
 
   // Roles bound in the TARGET tenant only: a platform binding must not leak

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
@@ -549,6 +550,313 @@ describe('architecture enforcement', () => {
         /8 statement\(s\) inspected, 0 declared opt-out\(s\)/,
         'every spelling must be inspected — a skipped one is a hole — and none may need an exception',
       );
+    });
+  });
+
+  /**
+   * FBL-020-R4 §3 — THE AUDIT-INVENTORY COMPLETENESS GATE.
+   *
+   * The inventory's header claimed that "a transition added to the platform without an
+   * entry fails the completeness assertion". No such assertion existed anywhere, and the
+   * inventory was in fact a SUBSET: production code wrote 33 identity audit event types
+   * it did not list, four of them inside its own declared `support` family, and
+   * `identity.support.expired` — the event §4's OWN expiry processor writes — among them.
+   * The suite stayed green throughout, because nothing compared the list to the code.
+   *
+   * `scripts/check-audit-inventory.ts` is the assertion that sentence described. These
+   * tests are what stop it from becoming another sentence: the real tree must PASS, and
+   * each way of bringing an uninventoried audit event into existence must be REJECTED BY
+   * ITS OWN RULE.
+   *
+   * R4 correction F1a is the reason there is a second fixture corpus. The gate's FIRST
+   * version read names with one regular expression over `node.text` plus one look at
+   * `node.head.text`, and both were defeated in twelve lines: `'identity.support' +
+   * '.quarantined'` puts no complete name in any literal, and `` `${NS}.quarantined` ``
+   * has an EMPTY head. Most of the twelve spellings in
+   * `architecture/fixtures/audit-inventory-assembly/` were invisible to that version;
+   * the exact count is deliberately not stated, because it was published as ten here
+   * and as eleven in two documents and never re-measured — see KNOWN-LIMITATIONS. What
+   * this suite asserts is the part that matters and is reproducible: the gate that ships
+   * rejects all twelve. The evaluator that reads
+   * all of them already existed in the SIBLING guard, so it now lives in
+   * `scripts/static-string-resolver.ts` and both gates import it — which is the same "one
+   * implementation" rule the role-bindings guard enforces for SQL, applied to the guards.
+   *
+   * The rules that judge the DECLARATION rather than a scanned file cannot be reached by
+   * a fixture at all; they are driven directly, one test per rule, in
+   * `tests/audit-inventory-rules.test.ts` (R4 correction F2).
+   */
+  describe('audit inventory completeness (FBL-020-R4 §3)', () => {
+    /** Per-fixture verdicts from one gate run: how many violations, and which rules. */
+    function auditVerdicts(dir: string): {
+      code: number;
+      output: string;
+      actual: Record<string, { violations: number; rules: string[] }>;
+    } {
+      const { code, output } = runWith('scripts/check-audit-inventory.ts', [dir]);
+      const byFile = new Map<string, { violations: number; rules: Set<string> }>();
+      for (const line of output.split(/\r?\n/)) {
+        const parsed = /^\s*error ([a-z0-9-]+): architecture\/fixtures\/[^/]+\/([^:]+):\d+ /.exec(
+          line,
+        );
+        if (parsed === null) continue;
+        const file = String(parsed[2]);
+        const seen = byFile.get(file) ?? { violations: 0, rules: new Set<string>() };
+        seen.violations += 1;
+        seen.rules.add(String(parsed[1]));
+        byFile.set(file, seen);
+      }
+      const actual: Record<string, { violations: number; rules: string[] }> = {};
+      for (const [file, seen] of byFile) {
+        actual[file] = { violations: seen.violations, rules: [...seen.rules].sort() };
+      }
+      return { code, output, actual };
+    }
+
+    function expect(
+      table: Record<string, { violations: number; rules: string[] }>,
+    ): Record<string, { violations: number; rules: string[] }> {
+      return Object.fromEntries(
+        Object.entries(table).map(([f, e]) => [
+          f,
+          { violations: e.violations, rules: [...e.rules].sort() },
+        ]),
+      );
+    }
+
+    const MISSING = 'audit-event-type-missing-from-inventory';
+    const ASSEMBLED = 'audit-event-type-assembled-at-run-time';
+    const ASSEMBLED_ROOT = 'audit-event-type-namespace-root-assembled-at-run-time';
+    const UNDECLARED_WRITER = 'audit-write-outside-declared-writer';
+
+    test('the real repository passes the audit-inventory gate', () => {
+      const { code, output } = run('scripts/check-audit-inventory.ts');
+      assert.equal(code, 0, `the real tree has an unaccounted audit event type:\n${output}`);
+      // The scan's REACH is what makes the gate mean anything, so the run states it and
+      // this asserts it: a checker that quietly stopped finding files would still pass.
+      assert.match(
+        output,
+        /scanned \d\d+ production TypeScript file\(s\) and \d+ migration\(s\); \d\d+ distinct/,
+        'the gate must report the breadth it actually scanned',
+      );
+      assert.match(output, /46 entries over 9 declared families/);
+      // The event the finding named, with its disposition, pinned by name.
+      assert.match(output, /identity\.support\.expired → INVENTORY support\/support\.expiry/);
+      // …and the one declared non-enumerable writer, stated rather than implied away.
+      assert.match(output, /service\. \(NOT statically enumerable — declared residue\)/);
+    });
+
+    test('EVERY way of writing an uninventoried audit event is REJECTED, each by its own rule', () => {
+      const { code, output, actual } = auditVerdicts('architecture/fixtures/audit-inventory-gap');
+      assert.notEqual(code, 0, `the gate accepted the gap fixtures:\n${output}`);
+      // Deep equality in BOTH directions: a fixture that stopped being rejected fails,
+      // and so does a fixture rejected for a reason it was not written to prove — which
+      // is what a rule quietly widening past its statement looks like.
+      assert.deepEqual(
+        actual,
+        expect({
+          // the finding's own shape: a new event inside a DECLARED family. It is also an
+          // audit write from a file nobody declared, so it raises both.
+          'undeclared-support-event.ts': { violations: 2, rules: [MISSING, UNDECLARED_WRITER] },
+          // the evasion a name scan cannot see: a name assembled at run time
+          'assembled-event-type.ts': { violations: 2, rules: [ASSEMBLED, UNDECLARED_WRITER] },
+          // the hole OUTSIDE the identity namespace: an audit write from a new file
+          'undeclared-writer.ts': { violations: 1, rules: [UNDECLARED_WRITER] },
+        }),
+        `the gap fixture verdicts changed:\n${output}`,
+      );
+      // The rule name alone would be satisfied by the right rule raised for the wrong
+      // reason, so the load-bearing detail is pinned too: the gate must NAME the value
+      // it could not resolve.
+      assert.match(
+        output,
+        /assembled-event-type[^\n]*assembled from `outcome`/,
+        'an unreadable name must name what made it unreadable',
+      );
+    });
+
+    /**
+     * R4 correction F1a. Twelve spellings, one property: a name the shared resolver can
+     * READ is compared to the inventory however it was assembled, and a name it cannot
+     * read is REFUSED rather than passed over. No fragment in any of these files is a
+     * complete event type, which is exactly why the pre-F1a gate saw nothing in most of
+     * them. The precise count is withdrawn rather than restated — it was published
+     * inconsistently and never re-measured.
+     */
+    test('EVERY assembly spelling the shared resolver reads is REJECTED, and none passes silently', () => {
+      const { code, output, actual } = auditVerdicts(
+        'architecture/fixtures/audit-inventory-assembly',
+      );
+      assert.notEqual(code, 0, `the gate accepted the assembly fixtures:\n${output}`);
+      assert.deepEqual(
+        actual,
+        expect({
+          // (a) and (b) are the finding's own two reproductions.
+          'evasion-a-string-concat.ts': { violations: 1, rules: [MISSING] },
+          'evasion-b-interpolated-head.ts': { violations: 1, rules: [MISSING] },
+          'evasion-c-array-join.ts': { violations: 1, rules: [MISSING] },
+          // two shapes each: the flat call and the chain; `[i]` and `.at(i)`.
+          'evasion-d-concat-call.ts': { violations: 2, rules: [MISSING] },
+          'evasion-e-accumulated.ts': { violations: 1, rules: [MISSING] },
+          'evasion-f-indexed-fragments.ts': { violations: 2, rules: [MISSING] },
+          'evasion-g-string-raw.ts': { violations: 1, rules: [MISSING] },
+          // one expression, several possible names — every possibility is judged.
+          'evasion-h-lookup-map.ts': { violations: 2, rules: [MISSING] },
+          'evasion-i-alternative-fragment.ts': { violations: 4, rules: [MISSING] },
+          'evasion-j-cross-file-fragment.ts': { violations: 2, rules: [MISSING] },
+          // (k) five operations the resolver refuses to model: FAIL LOUD, not silence.
+          'evasion-k-opaque-rewrites.ts': { violations: 5, rules: [ASSEMBLED] },
+          // (l) the root assembled and the family spelled out — the mirror of
+          // `assembled-event-type.ts`, and the rule that closes that half.
+          'evasion-l-assembled-namespace-root.ts': { violations: 1, rules: [ASSEMBLED_ROOT] },
+          // `cross-file-fragments.ts` holds FRAGMENTS and must raise nothing; its absence
+          // from this table is asserted by the deep equality.
+        }),
+        `the assembly fixture verdicts changed:\n${output}`,
+      );
+      // The names must be RESOLVED, not merely noticed: a gate that reported these as
+      // unreadable would satisfy the rule names above while saying nothing about what
+      // the code does. So the assembled names themselves are pinned.
+      for (const name of [
+        'identity.support.quarantined', // concatenation
+        'identity.support.reopened', // interpolated head
+        'identity.support.archived', // Array.prototype.join
+        'identity.support.sealed',
+        'identity.support.chained', // String.prototype.concat, both spellings
+        'identity.support.drained', // += accumulation
+        'identity.support.folded',
+        'identity.support.picked', // [i] and .at(i)
+        'identity.support.stapled', // String.raw
+        'identity.session.smuggled', // lookup map, the guilty possibility
+        'identity.support.smothered', // conditional
+        'identity.session.smoked', // ??
+        'identity.support.imported',
+        'identity.support.aliased', // cross-file, plain and aliased import
+      ]) {
+        assert.match(
+          output,
+          new RegExp(`'${name.replace(/\./g, '\\.')}' appears in production code`),
+          `${name} must be RESOLVED and named, not merely reported as unreadable`,
+        );
+      }
+      assert.match(
+        output,
+        /evasion-k[^\n]*assembled from `NEARLY\.replace\(/,
+        'a rewrite of a readable name must be named as the thing that could not be resolved',
+      );
+      assert.match(
+        output,
+        /evasion-l[^\n]*a declared family follows `root`/,
+        'an assembled namespace ROOT must be named by the family that identifies it',
+      );
+    });
+
+    /**
+     * The other half of F1b: what the gate does NOT enforce is stated as a narrower
+     * claim, and the claim is TESTED. These files are wrong and the gate accepts them.
+     * If a later revision closes one of these residues, this test goes red and the
+     * documents have to change with it — which is the opposite of how the four rejected
+     * revisions handled a limit.
+     */
+    test('the residue the gate cannot see is ACCEPTED, and named in the documents', () => {
+      const { code, output } = runWith('scripts/check-audit-inventory.ts', [
+        'architecture/fixtures/audit-inventory-residue',
+      ]);
+      assert.equal(
+        code,
+        0,
+        `a residue fixture was rejected — the limitation has been closed, so the gate ` +
+          `header and KNOWN-LIMITATIONS must stop naming it:\n${output}`,
+      );
+      const limits = readFileSync(join(ROOT, 'docs', 'identity', 'KNOWN-LIMITATIONS.md'), 'utf8');
+      const gate = readFileSync(join(ROOT, 'scripts', 'check-audit-inventory.ts'), 'utf8');
+      const inventory = readFileSync(
+        join(ROOT, 'packages', 'identity-access', 'src', 'audit-inventory.ts'),
+        'utf8',
+      );
+      // Every "here is what is NOT enforced" section must name this residue — the three
+      // sections whose whole purpose is to be exhaustive, and which omitted it before.
+      for (const [name, doc] of [
+        ['KNOWN-LIMITATIONS', limits],
+        ["the gate's own header", gate],
+        ["the inventory's own header", inventory],
+      ] as const) {
+        assert.ok(
+          doc.includes('audit-inventory-residue'),
+          `${name} must point at the fixtures that DEMONSTRATE the residue`,
+        );
+        assert.match(
+          doc,
+          /root .*AND.* family are both assembled|root and family are both assembled|neither the root nor a declared family/i,
+          `${name} must name the residue: a name with neither a readable root nor a readable family`,
+        );
+      }
+    });
+
+    test('a file naming only DECLARED event types is ACCEPTED — the gate is not simply always red', () => {
+      const { code, output } = runWith('scripts/check-audit-inventory.ts', [
+        'architecture/fixtures/audit-inventory-declared',
+      ]);
+      assert.equal(code, 0, `the gate rejected declared event types:\n${output}`);
+    });
+
+    /**
+     * R4 correction F1a's structural half. The defect was not only that the audit gate
+     * read strings badly — it was that a THIRD hand-written string analysis existed at
+     * all, so it drifted from the one that already handled these spellings. This test is
+     * what makes a FOURTH copy fail the build.
+     */
+    test('both gates import ONE static string resolver, and neither keeps a private copy', () => {
+      const resolver = readFileSync(join(ROOT, 'scripts', 'static-string-resolver.ts'), 'utf8');
+      // The resolver really is the implementation: these are its load-bearing parts.
+      for (const owned of [
+        'function literalTexts',
+        'function arrayShapes',
+        'function assembly',
+        'function flatten',
+        'function render',
+        'function textValuesIn',
+      ]) {
+        assert.ok(resolver.includes(owned), `the shared resolver must own ${owned}`);
+      }
+      for (const gate of ['check-audit-inventory.ts', 'check-role-binding-effectiveness.ts']) {
+        const source = readFileSync(join(ROOT, 'scripts', gate), 'utf8');
+        assert.match(
+          source,
+          /createStaticStringResolver\(/,
+          `${gate} must resolve strings through the shared resolver`,
+        );
+        assert.match(
+          source,
+          /from '\.\/static-string-resolver'/,
+          `${gate} must import the shared resolver rather than reimplement it`,
+        );
+        // A second copy of any of the resolver's parts inside a gate is the defect.
+        for (const owned of [
+          'function literalTexts',
+          'function arrayShapes',
+          'function assembly(',
+          'function flatten(',
+          'function textValues',
+        ]) {
+          assert.ok(
+            !source.includes(owned),
+            `${gate} declares its own ${owned} — that is a second string analysis, and ` +
+              'drifting duplicates are what this whole correction is about',
+          );
+        }
+      }
+    });
+
+    test('the gate is part of npm run architecture:check', () => {
+      // A guard nobody runs is not a guard. The wiring is read from the manifest rather
+      // than asserted in a document.
+      const scripts = (
+        JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+          scripts: Record<string, string>;
+        }
+      ).scripts;
+      assert.match(scripts['architecture:check'] ?? '', /check-audit-inventory\.ts/);
     });
   });
 });

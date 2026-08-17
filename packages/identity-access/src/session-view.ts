@@ -27,7 +27,11 @@
  */
 import { query } from '@dealer/database';
 import { EFFECTIVE_ROLE_BINDING_SQL, classifyActorAssurance } from './policy';
-import { listActiveSupportSessions } from './support-access';
+import {
+  listActiveSupportGrantsForActor,
+  listActiveSupportSessions,
+  type LiveSupportGrant,
+} from './support-access';
 import type { ActorScope } from './contracts';
 import type { FreshnessClassification, MfaAssuranceClassification } from './policy';
 
@@ -61,11 +65,25 @@ export interface OrganizationScopeSummary {
   readonly scopes: readonly EffectiveScope[];
 }
 
-export interface ActiveSupportState {
-  readonly supportSessionId: string;
-  readonly actorUserLinkId: string;
-  readonly grantedAt: Date;
-  readonly expiresAt: Date;
+/**
+ * FBL-020-R4 §4 — ONE live delegated grant as this page reports it.
+ *
+ * It is `LiveSupportGrant` plus one field: the seven facts that BOUND the access,
+ * and when it was granted. R3 published four (session, actor, granted, expiry) and
+ * omitted the approving request, the target tenant, and — the two that decide what
+ * the access can actually DO — the approved scope and the approved action set. A
+ * tenant administrator looking at this page has to be able to answer "how far does
+ * this reach" without asking us.
+ *
+ * `relationship` says WHY the grant is on this person's page, because the two
+ * reasons are different facts and must not be blurred: `into_this_tenant` is the
+ * tenant-wide indicator every session of the tenant sees, and `held_by_me` is a
+ * platform actor's OWN live access. Nothing ever reported the second one — the read
+ * was keyed by tenant and a platform actor has none, so R3 answered every platform
+ * actor with an empty list.
+ */
+export interface ActiveSupportState extends LiveSupportGrant {
+  readonly relationship: 'into_this_tenant' | 'held_by_me';
 }
 
 export interface AuthenticatedSessionView {
@@ -204,9 +222,30 @@ export async function describeAuthenticatedSession(input: {
   // page claim a freshness the presented credential does not have while the
   // audit row (correctly) said otherwise.
   const assurance = await classifyActorAssurance(input.userLinkId, input.sessionId);
-  // The NON-SUPPRESSIBLE support indicator: a live support session for this
-  // tenant is visible to every session of the tenant, every time.
-  const support = input.tenantId === null ? [] : await listActiveSupportSessions(input.tenantId);
+  // THE NON-SUPPRESSIBLE SUPPORT INDICATOR, from BOTH directions.
+  //
+  // A live support session against this tenant is visible to every session of the
+  // tenant, every time — that half is R3's and it stands. The other half is
+  // FBL-020-R4 §4: a PLATFORM actor's own live grants. R3 keyed this read by tenant
+  // and short-circuited on `tenantId === null`, so the platform-support person — the
+  // one holding the access, the one who can end it instantly, and the one who most
+  // needs to notice they still have it — was told nothing whatsoever.
+  //
+  // The two are read separately and labelled, never merged into an unlabelled list:
+  // "somebody is in your tenant" and "you are in somebody's tenant" are different
+  // statements, and a page that blurred them would mislead whichever reader it was
+  // not written for.
+  const support: ActiveSupportState[] = [];
+  if (input.tenantId !== null) {
+    for (const grant of await listActiveSupportSessions(input.tenantId)) {
+      support.push({ ...grant, relationship: 'into_this_tenant' });
+    }
+  }
+  if (input.actorScope === 'platform') {
+    for (const grant of await listActiveSupportGrantsForActor(input.userLinkId)) {
+      support.push({ ...grant, relationship: 'held_by_me' });
+    }
+  }
 
   return {
     userLinkId: input.userLinkId,
@@ -220,11 +259,9 @@ export async function describeAuthenticatedSession(input: {
     freshness: assurance.freshness,
     mfaAssurance: assurance.mfaAssurance,
     localSessionExpiresAt,
-    supportAccess: support.map((s) => ({
-      supportSessionId: s.supportSessionId,
-      actorUserLinkId: s.actorUserLinkId,
-      grantedAt: s.grantedAt,
-      expiresAt: s.expiresAt,
-    })),
+    // Passed through whole: the field list is the TYPE's, so a grant fact added to
+    // `LiveSupportGrant` reaches this page instead of being silently dropped by a
+    // hand-written projection — which is how R3 came to publish four of the seven.
+    supportAccess: support,
   };
 }

@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { getConfig, LogLevel } from './config';
-import { getRequestContext } from './request-context';
+import { getRequestContext, supportContextLogFields } from './request-context';
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
@@ -159,6 +159,18 @@ function emit(level: LogLevel, a?: unknown, b?: string): void {
   const msg = hasContext ? b : (a as string | undefined);
 
   // Request correlation rides on every line automatically; ids only, never bodies.
+  //
+  // FBL-020-R4 §4: so does DELEGATED SUPPORT ACCESS whenever the request is being served
+  // under it. R3 logged the platform person's user id and the tenant id and stopped
+  // there, which made a line served under support access indistinguishable from one
+  // served to an ordinary user of that tenant — the most sensitive distinction this
+  // platform has to be able to draw after the fact. Every line inside such a request now
+  // names the session, the approved request, the true actor, the target tenant, the
+  // approved scope and action set, and the expiry.
+  //
+  // The support REASON text is not among those fields and must never be: it is free text
+  // a human wrote about a customer's situation, and putting it on every log line would
+  // turn ordinary operational logging into a disclosure.
   const rc = getRequestContext();
   const correlation = rc
     ? {
@@ -168,6 +180,10 @@ function emit(level: LogLevel, a?: unknown, b?: string): void {
         ...(rc.userId !== undefined ? { user_id: rc.userId } : {}),
       }
     : {};
+  // LAST in the object literal, and that position is the control: a caller that passes its
+  // own `support_session_id` — by accident or to muddy a trail — cannot shadow the bound
+  // facts, because these are written after the caller's context rather than before it.
+  const support = rc?.support !== undefined ? supportContextLogFields(rc.support) : {};
 
   const line = JSON.stringify({
     level,
@@ -175,6 +191,7 @@ function emit(level: LogLevel, a?: unknown, b?: string): void {
     msg,
     ...correlation,
     ...context,
+    ...support,
   });
   if (level === 'error') process.stderr.write(line + '\n');
   else process.stdout.write(line + '\n');

@@ -14,8 +14,10 @@ import {
   startIdentityTestEnv,
   testOrganizationId,
   type IdentityTestEnv,
+  fixtureAuthorizationStateWrite,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
+import { resetConfigForTests } from '@dealer/platform';
 import { ROLES } from '@dealer/contracts';
 import {
   NOT_IMPERSONATED,
@@ -162,7 +164,8 @@ describe(
         tenantId: tenant,
         roles: [ROLES.SERVICE_ADVISOR],
       });
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE user_links SET status = 'deactivated', deactivated_at = NOW()
           WHERE user_link_id = $1`,
         [advisor.userLinkId],
@@ -342,11 +345,11 @@ describe(
       const displayName = 'Advisor Person';
       // The link genuinely HOLDS a profile — otherwise the assertion below
       // would pass because there was nothing to leak.
-      await query(`UPDATE user_links SET email = $2, display_name = $3 WHERE user_link_id = $1`, [
-        link.userLinkId,
-        email,
-        displayName,
-      ]);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE user_links SET email = $2, display_name = $3 WHERE user_link_id = $1`,
+        [link.userLinkId, email, displayName],
+      );
       const subject = String(
         (
           (
@@ -527,28 +530,53 @@ describe(
 
     test('R1 section C: disabling ANY link in the chain denies the very next request', async () => {
       // One otherwise-valid bearer token, four independent kill switches.
+      //
+      // FBL-020-R4 §5: each switch is a DECLARED fixture bypass. Every one of these is a
+      // state no production service will write — a disabled connection, an effective
+      // window closed in the past — which is precisely why the suite must write it
+      // itself, and precisely why it is named and reasoned rather than a bare `query`.
       for (const kill of [
         {
           label: 'provider connection disabled',
-          sql: `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
+          break: (tenant: string) =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
+              [tenant],
+            ),
         },
         {
           label: 'provider connection expired',
-          sql: `UPDATE identity_provider_connections
+          break: (tenant: string) =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE identity_provider_connections
                    SET effective_from = NOW() - INTERVAL '2 hours',
                        effective_to = NOW() - INTERVAL '1 minute'
                  WHERE tenant_id = $1`,
+              [tenant],
+            ),
         },
         {
           label: 'tenant suspended',
-          sql: `UPDATE tenants SET status = 'suspended' WHERE tenant_id = $1`,
+          break: (tenant: string) =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE tenants SET status = 'suspended' WHERE tenant_id = $1`,
+              [tenant],
+            ),
         },
         {
           label: 'user link expired',
-          sql: `UPDATE user_links
+          break: (tenant: string) =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE user_links
                    SET effective_from = NOW() - INTERVAL '2 hours',
                        effective_to = NOW() - INTERVAL '1 minute'
                  WHERE tenant_id = $1`,
+              [tenant],
+            ),
         },
       ]) {
         await resetDatabase();
@@ -563,7 +591,7 @@ describe(
         const auth = { authorization: `Bearer ${advisor.token}` };
 
         assert.equal((await get('/api/service/home', auth)).status, 200, kill.label);
-        await query(kill.sql, [tenant]);
+        await kill.break(tenant);
         // SAME token, no restart, no expiry
         assert.equal(
           (await get('/api/service/home', auth)).status,
@@ -581,14 +609,42 @@ describe(
       const auth = { authorization: `Bearer ${advisor.token}` };
       assert.equal((await get('/api/service/home', auth)).status, 200);
 
-      // The provider identifier still maps, but the trust anchor no longer
-      // agrees — mapping inputs are not authorization evidence.
-      await query(
-        `UPDATE identity_provider_connections SET issuer = 'https://someone-elses-issuer.example'
-          WHERE tenant_id = $1`,
-        [tenant],
+      // FBL-020-R4 §2.1 — THIS DRIFT IS NO LONGER REPRESENTABLE, WHICH IS STRONGER
+      // THAN BEING DENIED. Re-pointing a connection's trust anchor while an activated
+      // link is bound to it used to be an ordinary UPDATE, and the platform's only
+      // defence was that every later request re-checked the agreement. The composite
+      // key `ul_connection_identity_tuple` refuses the statement outright: a trust
+      // anchor cannot be swapped out from under the identities that were admitted
+      // through it, so no window exists in which the two disagree.
+      await assert.rejects(
+        fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE identity_provider_connections SET issuer = 'https://someone-elses-issuer.example'
+            WHERE tenant_id = $1`,
+          [tenant],
+        ),
+        /ul_connection_identity_tuple/,
+        'a bound connection cannot be re-anchored',
       );
-      assert.equal((await get('/api/service/home', auth)).status, 401);
+      assert.equal(
+        (await get('/api/service/home', auth)).status,
+        200,
+        'and the refusal left the identity chain intact',
+      );
+
+      // The remaining representable disagreement is with CONFIGURATION: the database
+      // still names the issuer it was seeded with, and the platform is now configured
+      // to trust a different one. Mapping inputs are not authorization evidence, so the
+      // request is refused.
+      const configuredIssuer = process.env.WORKOS_ISSUER;
+      process.env.WORKOS_ISSUER = 'https://someone-elses-issuer.example';
+      resetConfigForTests();
+      try {
+        assert.equal((await get('/api/service/home', auth)).status, 401);
+      } finally {
+        process.env.WORKOS_ISSUER = configuredIssuer;
+        resetConfigForTests();
+      }
     });
 
     test('the tenant a request operates on comes from the identity, never the body', async () => {
@@ -709,7 +765,8 @@ describe(
       });
       const auth = { authorization: `Bearer ${advisor.token}` };
       assert.equal((await get('/api/service/home', auth)).status, 200);
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE identity_sessions SET issued_at = NOW() - INTERVAL '2 hours',
                                       expires_at = NOW() - INTERVAL '1 minute'
           WHERE user_link_id = $1`,
@@ -753,17 +810,26 @@ describe(
       const original = { authorization: `Bearer ${advisor.token}` };
       assert.equal((await get('/api/service/home', original)).status, 200);
 
-      // The tenant's connection is re-pointed at a DIFFERENT provider
-      // organization. The user link still belongs to the old one.
+      // FBL-020-R4 §2.1: re-pointing the connection at a different provider
+      // organization is now refused while a link is bound to it — the organization is
+      // part of the composite key that ties the link to the connection, so the remap
+      // cannot happen behind the link's back.
       const remappedOrg = 'org_remapped_' + randomUUID().slice(0, 8);
-      await query(
-        `UPDATE identity_provider_connections SET provider_organization_id = $2
-          WHERE tenant_id = $1`,
-        [tenant, remappedOrg],
+      await assert.rejects(
+        fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE identity_provider_connections SET provider_organization_id = $2
+            WHERE tenant_id = $1`,
+          [tenant, remappedOrg],
+        ),
+        /ul_connection_identity_tuple/,
+        'a bound connection cannot be re-homed to another organization',
       );
 
-      // Same person, same tenant, same connection row — but a token issued by
-      // the NEW organization. The six-fact lookup finds nothing.
+      // The claim this test exists for still holds, and is now provable without any
+      // drift at all: the same person, the same tenant, the same connection row, but a
+      // token issued by ANOTHER organization inherits nothing. The six-fact lookup
+      // finds no link for that organization, so no session is established.
       const remapped = await env.issuer.signAccessToken({
         sub: advisor.providerUserId,
         org_id: remappedOrg,
@@ -773,26 +839,56 @@ describe(
         401,
         'a remapped organization must not inherit the previous organization’s link',
       );
-      // The ORIGINAL token maps to no connection at all any more.
-      assert.equal((await get('/api/service/home', original)).status, 401);
+      // The ORIGINAL token still maps, because nothing was allowed to move.
+      assert.equal((await get('/api/service/home', original)).status, 200);
       // …and nothing was established for the remapped identity.
       assert.equal((await onlySessionOf(advisor.userLinkId)).credential_kind, 'bearer');
     });
 
-    test('R3: an issuer mismatch is refused at EVERY layer that carries one', async () => {
+    /**
+     * FBL-020-R4 §2.1 — EVERY LAYER THAT CARRIES AN ISSUER IS NOW TIED TO THE ONE
+     * ABOVE IT BY A COMPOSITE KEY, so a disagreeing issuer is not merely denied on the
+     * next request: it cannot be written at all. Each mutation below used to succeed,
+     * leaving a live, active, in-window chain whose parts disagreed, and the platform's
+     * defence was that every request re-derived the agreement. Both halves are asserted
+     * here — the statement is REFUSED, and the credential still works afterwards,
+     * because a refused mutation must not have half-landed.
+     */
+    test('R3/R4: an issuer mismatch is refused at EVERY layer that carries one', async () => {
       const foreign = 'https://someone-elses-issuer.example';
+      // FBL-020-R4 §5: an ADVERSARIAL bypass — the point of each attempt is that the
+      // database refuses it, so it is declared as an attempt rather than hidden in a
+      // bare `query`.
       for (const layer of [
         {
           label: 'connection issuer',
-          sql: `UPDATE identity_provider_connections SET issuer = $2 WHERE tenant_id = $1`,
+          drift: (tenant: string, issuer: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE identity_provider_connections SET issuer = $2 WHERE tenant_id = $1`,
+              [tenant, issuer],
+            ),
+          constraint: /ul_connection_identity_tuple/,
         },
         {
           label: 'user link issuer',
-          sql: `UPDATE user_links SET issuer = $2 WHERE tenant_id = $1`,
+          drift: (tenant: string, issuer: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE user_links SET issuer = $2 WHERE tenant_id = $1`,
+              [tenant, issuer],
+            ),
+          constraint: /ul_connection_identity_tuple|is_link_identity_tuple/,
         },
         {
           label: 'local session issuer',
-          sql: `UPDATE identity_sessions SET issuer = $2 WHERE tenant_id = $1`,
+          drift: (tenant: string, issuer: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE identity_sessions SET issuer = $2 WHERE tenant_id = $1`,
+              [tenant, issuer],
+            ),
+          constraint: /is_link_identity_tuple/,
         },
       ]) {
         await resetDatabase();
@@ -806,34 +902,54 @@ describe(
         });
         const auth = { authorization: `Bearer ${advisor.token}` };
         assert.equal((await get('/api/service/home', auth)).status, 200, layer.label);
-        await query(layer.sql, [tenant, foreign]);
+        await assert.rejects(
+          layer.drift(tenant, foreign),
+          layer.constraint,
+          `${layer.label}: a disagreeing issuer must be unrepresentable`,
+        );
         assert.equal(
           (await get('/api/service/home', auth)).status,
-          401,
-          `${layer.label}: a disagreeing issuer must deny the very next request`,
+          200,
+          `${layer.label}: the refused mutation left the chain intact`,
         );
       }
     });
 
-    test('R3: a cookie session dies when any ONE fact stops agreeing', async () => {
-      // Each mutation leaves every row present, active and inside its window —
-      // only the AGREEMENT between them breaks. R2 checked the facts one at a
-      // time and would have accepted all three.
+    test('R3/R4: a cookie session cannot be left with ONE fact out of agreement', async () => {
+      // Each mutation leaves every row present, active and inside its window — only the
+      // AGREEMENT between them breaks. R2 checked the facts one at a time and would have
+      // accepted all three; R3 re-derived the whole chain per request and denied them.
+      // R4 §2.1 removes the state itself: each is refused by a composite key.
       for (const drift of [
         {
           label: 'link re-homed to another organization',
-          sql: `UPDATE user_links SET provider_organization_id = 'org_moved_elsewhere'
+          attempt: (userLinkId: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE user_links SET provider_organization_id = 'org_moved_elsewhere'
                  WHERE user_link_id = $1`,
+              [userLinkId],
+            ),
         },
         {
           label: 'link subject rewritten',
-          sql: `UPDATE user_links SET provider_user_id = 'user_someone_else'
+          attempt: (userLinkId: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE user_links SET provider_user_id = 'user_someone_else'
                  WHERE user_link_id = $1`,
+              [userLinkId],
+            ),
         },
         {
           label: 'session organization no longer the connection’s',
-          sql: `UPDATE identity_sessions SET provider_organization_id = 'org_moved_elsewhere'
+          attempt: (userLinkId: string) =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE identity_sessions SET provider_organization_id = 'org_moved_elsewhere'
                  WHERE user_link_id = $1`,
+              [userLinkId],
+            ),
         },
       ]) {
         await resetDatabase();
@@ -844,13 +960,40 @@ describe(
         const { created, link } = await sessionFor([ROLES.SERVICE_ADVISOR]);
         const cookie = `dealer_session=${created.sessionToken}`;
         assert.equal((await get('/api/service/home', { cookie })).status, 200, drift.label);
-        await query(drift.sql, [link.userLinkId]);
+        await assert.rejects(
+          drift.attempt(link.userLinkId),
+          /ul_connection_identity_tuple|is_link_identity_tuple/,
+          `${drift.label}: a chain that no longer agrees must be unrepresentable`,
+        );
         assert.equal(
           (await get('/api/service/home', { cookie })).status,
-          401,
-          `${drift.label}: a chain that no longer agrees must deny the next request`,
+          200,
+          `${drift.label}: the refused mutation left the session usable`,
         );
       }
+
+      // THE REQUEST-TIME CHAIN CHECK IS STILL LIVE, and this proves it: disabling the
+      // connection is a legitimate, representable act — status is not part of the
+      // identity tuple — and the very next request must be denied by the application's
+      // own re-derivation rather than by any constraint.
+      await resetDatabase();
+      tenant = randomUUID();
+      location = randomUUID();
+      await seedTenantIdentity(tenant);
+      await seedRooftopIdentity(tenant, location);
+      const { created } = await sessionFor([ROLES.SERVICE_ADVISOR]);
+      const cookie = `dealer_session=${created.sessionToken}`;
+      assert.equal((await get('/api/service/home', { cookie })).status, 200);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE identity_provider_connections SET status = 'disabled' WHERE tenant_id = $1`,
+        [tenant],
+      );
+      assert.equal(
+        (await get('/api/service/home', { cookie })).status,
+        401,
+        'a disabled connection must deny the very next request',
+      );
     });
 
     // ── FBL-020-R3 correction C1: the provider refresh is REACHABLE ─────────
@@ -876,6 +1019,15 @@ describe(
       fail?: 'definitive' | 'transient';
       /** The lifetime of the access token the refresh returns. */
       accessTokenTtlSeconds?: number;
+      /**
+       * FBL-020-R4 §3: the provider session id (`sid`) the reply carries. A REFRESH
+       * keeps the provider session it is refreshing, and the platform now BINDS it
+       * exactly — both in the reply and in the verified replacement token — so a
+       * reply naming a different provider session revokes the local session instead
+       * of silently overwriting the stored value. Every caller therefore hands over
+       * the sid its own session was established with.
+       */
+      providerSessionId: string;
       /** Holds the exchange open, so a second request must queue on the row lock. */
       delayMs?: number;
     }): FakeRefreshPort {
@@ -902,12 +1054,13 @@ describe(
             // replacement, so a fake string would be revoked, not adopted.
             accessToken: await env.issuer.signAccessToken({
               sub: behaviour.subject,
+              sid: behaviour.providerSessionId,
               org_id: testOrganizationId(tenant),
               exp: now + (behaviour.accessTokenTtlSeconds ?? 300),
             }),
             refreshToken: behaviour.replacement ?? 'provider-refresh-next',
             providerUserId: behaviour.subject,
-            providerSessionId: 'sid_refreshed_' + randomUUID().slice(0, 8),
+            providerSessionId: behaviour.providerSessionId,
             organizationId: testOrganizationId(tenant),
             impersonation: NOT_IMPERSONATED,
           };
@@ -997,6 +1150,7 @@ describe(
 
       const port = fakeProviderPort({
         subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
         replacement: 'provider-refresh-2',
       });
       await withProvider(port, async () => {
@@ -1036,7 +1190,10 @@ describe(
         refreshToken: 'provider-refresh-untouched',
         accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
       });
-      const port = fakeProviderPort({ subject: link.providerUserId });
+      const port = fakeProviderPort({
+        subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
+      });
       await withProvider(port, async () => {
         assert.equal(
           (await get('/api/service/home', { cookie: `dealer_session=${created.sessionToken}` }))
@@ -1065,6 +1222,7 @@ describe(
       });
       const port = fakeProviderPort({
         subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
         replacement: 'provider-refresh-concurrent-2',
         delayMs: 250,
       });
@@ -1094,7 +1252,11 @@ describe(
         accessTokenExpiresAt: new Date(Date.now() + 20_000),
       });
       const before = await sessionRow(created.session.sessionId);
-      const port = fakeProviderPort({ subject: link.providerUserId, fail: 'transient' });
+      const port = fakeProviderPort({
+        subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
+        fail: 'transient',
+      });
       await withProvider(port, async () => {
         const cookie = `dealer_session=${created.sessionToken}`;
         assert.equal(
@@ -1118,7 +1280,11 @@ describe(
         refreshToken: 'provider-refresh-dead',
         accessTokenExpiresAt: new Date(Date.now() + 20_000),
       });
-      const port = fakeProviderPort({ subject: link.providerUserId, fail: 'definitive' });
+      const port = fakeProviderPort({
+        subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
+        fail: 'definitive',
+      });
       await withProvider(port, async () => {
         const cookie = `dealer_session=${created.sessionToken}`;
         assert.equal(
@@ -1146,7 +1312,10 @@ describe(
         refreshToken: 'provider-refresh-impersonated',
         accessTokenExpiresAt: new Date(Date.now() + 20_000),
       });
-      const base = fakeProviderPort({ subject: link.providerUserId });
+      const base = fakeProviderPort({
+        subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
+      });
       const port: FakeRefreshPort = {
         ...base,
         async refreshSession(input: { refreshToken: string }) {
@@ -1174,7 +1343,10 @@ describe(
         refreshToken: 'provider-refresh-csrf',
         accessTokenExpiresAt: new Date(Date.now() + 20_000),
       });
-      const port = fakeProviderPort({ subject: link.providerUserId });
+      const port = fakeProviderPort({
+        subject: link.providerUserId,
+        providerSessionId: created.session.providerSessionId!,
+      });
       await withProvider(port, async () => {
         const blocked = await post(
           '/api/service/appointments',
@@ -1217,7 +1389,10 @@ describe(
       const before = await sessionRow(created.session.sessionId);
       const presented: string[] = [];
       const port: FakeRefreshPort = {
-        ...fakeProviderPort({ subject: link.providerUserId }),
+        ...fakeProviderPort({
+          subject: link.providerUserId,
+          providerSessionId: created.session.providerSessionId!,
+        }),
         presented,
         refreshSession(input: { refreshToken: string }) {
           presented.push(input.refreshToken);

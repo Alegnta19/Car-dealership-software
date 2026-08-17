@@ -419,3 +419,79 @@ Quote instead: `user_link_id`, `connection_id`, `provider_organization_id`,
 observed. Those reconstruct any flow from the platform's own evidence tables and
 disclose nothing if the bundle leaks. Support **reason text** stays in its
 request row and belongs in no report.
+
+## R4 corrections (FBL-020-R4) — four procedures that changed under you
+
+**LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Nothing below has been exercised
+against a live WorkOS tenant; these are the platform-side procedures, and the live
+gate needs credentials and an operator (see
+`docs/FBL-020-DELIVERY-REPORT.md` §15).
+
+### 1. An MFA-policy certification now EXPIRES, and can be REVOKED
+
+R3 recorded the organization's MFA policy as a boolean plus the instant and the
+person who set it, and nothing bounded it: a certification made once was true
+for ever. Two columns change that on `identity_provider_connections`:
+
+- `mfa_policy_certification_expires_at` — after this instant the certification
+  counts for **nothing** until an authorized administrator re-confirms it. A
+  certification with no deadline is unrepresentable
+  (`ipc_mfa_certification_is_bounded`), and migration `057` **withdrew** every
+  pre-existing unbounded certification rather than inventing a deadline for it.
+- `mfa_policy_certification_revoked_at`, with
+  `mfa_policy_certification_revoked_by_user_link_id` — a withdrawal is a recorded
+  act attributable to a person, and the two are inseparable
+  (`ipc_mfa_revocation_is_attributable`). A revoked certification can never
+  simultaneously be in force.
+
+**Operator consequence.** Missing, false, revoked and expired are ONE answer: not
+certified — and every high-assurance step-up then fails CLOSED. So a tenant whose
+certification lapses does not degrade quietly; approvals that require
+`fresh_and_mfa_policy` start refusing. Re-certify through the authorized
+administrative action, never by an `UPDATE`. Check state with:
+
+```sql
+SELECT connection_id, mfa_policy_certified, mfa_policy_certified_at,
+       mfa_policy_certification_expires_at, mfa_policy_certification_revoked_at
+  FROM identity_provider_connections WHERE status = 'active';
+```
+
+### 2. A support window's EXPIRY is now a recorded transition
+
+`support_access_sessions.expired_at` is written by the worker when a window
+lapses, together with an authorization-version bump and one audit row. Before R4,
+"its hour ran out" and "it is still open" were the same evidence. Three
+properties an operator can rely on: the database refuses an `expired_at` recorded
+**early** (`sas_expiry_is_not_early`), refuses a session claiming **both** endings
+(`sas_ends_once_and_one_way`), and repetition is idempotent. Access itself stops
+on `expires_at` as it always did — `expired_at` adds evidence and changes no
+authorization answer, so a processor that falls behind can never widen access.
+
+The worker is where this runs in production: `node apps/worker/dist/main.js`. CI
+runs that exact entry point against the real schema (`worker-expiry-pass.txt`).
+
+### 3. The migration ledger now records a CHECKSUM, and a changed body ABORTS
+
+`schema_migrations` gains `checksum_sha256` and `checksum_algorithm`
+(`sha256-canonical-lf`). Before every run the runner recomputes the digest of each
+applied migration and **refuses the whole run** if one differs, naming the file and
+both digests. It does not auto-repair, does not skip and does not record the new
+value.
+
+Two operational notes. A row written by the pre-checksum runner has
+`checksum_sha256` **NULL**, which means "applied by a runner that did not record
+one, so the body is UNVERIFIABLE" — no digest is invented for it, and every run
+reports those rows by name. And the digest is **canonical-LF**: line endings are
+normalized before hashing and the normalized text is what executes, so the value is
+identical on Windows, in CI, and to the file as committed. Never "fix" a drift
+report by editing the ledger; find out which body actually ran.
+
+### 4. Round-trip state for a step-up now lives on the server row
+
+The reauthentication row owns `state_hash`, `code_verifier_hash`, `callback_uri`,
+`request_id`, `correlation_id` and `claimed_at`, and every terminal state carries
+`terminal_reason` and `terminal_at`. A leg issued for one callback cannot be
+completed at another, the claim is structurally single-use, and a row still at
+`started` is — by construction — genuinely still in flight rather than merely
+unexplained. When investigating a stuck step-up, read `terminal_reason`; absence of
+one is now information.

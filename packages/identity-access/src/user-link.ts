@@ -224,6 +224,32 @@ export async function observeUserLinkOnLogin(input: {
   issuer: string;
   providerOrganizationId: string;
 }): Promise<UserLink | null> {
+  return withTransaction((executor) => observeUserLinkOnLoginWithin(executor, input));
+}
+
+/**
+ * FBL-020-R4 section 1 — the SAME observation on a caller's executor.
+ *
+ * Login ADMISSION has to observe the identity and then judge the resulting link
+ * against the connection, the tenant and the effective windows. Doing that
+ * across two transactions means the link can be observed into existence against
+ * one picture and admitted against another; sharing one transaction is what
+ * makes the admission a single decision. The public wrapper above owns its own
+ * transaction for callers that need nothing else.
+ */
+export async function observeUserLinkOnLoginWithin(
+  executor: Executor,
+  input: {
+    tenantId: string | null;
+    provider?: IdentityProviderKind;
+    providerUserId: string;
+    email: string | null;
+    displayName: string | null;
+    connectionId: string;
+    issuer: string;
+    providerOrganizationId: string;
+  },
+): Promise<UserLink | null> {
   const facts: ProviderIdentityFacts = {
     provider: input.provider ?? IDENTITY_PROVIDER_WORKOS,
     tenantId: input.tenantId,
@@ -232,7 +258,7 @@ export async function observeUserLinkOnLogin(input: {
     issuer: input.issuer,
     providerOrganizationId: input.providerOrganizationId,
   };
-  return withTransaction((executor) => observeWithinTransaction(executor, facts, input, 0));
+  return observeWithinTransaction(executor, facts, input, 0);
 }
 
 async function observeWithinTransaction(

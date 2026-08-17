@@ -33,11 +33,202 @@
  * returned against it, and a missing digest is a failure rather than a
  * skipped comparison.
  */
-import { createHash, randomBytes } from 'node:crypto';
-import { query, withTransaction, type Executor } from '@dealer/database';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { withTransaction, type Executor } from '@dealer/database';
+import { getRequestContext } from '@dealer/platform';
+import { EFFECTIVE_MFA_CERTIFICATION_SQL } from './contracts';
 
 function sha256hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/**
+ * The correlation shape the evidence tables enforce. Anything else is DROPPED
+ * rather than truncated — the same rule `login-transaction.ts` applies, for the
+ * same reason: a value trimmed into shape correlates a flow to the wrong
+ * request, and no header value may reach a CHECK.
+ */
+const SAFE_CORRELATION = /^[A-Za-z0-9._-]{8,128}$/;
+
+/**
+ * FBL-020-R4 section 3 — the correlation pair a step-up records, read from the
+ * REQUEST CONTEXT rather than accepted from a caller.
+ *
+ * It is the very pair the outermost middleware minted and every log line for
+ * this request already carries, so a reauthentication row joins to its logs on
+ * ids nobody chose. Off-request (a scheduler, a CLI, a test) one is generated,
+ * because "no id" is not a fact a security transition may record about itself.
+ */
+function correlationPair(): { requestId: string; correlationId: string } {
+  const context = getRequestContext();
+  const requestId = safeCorrelation(context?.requestId);
+  const correlationId = safeCorrelation(context?.correlationId);
+  if (requestId !== null && correlationId !== null) return { requestId, correlationId };
+  const generated = randomUUID();
+  return { requestId: requestId ?? generated, correlationId: correlationId ?? generated };
+}
+
+function safeCorrelation(value: string | null | undefined): string | null {
+  return typeof value === 'string' && SAFE_CORRELATION.test(value) ? value : null;
+}
+
+/**
+ * FBL-020-R4 section 3 — WHY a reauthentication ended. A CLOSED vocabulary
+ * written by the server: never a provider message, never a token, a nonce, an
+ * authorization code or anything a caller supplied.
+ *
+ * `granted` is the success terminal. Everything else is a refusal, and the
+ * answer rendered outward is identical for all of them — the reason lives on
+ * the row and in the audit trail, never in a response body.
+ */
+export type ReauthenticationTerminalReason =
+  | 'granted'
+  | 'callback_state_mismatch'
+  | 'provider_exchange_failed'
+  | 'impersonation_detected'
+  | 'token_verification_failed'
+  | 'identity_not_admitted'
+  | 'stale_authentication'
+  | 'nonce_mismatch'
+  | 'binding_mismatch'
+  | 'identity_chain_broken'
+  | 'assurance_not_certified'
+  | 'session_establishment_failed'
+  | 'replayed'
+  | 'expired';
+
+/**
+ * The audit event type each terminal reason is recorded under. EXACTLY ONE row
+ * per terminal transition, written in the SAME transaction as the state change,
+ * so a transaction cannot end without the trail saying so.
+ */
+function terminalEventType(reason: ReauthenticationTerminalReason): string {
+  if (reason === 'granted') return 'identity.reauthentication.granted';
+  if (reason === 'replayed') return 'identity.reauthentication.replayed';
+  if (reason === 'expired') return 'identity.reauthentication.expired';
+  return 'identity.reauthentication.failed';
+}
+
+/**
+ * Writes the ONE audit row a reauthentication transition owes, on the caller's
+ * executor so it commits with the state change it describes.
+ *
+ * Details carry identifiers, classifications and the closed-vocabulary reason
+ * and NOTHING else: no nonce, no state, no PKCE verifier, no token, no provider
+ * profile, no PII.
+ */
+async function auditReauthentication(
+  executor: Executor,
+  input: {
+    tenantId: string;
+    reauthTxnId: string;
+    userLinkId: string | null;
+    eventType: string;
+    details: Record<string, unknown>;
+  },
+): Promise<void> {
+  await executor.query(
+    `INSERT INTO audit_events
+       (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+     VALUES ($1, $2, 'reauth_transaction', $3, $4, $5)`,
+    [
+      input.tenantId,
+      input.eventType,
+      input.reauthTxnId,
+      input.userLinkId,
+      JSON.stringify(input.details),
+    ],
+  );
+}
+
+/**
+ * The ONE way a reauthentication transaction reaches a terminal state.
+ *
+ * FBL-020-R4 section 3 — R3 had no such function, and that is the defect. The
+ * completion set `state = 'failed'` for the proofs it judged itself, and every
+ * failure BEFORE it — a provider exchange that threw, an impersonated reply, a
+ * token that would not verify, an identity that no longer resolved — returned a
+ * 401 from the route and left the row sitting at `started`. Those rows were
+ * indistinguishable from legs still legitimately in flight, they kept their
+ * nonce claimable until the expiry sweep noticed, and they produced no audit
+ * event at all.
+ *
+ * The move is conditional on the row being NON-terminal, so the FIRST terminal
+ * fact wins and nothing overwrites it; and it writes its audit row inside the
+ * same transaction, so exactly one event accompanies exactly one transition.
+ * `false` means the transaction was already terminal — the audit row for the
+ * ATTEMPT is still written, because a replayed callback is itself a fact.
+ */
+async function terminateWithin(
+  executor: Executor,
+  input: {
+    reauthTxnId: string;
+    tenantId: string;
+    userLinkId: string | null;
+    reason: ReauthenticationTerminalReason;
+    state: 'completed' | 'failed' | 'expired';
+    /** Extra IDENTIFIERS and CLASSIFICATIONS for the trail. Never a secret. */
+    details?: Record<string, unknown>;
+  },
+): Promise<boolean> {
+  const moved = await executor.query(
+    `UPDATE reauthentication_transactions
+        SET state = $2,
+            terminal_reason = $3,
+            terminal_at = NOW(),
+            completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE completed_at END,
+            updated_at = NOW()
+      WHERE reauth_txn_id = $1 AND state = 'started'`,
+    [input.reauthTxnId, input.state, input.reason],
+  );
+  const first = (moved.rowCount ?? 0) > 0;
+  // EXACTLY ONE terminal event per transaction. A transition that did not happen
+  // — the row was already terminal — writes nothing, so the trail cannot show two
+  // endings for one step-up. The single exception is a REPLAY, which is a fact
+  // about an ATTEMPT rather than about the transaction's ending: a replayed
+  // callback must be visible even when the row it targets is already closed.
+  if (!first && input.reason !== 'replayed') return false;
+  await auditReauthentication(executor, {
+    tenantId: input.tenantId,
+    reauthTxnId: input.reauthTxnId,
+    userLinkId: input.userLinkId,
+    eventType: terminalEventType(input.reason),
+    details: {
+      ...(input.details ?? {}),
+      reason: input.reason,
+      terminal_state: first ? input.state : 'already_terminal',
+    },
+  });
+  return first;
+}
+
+/**
+ * The application-facing terminal move, for the route legs that discover a
+ * failure OUTSIDE any database transaction — a provider exchange that threw, an
+ * impersonated reply, an unverifiable token. It owns its own transaction so no
+ * app file imports a database primitive, and it is keyed on the OPAQUE HANDLE,
+ * which is the only thing the caller holds.
+ */
+export async function failReauthentication(input: {
+  nonce: string;
+  reason: ReauthenticationTerminalReason;
+}): Promise<boolean> {
+  return withTransaction(async (executor) => {
+    const found = await executor.query(
+      `SELECT reauth_txn_id, tenant_id, user_link_id FROM reauthentication_transactions
+        WHERE nonce_hash = $1 FOR UPDATE`,
+      [sha256hex(input.nonce)],
+    );
+    if (found.rows.length === 0) return false;
+    const row = found.rows[0] as Row;
+    return terminateWithin(executor, {
+      reauthTxnId: String(row.reauth_txn_id),
+      tenantId: String(row.tenant_id),
+      userLinkId: row.user_link_id === null ? null : String(row.user_link_id),
+      reason: input.reason,
+      state: 'failed',
+    });
+  });
 }
 
 /**
@@ -112,6 +303,18 @@ export interface StartedReauthentication {
    */
   readonly oidcNonce: string;
   /**
+   * FBL-020-R4 section 3 — the OAuth `state` and PKCE verifier for THIS leg,
+   * generated HERE and persisted as digests on the row.
+   *
+   * R3 generated both inside the HTTP route and stored neither, so the only
+   * record of what the callback had to present was the browser's sealed copy:
+   * the round-trip state was client-authoritative and no server row could say
+   * "this one is spent". Returned exactly once, like every other opaque value in
+   * this module.
+   */
+  readonly state: string;
+  readonly codeVerifier: string;
+  /**
    * The SERVER-DERIVED identity this reauthentication starts from. Returned so
    * the caller can build the authorization request without re-reading (and
    * without being tempted to supply its own values).
@@ -185,6 +388,13 @@ export async function startReauthentication(input: {
   ttlSeconds?: number;
   requiredAssurance?: AssuranceLevel;
   /**
+   * FBL-020-R4 section 3 — the EXACT callback this leg will be completed at.
+   * Stored on the row and re-compared at claim time, so a leg issued for one
+   * redirect can never be completed at another. Defaults to nothing: the
+   * schema refuses a `started` transaction that cannot name it.
+   */
+  callbackUri: string;
+  /**
    * OPTIONAL caller beliefs about the starting identity. Each is COMPARED
    * against the server-derived value and a disagreement refuses the start.
    * None of them can ever supply a value the server did not derive itself.
@@ -196,8 +406,15 @@ export async function startReauthentication(input: {
 }): Promise<StartedReauthentication | null> {
   const nonce = randomBytes(32).toString('base64url');
   const oidcNonce = randomBytes(32).toString('base64url');
-  const result = await query(
-    `WITH derived AS (
+  // R4 section 3: state and the PKCE verifier are generated HERE, beside the
+  // digests that will be compared against them. No caller — and therefore no
+  // route and no browser — chooses either.
+  const state = randomBytes(32).toString('base64url');
+  const codeVerifier = randomBytes(32).toString('base64url');
+  const { requestId, correlationId } = correlationPair();
+  return withTransaction(async (executor) => {
+    const result = await executor.query(
+      `WITH derived AS (
        SELECT s.session_id, s.tenant_id, ul.user_link_id,
               c.connection_id, c.issuer, c.provider_organization_id,
               ul.provider_user_id AS provider_subject
@@ -219,44 +436,161 @@ export async function startReauthentication(input: {
        (tenant_id, user_link_id, session_id, action, resource_type, resource_id, nonce_hash,
         expires_at, required_assurance, oidc_nonce_hash,
         connection_id, issuer, provider_organization_id, provider_subject,
-        created_by_user_link_id)
+        created_by_user_link_id,
+        state_hash, code_verifier_hash, callback_uri, request_id, correlation_id)
      SELECT d.tenant_id, d.user_link_id, d.session_id, $3, $4, $5, $6,
             NOW() + make_interval(secs => $7), $8, $9,
             d.connection_id, d.issuer, d.provider_organization_id, d.provider_subject,
-            d.user_link_id
+            d.user_link_id,
+            $15, $16, $17, $18, $19
        FROM derived d
      RETURNING *`,
-    [
-      input.userLinkId,
-      input.sessionId,
-      input.action,
-      input.resourceType ?? null,
-      input.resourceId ?? null,
-      sha256hex(nonce),
-      input.ttlSeconds ?? 300,
-      input.requiredAssurance ?? 'fresh_only',
-      sha256hex(oidcNonce),
-      input.tenantId,
-      input.expectedConnectionId ?? null,
-      input.expectedIssuer ?? null,
-      input.expectedProviderOrganizationId ?? null,
-      input.expectedProviderSubject ?? null,
-    ],
-  );
-  if (result.rows.length === 0) return null;
-  const row = result.rows[0] as Row;
-  return {
-    transaction: mapTxn(row),
-    nonce,
-    oidcNonce,
-    binding: {
-      connectionId: String(row.connection_id),
-      issuer: String(row.issuer),
-      providerOrganizationId: String(row.provider_organization_id),
-      providerSubject: String(row.provider_subject),
-      sessionId: String(row.session_id),
-    },
-  };
+      [
+        input.userLinkId,
+        input.sessionId,
+        input.action,
+        input.resourceType ?? null,
+        input.resourceId ?? null,
+        sha256hex(nonce),
+        input.ttlSeconds ?? 300,
+        input.requiredAssurance ?? 'fresh_only',
+        sha256hex(oidcNonce),
+        input.tenantId,
+        input.expectedConnectionId ?? null,
+        input.expectedIssuer ?? null,
+        input.expectedProviderOrganizationId ?? null,
+        input.expectedProviderSubject ?? null,
+        sha256hex(state),
+        sha256hex(codeVerifier),
+        input.callbackUri,
+        requestId,
+        correlationId,
+      ],
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0] as Row;
+    const txn = mapTxn(row);
+    // The START is an audited transition: R3 recorded only the GRANT, so a
+    // step-up that was opened and then abandoned left no trail that it had ever
+    // been asked for.
+    await auditReauthentication(executor, {
+      tenantId: txn.tenantId,
+      reauthTxnId: txn.reauthTxnId,
+      userLinkId: txn.userLinkId,
+      eventType: 'identity.reauthentication.started',
+      details: {
+        action: txn.action,
+        resource_type: txn.resourceType,
+        required_assurance: String(row.required_assurance),
+      },
+    });
+    return {
+      transaction: txn,
+      nonce,
+      oidcNonce,
+      state,
+      codeVerifier,
+      binding: {
+        connectionId: String(row.connection_id),
+        issuer: String(row.issuer),
+        providerOrganizationId: String(row.provider_organization_id),
+        providerSubject: String(row.provider_subject),
+        sessionId: String(row.session_id),
+      },
+    };
+  });
+}
+
+/**
+ * FBL-020-R4 section 3 — the CLAIM: the server-side row judges its own callback,
+ * exactly once.
+ *
+ * Everything the callback presents is compared against what the START stored —
+ * the opaque handle, the OAuth state, the PKCE verifier and the exact callback
+ * URI — and the claim is a conditional UPDATE on `claimed_at IS NULL`, so a
+ * second callback bearing the same state LOSES to the database rather than being
+ * judged by trust. R3 compared the state to a copy the browser carried and
+ * nothing else, which is not a claim at all.
+ *
+ * Returns null on every refusal, and the refusals are indistinguishable to the
+ * caller: an unknown handle, a mismatch, an expired leg and a replay all yield
+ * null. Each one that names a real row TERMINATES it and writes exactly one
+ * audit event.
+ */
+export async function claimReauthentication(input: {
+  nonce: string;
+  state: string;
+  codeVerifier: string;
+  callbackUri: string;
+}): Promise<{ reauthTxnId: string; tenantId: string } | null> {
+  return withTransaction(async (executor) => {
+    const found = await executor.query(
+      `SELECT * FROM reauthentication_transactions
+        WHERE nonce_hash = $1 FOR UPDATE`,
+      [sha256hex(input.nonce)],
+    );
+    if (found.rows.length === 0) return null;
+    const row = found.rows[0] as Row;
+    const reauthTxnId = String(row.reauth_txn_id);
+    const tenantId = String(row.tenant_id);
+    const userLinkId = row.user_link_id === null ? null : String(row.user_link_id);
+    const terminate = async (reason: ReauthenticationTerminalReason): Promise<null> => {
+      await terminateWithin(executor, {
+        reauthTxnId,
+        tenantId,
+        userLinkId,
+        reason,
+        state: reason === 'expired' ? 'expired' : 'failed',
+      });
+      return null;
+    };
+    // A leg that is already spent or already terminal is a REPLAY. Terminating
+    // it is the fail-closed direction: two callbacks for one single-use state
+    // means something is wrong, and the first terminal fact still wins.
+    if (row.claimed_at !== null || String(row.state) !== 'started') {
+      return terminate('replayed');
+    }
+    if (ts(row.expires_at).getTime() <= Date.now()) return terminate('expired');
+    // Handle, state, PKCE and the exact callback: every one required, every one
+    // compared against what the START stored. A missing stored digest cannot be
+    // satisfied by a missing presented value — the schema forbids the NULL, and
+    // the comparison below would fail anyway.
+    //
+    // The PERSON is deliberately NOT part of this predicate: the callback leg is
+    // unauthenticated (the browser is arriving from the provider), so the actor is
+    // not known until the token has been verified. `completeReauthentication`
+    // requires `nonce_hash` AND `user_link_id` to agree, so the round trip is
+    // proven here and the identity is proven there — both required, neither
+    // standing in for the other.
+    if (
+      typeof row.state_hash !== 'string' ||
+      typeof row.code_verifier_hash !== 'string' ||
+      typeof row.callback_uri !== 'string' ||
+      row.state_hash !== sha256hex(input.state) ||
+      row.code_verifier_hash !== sha256hex(input.codeVerifier) ||
+      row.callback_uri !== input.callbackUri
+    ) {
+      return terminate('callback_state_mismatch');
+    }
+    const claimed = await executor.query(
+      `UPDATE reauthentication_transactions
+          SET claimed_at = NOW(), updated_at = NOW()
+        WHERE reauth_txn_id = $1
+          AND state = 'started'
+          AND claimed_at IS NULL
+          AND expires_at > NOW()`,
+      [reauthTxnId],
+    );
+    if ((claimed.rowCount ?? 0) === 0) return terminate('replayed');
+    await auditReauthentication(executor, {
+      tenantId,
+      reauthTxnId,
+      userLinkId,
+      eventType: 'identity.reauthentication.claimed',
+      details: { action: String(row.action), resource_type: row.resource_type ?? null },
+    });
+    return { reauthTxnId, tenantId };
+  });
 }
 
 export interface CompletedReauthentication {
@@ -309,9 +643,14 @@ export async function completeReauthentication(input: {
 }): Promise<CompletedReauthentication | null> {
   const skewMs = (input.clockSkewSeconds ?? 60) * 1000;
   return withTransaction(async (executor) => {
+    // FBL-020-R4 section 3: the leg must have been CLAIMED. The claim is where
+    // the server judged its own callback state, so a completion that could run
+    // without one would make the claim optional — and R3's completion could,
+    // because no claim existed at all.
     const found = await executor.query(
       `SELECT * FROM reauthentication_transactions
-        WHERE nonce_hash = $1 AND user_link_id = $2 AND state = 'started' AND expires_at > NOW()
+        WHERE nonce_hash = $1 AND user_link_id = $2 AND state = 'started'
+          AND claimed_at IS NOT NULL AND expires_at > NOW()
         FOR UPDATE`,
       [sha256hex(input.nonce), input.userLinkId],
     );
@@ -319,17 +658,24 @@ export async function completeReauthentication(input: {
     const startRow = found.rows[0] as Row;
     const txn = mapTxn(startRow);
 
-    const fail = async (): Promise<null> => {
-      await executor.query(
-        `UPDATE reauthentication_transactions SET state = 'failed' WHERE reauth_txn_id = $1`,
-        [txn.reauthTxnId],
-      );
+    // Every refusal below is TERMINAL, with a closed-vocabulary reason, an
+    // instant, and exactly one audit row — all in this transaction. R3 wrote
+    // `state = 'failed'` and nothing else, so an operator could see that a
+    // step-up had failed but never why or when.
+    const fail = async (reason: ReauthenticationTerminalReason): Promise<null> => {
+      await terminateWithin(executor, {
+        reauthTxnId: txn.reauthTxnId,
+        tenantId: txn.tenantId,
+        userLinkId: txn.userLinkId,
+        reason,
+        state: 'failed',
+      });
       return null;
     };
 
     // stale authentication — the person did NOT freshly re-authenticate
     if (input.verifiedAuthTime.getTime() < txn.startedAt.getTime() - skewMs) {
-      return fail();
+      return fail('stale_authentication');
     }
 
     // ── R3: the STORED OIDC nonce participates, directly ──────────────────
@@ -346,7 +692,7 @@ export async function completeReauthentication(input: {
       input.verifiedNonceDigest.length === 0 ||
       input.verifiedNonceDigest !== storedNonceHash
     ) {
-      return fail();
+      return fail('nonce_mismatch');
     }
 
     // ── Exact binding: every value REQUIRED, every value COMPARED ─────────
@@ -369,7 +715,7 @@ export async function completeReauthentication(input: {
       String(startRow.provider_organization_id) !== input.verifiedOrganizationId ||
       String(startRow.provider_subject) !== input.verifiedProviderSubject
     ) {
-      return fail();
+      return fail('binding_mismatch');
     }
 
     // ── The chain, re-read at THIS instant ────────────────────────────────
@@ -381,7 +727,7 @@ export async function completeReauthentication(input: {
     // `mfa_policy_certified` comes from this read, so the certification is a
     // fact at issue time rather than a claim made by the caller.
     const chain = await executor.query(
-      `SELECT COALESCE(c.mfa_policy_certified, FALSE) AS mfa_policy_certified
+      `SELECT COALESCE(${EFFECTIVE_MFA_CERTIFICATION_SQL}, FALSE) AS mfa_policy_certified
          FROM reauthentication_transactions r
          JOIN identity_sessions s ON s.session_id = r.session_id
          JOIN user_links ul ON ul.user_link_id = r.user_link_id
@@ -396,14 +742,14 @@ export async function completeReauthentication(input: {
           AND ${STEP_UP_IDENTITY_SQL}`,
       [txn.reauthTxnId],
     );
-    if (chain.rows.length === 0) return fail();
+    if (chain.rows.length === 0) return fail('identity_chain_broken');
 
     // Assurance: freshness alone never satisfies a high-assurance action, and
     // the certification is the one the connection carries right now.
     const required = String(startRow.required_assurance ?? 'fresh_only') as AssuranceLevel;
     const certified = (chain.rows[0] as Row).mfa_policy_certified === true;
     if (required === 'fresh_and_mfa_policy' && !certified) {
-      return fail();
+      return fail('assurance_not_certified');
     }
 
     const grant = randomBytes(32).toString('base64url');
@@ -427,27 +773,23 @@ export async function completeReauthentication(input: {
         certified,
       ],
     );
-    await executor.query(
-      `UPDATE reauthentication_transactions
-          SET state = 'completed', completed_at = NOW() WHERE reauth_txn_id = $1`,
-      [txn.reauthTxnId],
-    );
-    await executor.query(
-      `INSERT INTO audit_events (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
-       VALUES ($1, 'identity.reauthentication.granted', 'reauth_transaction', $2, $3, $4)`,
-      [
-        txn.tenantId,
-        txn.reauthTxnId,
-        txn.userLinkId,
-        JSON.stringify({
-          action: txn.action,
-          resource_type: txn.resourceType,
-          assurance_level: required,
-          mfa_policy_certified: certified,
-          freshness: 'fresh',
-        }),
-      ],
-    );
+    // The SUCCESS terminal, through the same one door every refusal uses: the
+    // state, the reason, the instant and the single audit row are written
+    // together, so a granted step-up cannot exist without its trail.
+    await terminateWithin(executor, {
+      reauthTxnId: txn.reauthTxnId,
+      tenantId: txn.tenantId,
+      userLinkId: txn.userLinkId,
+      reason: 'granted',
+      state: 'completed',
+      details: {
+        action: txn.action,
+        resource_type: txn.resourceType,
+        assurance_level: required,
+        mfa_policy_certified: certified,
+        freshness: 'fresh',
+      },
+    });
     return {
       transaction: { ...txn, state: 'completed' },
       grant,
@@ -513,7 +855,7 @@ export async function consumeReauthenticationGrantReturningId(
           $7 = 'fresh_only'
           OR (assurance_level = 'fresh_and_mfa_policy' AND mfa_policy_certified_at_issue = TRUE)
         )
-      RETURNING grant_id`,
+      RETURNING grant_id, assurance_level`,
     [
       sha256hex(input.grant),
       input.tenantId,
@@ -527,7 +869,31 @@ export async function consumeReauthenticationGrantReturningId(
   if ((result.rowCount ?? 0) !== 1) return null;
   const row = result.rows[0] as Row | undefined;
   if (row === undefined || row.grant_id === null || row.grant_id === undefined) return null;
-  return String(row.grant_id);
+  const grantId = String(row.grant_id);
+  // FBL-020-R4 section 3 — GRANT CONSUMPTION IS AN AUDITED TRANSITION.
+  //
+  // Spending a step-up grant is the moment a sensitive action becomes permitted.
+  // R3 recorded the grant being MINTED and never recorded it being SPENT, so the
+  // trail showed a step-up had been performed and not what it paid for. The row
+  // is written on the caller's executor, which is the business transaction the
+  // spend belongs to: if the action rolls back, so does its audit.
+  await executor.query(
+    `INSERT INTO audit_events
+       (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+     VALUES ($1, 'identity.reauthentication.grant_consumed', 'reauth_grant', $2, $3, $4)`,
+    [
+      input.tenantId,
+      grantId,
+      input.userLinkId,
+      JSON.stringify({
+        action: input.action,
+        resource_type: input.resourceType ?? null,
+        required_assurance: required,
+        assurance_level: String(row.assurance_level),
+      }),
+    ],
+  );
+  return grantId;
 }
 
 /**
@@ -547,9 +913,32 @@ export async function consumeReauthenticationGrant(
  * consumption and expiry are decided by their own columns at read time.
  */
 export async function expireStaleReauthenticationTransactions(): Promise<number> {
-  const result = await query(
-    `UPDATE reauthentication_transactions SET state = 'expired'
-      WHERE state = 'started' AND expires_at < NOW()`,
-  );
-  return result.rowCount ?? 0;
+  return withTransaction(async (executor) => {
+    // R4 section 3: the sweep records WHY and WHEN, and writes one audit row per
+    // transaction it expires — in the same transaction as the state change. An
+    // expiry that left no trail made "this step-up was never completed" a fact
+    // an operator could only infer from a missing grant.
+    const expired = await executor.query(
+      `UPDATE reauthentication_transactions
+          SET state = 'expired', terminal_reason = 'expired', terminal_at = NOW(),
+              updated_at = NOW()
+        WHERE state = 'started' AND expires_at < NOW()
+        RETURNING reauth_txn_id, tenant_id, user_link_id, action, resource_type`,
+    );
+    for (const raw of expired.rows as Row[]) {
+      await auditReauthentication(executor, {
+        tenantId: String(raw.tenant_id),
+        reauthTxnId: String(raw.reauth_txn_id),
+        userLinkId: raw.user_link_id === null ? null : String(raw.user_link_id),
+        eventType: 'identity.reauthentication.expired',
+        details: {
+          reason: 'expired',
+          terminal_state: 'expired',
+          action: String(raw.action),
+          resource_type: raw.resource_type ?? null,
+        },
+      });
+    }
+    return expired.rowCount ?? 0;
+  });
 }

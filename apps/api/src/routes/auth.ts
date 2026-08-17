@@ -15,7 +15,7 @@
  * host-only (no Domain attribute) and Secure outside development.
  */
 import { Request, Response, Router } from 'express';
-import { randomBytes, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   NotFoundError,
   UnauthorizedError,
@@ -25,16 +25,19 @@ import {
   type AppConfig,
 } from '@dealer/platform';
 import {
-  IDENTITY_PROVIDER_WORKOS,
+  SUPPORT_ACCESS_HEADER,
   TokenVerificationError,
+  admitLoginIdentity,
   claimLoginTransactionAtomically,
+  claimReauthentication,
   completeReauthentication,
+  exchangeMatchesVerifiedToken,
   failLoginTransaction,
+  failReauthentication,
   createAccessTokenVerifier,
   createSession,
   csrfTokenForSession,
   describeAuthenticatedSession,
-  observeUserLinkOnLogin,
   findActiveConnectionById,
   findUserLinkByProviderIdentity,
   openCookiePayload,
@@ -45,6 +48,7 @@ import {
   startLoginTransaction,
   startReauthentication,
   succeedLoginTransaction,
+  supportAccessHeaderValue,
   type AccessTokenVerifier,
   type IdentityProviderPort,
   type LoginTransactionFailureReason,
@@ -283,11 +287,19 @@ router.get(
     // at any stage, an expired row, an unknown state and a tampered cookie are
     // one indistinguishable failure. Nothing is declared succeeded here — the
     // claim only says the state is spent and this request owns it.
+    //
+    // FBL-020-R4 §1: the claim now names the OPAQUE TRANSACTION HANDLE and the
+    // EXACT registered redirect this leg was opened for, on top of purpose,
+    // state, nonce and the PKCE binding. R3 claimed by state alone, so nothing
+    // proved the callback presenting a state was the callback that had been
+    // handed the transaction, and nothing tied the leg to its own redirect.
     const claimed = await claimLoginTransactionAtomically({
+      loginTxnId: String(txn.login_txn_id),
       state: String(txn.state),
       purpose: 'login',
       nonce: String(txn.oidc_nonce),
       codeVerifier: String(txn.code_verifier),
+      redirectUri: s.redirectUri,
     });
     if (claimed === null) throw new UnauthorizedError('Authentication failed');
 
@@ -312,13 +324,6 @@ router.get(
       // state can never be presented again, and answer neutrally.
       throw await refusal('provider_exchange_failed');
     }
-    // FBL-020-R3: an IMPERSONATED authentication never becomes a session of
-    // this platform. Provider staff acting as a customer's user is a support
-    // path this product does not accept, and the refusal is indistinguishable
-    // from every other login failure.
-    if (exchanged.impersonation.impersonated) {
-      throw await refusal('impersonation_detected');
-    }
     let verified;
     try {
       // The nonce bound to THIS single-use transaction must come back in the
@@ -335,46 +340,59 @@ router.get(
       await failLoginTransaction(claimed.loginTxnId, 'token_verification_failed');
       throw err;
     }
-    // …and the same fact asserted by the TOKEN is refused too: the exchange
-    // response and the token are separate carriers of the same claim.
-    if (verified.impersonation.impersonated) {
-      throw await refusal('impersonation_detected');
-    }
-    const connection = await resolveActiveConnection(verified.organizationId);
-    if (connection === null) throw await refusal('identity_not_admitted');
 
-    // FBL-020-R1 section B: login OBSERVES the identity. It may create or
-    // refresh a PENDING link, and it never activates one. Only an already
-    // activated link receives a session; everything else is a neutral 401,
-    // so pending, deactivated and unknown are externally indistinguishable.
-    const link = await observeUserLinkOnLogin({
-      tenantId: connection.tenantId,
-      provider: IDENTITY_PROVIDER_WORKOS,
-      providerUserId: verified.providerUserId,
-      email: exchanged.email,
-      displayName: exchanged.displayName,
-      // R3: the login carries the connection it actually came through, so an
-      // identity bound to another organization is refused rather than adopted.
-      connectionId: connection.connectionId,
-      issuer: connection.issuer,
-      providerOrganizationId: connection.providerOrganizationId,
+    // ── FBL-020-R4 §1: ADMISSION, IN ONE CALL, BEFORE ANY CUSTODY ─────────
+    //
+    // Everything that must hold before a session can exist is decided by the
+    // identity package in a single transaction: the exchange response bound
+    // EXACTLY to the verified token (provider user, organization, provider
+    // session id and impersonation state), the connection active and effective
+    // with its issuer EQUAL to the configured trusted issuer, the tenant and its
+    // organization hierarchy active and effective, and the UserLink activated AND
+    // inside its effective window.
+    //
+    // R3 asked a subset of these questions here, one call at a time, and never
+    // asked several of them at all — no configured-issuer comparison on the login
+    // path, no tenant check, no hierarchy check, no link effective window, and no
+    // comparison between the two carriers of the identity. It is one function now
+    // because a route cannot forget half of one call.
+    //
+    // NOTE WHAT HAS NOT HAPPENED YET: `createSession` is below. On refusal there
+    // is no session, no cookie, and — the part that matters most — the provider
+    // refresh credential in `exchanged.refreshToken` has never been written
+    // anywhere. It reaches the database only on the admitted path.
+    const admission = await admitLoginIdentity({
+      trustedIssuer: s.issuer,
+      exchanged,
+      verified,
     });
-    if (link === null || link.status !== 'activated') {
-      throw await refusal('identity_not_admitted');
+    if (!admission.admitted) {
+      // ONE neutral answer for every condition. The internal reason is recorded
+      // on the transaction row and in the audit trail; nothing distinguishes an
+      // inactive tenant from a pending link, an expired window, an issuer drift
+      // or a carrier mismatch from outside.
+      throw await refusal(
+        admission.refusal === 'impersonation_detected'
+          ? 'impersonation_detected'
+          : admission.refusal === 'exchange_token_mismatch'
+            ? 'exchange_token_mismatch'
+            : 'identity_not_admitted',
+      );
     }
+    const identity = admission.identity;
 
     let created;
     try {
       created = await createSession({
-        tenantId: connection.tenantId,
-        userLinkId: link.userLinkId,
-        providerSessionId: verified.providerSessionId,
+        tenantId: identity.tenantId,
+        userLinkId: identity.userLinkId,
+        providerSessionId: identity.providerSessionId,
         authTime: verified.authTime,
         ttlSeconds: SESSION_TTL_SECONDS,
-        connectionId: connection.connectionId,
-        issuer: connection.issuer,
-        providerSubject: verified.providerUserId,
-        providerOrganizationId: connection.providerOrganizationId,
+        connectionId: identity.connectionId,
+        issuer: identity.issuer,
+        providerSubject: identity.providerSubject,
+        providerOrganizationId: identity.providerOrganizationId,
         refreshToken: exchanged.refreshToken,
         // R3: the refresh token is stored as SEALED ciphertext (plus its replay
         // digest) so a later refresh can actually present it to the provider.
@@ -470,11 +488,13 @@ router.get(
       actorScope: identity.actorScope,
       sessionId: identity.sessionId,
     });
-    if (view.supportAccess.length > 0) {
-      res.setHeader(
-        'x-support-access',
-        view.supportAccess.map((x) => `active; support_session=${x.supportSessionId}`).join(', '),
-      );
+    // FBL-020-R4 §4: the SAME formatter the authorization middleware uses, so this
+    // header and that one cannot describe the same thing differently — and neither can
+    // be built without an expiry. R3 had two hand-written formats here and there, both
+    // naming a session id and nothing else.
+    const supportHeader = supportAccessHeaderValue(view.supportAccess);
+    if (supportHeader !== null) {
+      res.setHeader(SUPPORT_ACCESS_HEADER, supportHeader);
     }
     if (identity.credential === 'session' && identity.sessionId !== null) {
       res.setHeader('x-csrf-token', csrfTokenForSession(identity.sessionId, s.cookiePassword));
@@ -496,9 +516,26 @@ router.get(
         freshness: view.freshness,
         mfa_assurance: view.mfaAssurance,
         local_session_expires_at: view.localSessionExpiresAt?.toISOString() ?? null,
+        // FBL-020-R4 §4 — the WHOLE grant, both directions.
+        //
+        // R3 published four fields (session, actor, granted, expiry) for grants into
+        // the caller's tenant, and nothing at all for a platform actor's own live
+        // access. A tenant administrator could see that somebody was in their data
+        // and not what they were approved to do; a platform-support person could not
+        // see their own access at all.
+        //
+        // Still bounded, and the bound is unchanged: identifiers, classifications and
+        // instants. No email, no display name, no provider subject or session id, no
+        // token, and never the free-text support reason.
         support_access: view.supportAccess.map((x) => ({
+          relationship: x.relationship,
           support_session_id: x.supportSessionId,
-          actor_user_link_id: x.actorUserLinkId,
+          support_request_id: x.supportRequestId,
+          actor_user_link_id: x.supportActorUserLinkId,
+          target_tenant_id: x.targetTenantId,
+          approved_scope_level: x.approvedScopeLevel,
+          approved_scope_id: x.approvedScopeId,
+          approved_actions: x.approvedActions,
           granted_at: x.grantedAt.toISOString(),
           expires_at: x.expiresAt.toISOString(),
         })),
@@ -545,6 +582,15 @@ router.post(
       action,
       targetTenantId: identity.tenantId,
       resource: resourceInput,
+      // FBL-020-R4 §2.5 — THE PRESENTED SESSION, WHICH THIS ROUTE USED TO OMIT.
+      //
+      // This pre-check is a real authorization decision about a real person on a
+      // real credential, and it passed no session at all: its append-only
+      // evidence row named no presented session, no authentication instant, no
+      // connection and no provider subject, so the one decision taken
+      // immediately before a step-up was the least reconstructable in the
+      // system. The engine derives the rest of the credential facts from this id.
+      sessionId: identity.sessionId,
     });
     if (decision.decision !== 'allow') {
       if (!decision.resourceVisible) throw new NotFoundError('Resource not found');
@@ -580,6 +626,9 @@ router.post(
       resourceType: resourceInput?.type ?? null,
       resourceId: resourceInput?.id ?? null,
       requiredAssurance,
+      // FBL-020-R4 §3: the EXACT callback this leg will be completed at, stored
+      // on the server row and re-compared when the callback claims it.
+      callbackUri: s.reauthRedirectUri,
       expectedConnectionId: connection.connectionId,
       expectedIssuer: connection.issuer,
       expectedProviderOrganizationId: connection.providerOrganizationId,
@@ -592,8 +641,17 @@ router.post(
     }
     const oidcNonce = started.oidcNonce;
 
-    const state = randomBytes(32).toString('base64url');
-    const codeVerifier = randomBytes(32).toString('base64url');
+    // FBL-020-R4 §3 — THE ROUTE NO LONGER CHOOSES THE ROUND-TRIP STATE.
+    //
+    // R3 generated `state` and the PKCE verifier here and put them in the sealed
+    // cookie, and the server stored NEITHER: the only record of what the callback
+    // had to present was the browser's copy, so the step-up's round-trip state
+    // was client-authoritative and nothing could say "this one is spent". Both
+    // values are now generated inside the same statement that persists their
+    // digests. The cookie carries the plaintext back for comparison; the ROW is
+    // the authority.
+    const state = started.state;
+    const codeVerifier = started.codeVerifier;
     const sealed = sealCookiePayload(
       {
         purpose: 'reauth',
@@ -648,14 +706,47 @@ router.get(
     }
     clearCookie(res, REAUTH_TXN_COOKIE, '/auth');
 
-    const exchanged = await provider().exchangeCode({
-      code,
+    // ── FBL-020-R4 §3: THE SERVER ROW CLAIMS ITS OWN CALLBACK, ONCE ───────
+    //
+    // Before a single provider call is made, the transaction row compares the
+    // opaque handle, the OAuth state, the PKCE verifier and the exact callback
+    // URI against what it stored at start, and marks itself claimed in the same
+    // conditional UPDATE. A second callback bearing the same state loses to the
+    // database. Every refusal below is one neutral answer and one recorded
+    // terminal state — never a row left at `started` for a replay to find.
+    const handle = String(txn.nonce);
+    const claim = await claimReauthentication({
+      nonce: handle,
+      state: String(txn.state),
       codeVerifier: String(txn.code_verifier),
+      callbackUri: s.reauthRedirectUri,
     });
+    if (claim === null) throw new UnauthorizedError('Reauthentication failed');
+
+    // From here on EVERY exit is terminal: the claimed transaction reaches
+    // `failed` with a closed-vocabulary reason and exactly one audit event, or
+    // `completed` with its grant. R3 returned a bare 401 from each of these
+    // branches and left the row at `started`, which is the defect this closes.
+    const refusal = async (
+      reason: Parameters<typeof failReauthentication>[0]['reason'],
+    ): Promise<UnauthorizedError> => {
+      await failReauthentication({ nonce: handle, reason });
+      return new UnauthorizedError('Reauthentication failed');
+    };
+
+    let exchanged;
+    try {
+      exchanged = await provider().exchangeCode({
+        code,
+        codeVerifier: String(txn.code_verifier),
+      });
+    } catch {
+      throw await refusal('provider_exchange_failed');
+    }
     // R3: an impersonated re-authentication proves nothing about the ACTOR,
     // so it can never mint a step-up grant.
-    if (exchanged.impersonation.impersonated) {
-      throw new UnauthorizedError('Reauthentication failed');
+    if (exchanged.impersonation.impersonated || exchanged.impersonation.impersonatorEmailPresent) {
+      throw await refusal('impersonation_detected');
     }
     let verified;
     try {
@@ -663,15 +754,27 @@ router.get(
         requireNonce: String(txn.oidc_nonce),
       });
     } catch (err) {
-      if (err instanceof TokenVerificationError)
-        throw new UnauthorizedError('Reauthentication failed');
+      if (err instanceof TokenVerificationError) throw await refusal('token_verification_failed');
+      // A fault rather than a verification refusal: the transaction is STILL
+      // terminated before the error propagates, so nothing is left in flight.
+      await failReauthentication({ nonce: handle, reason: 'token_verification_failed' });
       throw err;
     }
-    if (verified.impersonation.impersonated) {
-      throw new UnauthorizedError('Reauthentication failed');
+    if (verified.impersonation.impersonated || verified.impersonation.impersonatorEmailPresent) {
+      throw await refusal('impersonation_detected');
+    }
+    // R4 §3: the two carriers of this identity must agree EXACTLY — provider
+    // user, organization, provider session id and impersonation state — exactly
+    // as the login leg requires. The step-up leg compared neither in R3.
+    if (!exchangeMatchesVerifiedToken(exchanged, verified)) {
+      throw await refusal('binding_mismatch');
     }
     const connection = await resolveActiveConnection(verified.organizationId);
-    if (connection === null) throw new UnauthorizedError('Reauthentication failed');
+    // …and the connection's issuer must be the CONFIGURED trusted issuer, not
+    // merely some issuer the row happens to carry.
+    if (connection === null || connection.issuer !== s.issuer) {
+      throw await refusal('identity_not_admitted');
+    }
     // R3: six facts, same as every other credential path.
     const link = await findUserLinkByProviderIdentity({
       tenantId: connection.tenantId,
@@ -681,7 +784,7 @@ router.get(
       providerOrganizationId: connection.providerOrganizationId,
     });
     if (link === null || link.status !== 'activated') {
-      throw new UnauthorizedError('Reauthentication failed');
+      throw await refusal('identity_not_admitted');
     }
 
     // Everything the completion judges is a VERIFIED fact from this round
@@ -694,7 +797,7 @@ router.get(
     // never a skipped comparison, so passing `verified.nonceDigest` straight
     // through is safe even when the token carried no nonce at all.
     const completed = await completeReauthentication({
-      nonce: String(txn.nonce),
+      nonce: handle,
       userLinkId: link.userLinkId,
       verifiedAuthTime: verified.authTime,
       clockSkewSeconds: s.oidcClockSkewSeconds,

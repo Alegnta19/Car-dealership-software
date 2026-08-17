@@ -12,6 +12,7 @@ import {
   seedUserLinkRow,
   skipIntegration,
   type TestWorld,
+  fixtureAuthorizationStateWrite,
 } from '@dealer/test-kit';
 import { ROLES } from '@dealer/contracts';
 import { grantRole, rolesForUserLink } from '@dealer/identity-access';
@@ -1546,7 +1547,8 @@ describe(
 
       /** Moves a binding's window without touching its lifecycle status. */
       async function ageOut(userLinkId: string, role: string): Promise<void> {
-        const moved = await query(
+        const moved = await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
           `UPDATE role_bindings
               SET effective_from = NOW() - INTERVAL '2 days',
                   effective_to = NOW() - INTERVAL '1 day'

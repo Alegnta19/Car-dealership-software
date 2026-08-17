@@ -6,23 +6,24 @@ import {
   ensureActiveConnection,
   resetDatabase,
   skipIntegration,
+  fixtureAuthorizationStateWrite,
+  seedDealerGroup,
+  seedDepartment,
+  seedLegalEntity,
+  seedRooftop,
+  seedTenantViaService,
+  setUnitStatusViaService,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
   ORGANIZATION_LEVELS,
   childLevel,
-  createDealerGroup,
-  createDepartment,
-  createLegalEntity,
-  createRooftop,
-  createTenant,
   getTenant,
   isAtOrAbove,
   isEffectiveAt,
   listRooftops,
   parentLevel,
   resolveAncestry,
-  setUnitStatus,
 } from '@dealer/organization';
 import { grantRole, revokeRole } from '@dealer/identity-access';
 
@@ -108,25 +109,25 @@ describe(
     });
 
     async function seedChain() {
-      const tenant = await createTenant({ name: 'Delta Motors Group', status: 'active' });
-      const group = await createDealerGroup({
+      const tenant = await seedTenantViaService({ name: 'Delta Motors Group', status: 'active' });
+      const group = await seedDealerGroup({
         tenantId: tenant.tenantId,
         name: 'Metro Group',
         status: 'active',
       });
-      const entity = await createLegalEntity({
+      const entity = await seedLegalEntity({
         tenantId: tenant.tenantId,
         dealerGroupId: group.dealerGroupId,
         name: 'Delta Motors LLC',
         status: 'active',
       });
-      const rooftop = await createRooftop({
+      const rooftop = await seedRooftop({
         tenantId: tenant.tenantId,
         legalEntityId: entity.legalEntityId,
         name: 'Main Street Store',
         status: 'active',
       });
-      const department = await createDepartment({
+      const department = await seedDepartment({
         tenantId: tenant.tenantId,
         rooftopId: rooftop.rooftopId,
         code: 'service',
@@ -138,7 +139,8 @@ describe(
 
     async function seedUserLink(tenantId: string | null): Promise<string> {
       await ensureActiveConnection(tenantId);
-      const result = await query(
+      const result = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links
            (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
             connection_id, issuer, provider_organization_id)
@@ -174,11 +176,11 @@ describe(
 
     test('cross-tenant parentage is a database error, and cross-tenant lookups resolve to null', async () => {
       const a = await seedChain();
-      const b = await createTenant({ name: 'Rival Group', status: 'active' });
+      const b = await seedTenantViaService({ name: 'Rival Group', status: 'active' });
 
       // legal entity in tenant B pointing at tenant A's dealer group
       await assertSqlState(
-        createLegalEntity({
+        seedLegalEntity({
           tenantId: b.tenantId,
           dealerGroupId: a.group.dealerGroupId,
           name: 'Impostor LLC',
@@ -188,7 +190,7 @@ describe(
       );
       // rooftop in tenant B pointing at tenant A's legal entity
       await assertSqlState(
-        createRooftop({
+        seedRooftop({
           tenantId: b.tenantId,
           legalEntityId: a.entity.legalEntityId,
           name: 'Impostor Store',
@@ -209,31 +211,44 @@ describe(
 
     test('name uniqueness is tenant-qualified, case-insensitive, and archives free the name', async () => {
       const a = await seedChain();
-      const b = await createTenant({ name: 'Second Tenant', status: 'active' });
+      const b = await seedTenantViaService({ name: 'Second Tenant', status: 'active' });
 
       // the same name in ANOTHER tenant is fine
-      await createDealerGroup({ tenantId: b.tenantId, name: 'Metro Group' });
+      await seedDealerGroup({ tenantId: b.tenantId, name: 'Metro Group' });
       // duplicate (case-insensitive) in the SAME tenant is not
       await assertSqlState(
-        createDealerGroup({ tenantId: a.tenant.tenantId, name: 'METRO GROUP' }),
+        seedDealerGroup({ tenantId: a.tenant.tenantId, name: 'METRO GROUP' }),
         UNIQUE_VIOLATION,
         'same-tenant duplicate group name',
       );
       // archiving is the only retirement — and it releases the name
       assert.ok(
-        await setUnitStatus('dealer_group', a.tenant.tenantId, a.group.dealerGroupId, 'archived'),
+        await setUnitStatusViaService(
+          'dealer_group',
+          a.tenant.tenantId,
+          a.group.dealerGroupId,
+          'archived',
+        ),
       );
-      const again = await createDealerGroup({ tenantId: a.tenant.tenantId, name: 'Metro Group' });
+      const again = await seedDealerGroup({ tenantId: a.tenant.tenantId, name: 'Metro Group' });
       assert.notEqual(again.dealerGroupId, a.group.dealerGroupId);
     });
 
     test('policy_decisions is append-only: INSERT works, UPDATE and DELETE are impossible', async () => {
       const { tenant } = await seedChain();
+      const actor = await seedUserLink(tenant.tenantId);
+      // FBL-020-R4 §2.2: a NEW decision row is written at evidence version 2, which
+      // requires the true actor and the server-generated correlation pair even for a
+      // deny. The row below is the minimum COMPLETE deny — the completeness rules
+      // themselves are proved in tests/identity-evidence.test.ts.
       const inserted = await query(
-        `INSERT INTO policy_decisions (tenant_id, actor_type, action, decision, reason_code, policy_version)
-       VALUES ($1, 'user', 'service.ro.close', 'deny', 'NO_MATCHING_BINDING', 'fbl-020.1')
+        `INSERT INTO policy_decisions
+           (tenant_id, actor_user_link_id, actor_type, action, decision, reason_code,
+            policy_version, request_id, correlation_id)
+       VALUES ($1, $2, 'user', 'service.ro.close', 'deny', 'NO_MATCHING_BINDING', 'fbl-020.1',
+               'req_append_only_0001', 'corr_append_only_0001')
        RETURNING decision_id`,
-        [tenant.tenantId],
+        [tenant.tenantId, actor],
       );
       const id = String((inserted.rows[0] as { decision_id: unknown }).decision_id);
 
@@ -259,7 +274,8 @@ describe(
 
       // dealership scope REQUIRES a tenant; platform scope FORBIDS one
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
          VALUES ('dealership', NULL, 'workos', 'user_x1')`,
         ),
@@ -267,7 +283,8 @@ describe(
         'dealership link without tenant',
       );
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
          VALUES ('platform', $1, 'workos', 'user_x2')`,
           [tenant.tenantId],
@@ -277,13 +294,15 @@ describe(
       );
 
       // duplicate provider identity within one tenant
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
        VALUES ('dealership', $1, 'workos', 'user_dup')`,
         [tenant.tenantId],
       );
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
          VALUES ('dealership', $1, 'workos', 'user_dup')`,
           [tenant.tenantId],
@@ -292,12 +311,14 @@ describe(
         'duplicate dealership provider identity',
       );
       // the platform (NULL-tenant) slot is also unique — NULLS NOT DISTINCT
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
        VALUES ('platform', NULL, 'workos', 'user_platform_dup')`,
       );
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
          VALUES ('platform', NULL, 'workos', 'user_platform_dup')`,
         ),
@@ -306,7 +327,8 @@ describe(
       );
       // no invented provider: only workos is enableable at the database layer
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO user_links (actor_scope, tenant_id, provider, provider_user_id)
          VALUES ('dealership', $1, 'saml', 'user_x3')`,
           [tenant.tenantId],
@@ -318,37 +340,46 @@ describe(
 
     test('identity_sessions: digest-only storage and tenant-coherent user link', async () => {
       const { tenant } = await seedChain();
-      const other = await createTenant({ name: 'Other Tenant', status: 'active' });
+      const other = await seedTenantViaService({ name: 'Other Tenant', status: 'active' });
       const link = await seedUserLink(tenant.tenantId);
       // R2: a LIVE session must be fully bound, so every fixture below
       // supplies the real connection/issuer/organization. Without it the
       // binding CHECK would fire first and these tests would prove the wrong
       // constraint.
+      //
+      // FBL-020-R4 §2.1: and it reads them FROM THE LINK, because
+      // `is_link_identity_tuple` now requires the session's connection, issuer,
+      // organization and provider subject to belong to the very link it is issued to.
+      // A fixture that restated a subject of its own was writing a tuple that does not
+      // exist, which is the shape the constraint is there to refuse.
       const bindRow = await query(
-        `SELECT connection_id, issuer, provider_organization_id
-           FROM identity_provider_connections WHERE tenant_id = $1 LIMIT 1`,
-        [tenant.tenantId],
+        `SELECT connection_id, issuer, provider_organization_id, provider_user_id
+           FROM user_links WHERE user_link_id = $1`,
+        [link],
       );
       const b = bindRow.rows[0] as {
         connection_id: unknown;
         issuer: unknown;
         provider_organization_id: unknown;
+        provider_user_id: unknown;
       };
 
       // raw (non-64-hex) token storage is rejected structurally
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO identity_sessions
              (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
               connection_id, issuer, provider_subject, provider_organization_id)
            VALUES ($1, $2, 'raw-session-token-value', NOW(), NOW() + INTERVAL '8 hours',
-                   $3, $4, 'subj', $5)`,
+                   $3, $4, $6, $5)`,
           [
             tenant.tenantId,
             link,
             String(b.connection_id),
             String(b.issuer),
             String(b.provider_organization_id),
+            String(b.provider_user_id),
           ],
         ),
         CHECK_VIOLATION,
@@ -356,11 +387,12 @@ describe(
       );
       // a session cannot claim tenant B over tenant A's user link
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO identity_sessions
              (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
               connection_id, issuer, provider_subject, provider_organization_id)
-           VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, 'subj', $6)`,
+           VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, $7, $6)`,
           [
             other.tenantId,
             link,
@@ -368,17 +400,19 @@ describe(
             String(b.connection_id),
             String(b.issuer),
             String(b.provider_organization_id),
+            String(b.provider_user_id),
           ],
         ),
         FK_VIOLATION,
         'cross-tenant session over user link',
       );
       // the digest of the opaque value is what a session stores
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO identity_sessions
            (tenant_id, user_link_id, session_token_hash, auth_time, expires_at,
             connection_id, issuer, provider_subject, provider_organization_id)
-         VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, 'subj', $6)`,
+         VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '8 hours', $4, $5, $7, $6)`,
         [
           tenant.tenantId,
           link,
@@ -386,6 +420,7 @@ describe(
           String(b.connection_id),
           String(b.issuer),
           String(b.provider_organization_id),
+          String(b.provider_user_id),
         ],
       );
     });
@@ -397,7 +432,8 @@ describe(
 
       // platform bindings are tenant-less and scope-less — no other combination
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
          VALUES ($1, $2, 'platform_admin', 'platform', $3)`,
           [tenant.tenantId, link, rooftop.rooftopId],
@@ -419,7 +455,8 @@ describe(
       // is that the DATABASE refuses it, so it must not be filtered by a
       // service first.
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
          VALUES (NULL, $1, 'platform_admin', 'platform', NULL)`,
           [platformLink],
@@ -481,9 +518,10 @@ describe(
       const txn = await query(
         `INSERT INTO reauthentication_transactions
            (tenant_id, user_link_id, action, nonce_hash, expires_at, state, completed_at,
+            terminal_reason, terminal_at,
             connection_id, issuer, provider_organization_id, provider_subject, oidc_nonce_hash)
          SELECT $1, $2, 'service.estimate.approve', $3, NOW() + INTERVAL '5 minutes',
-                'completed', NOW(),
+                'completed', NOW(), 'granted', NOW(),
                 c.connection_id, c.issuer, c.provider_organization_id, 'subj', $4
            FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
          RETURNING reauth_txn_id`,
@@ -539,7 +577,8 @@ describe(
 
       // duration beyond 60 minutes cannot even be REQUESTED
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO support_access_requests (tenant_id, requester_user_link_id, requested_actions, reason, requested_duration_minutes)
          VALUES ($1, $2, ARRAY['service.ro.read'], 'ticket 4821: verify RO totals', 61)`,
           [tenant.tenantId, requester],
@@ -548,7 +587,8 @@ describe(
         'over-60-minute request',
       );
 
-      const req = await query(
+      const req = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_requests (tenant_id, requester_user_link_id, requested_actions, reason, requested_duration_minutes)
        VALUES ($1, $2, ARRAY['service.ro.read'], 'ticket 4821: verify RO totals', 30)
        RETURNING request_id`,
@@ -558,7 +598,8 @@ describe(
 
       // self-approval is structurally impossible
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
           `UPDATE support_access_requests
             SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW()
           WHERE request_id = $1`,
@@ -569,7 +610,8 @@ describe(
       );
       // R2: approving without a high-assurance grant is refused outright
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
           `UPDATE support_access_requests
             SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW()
           WHERE request_id = $1`,
@@ -585,10 +627,10 @@ describe(
         // governs the `started` state and is exercised in the reauthentication case.
         `INSERT INTO reauthentication_transactions
            (tenant_id, user_link_id, action, nonce_hash, expires_at, required_assurance,
-            state, completed_at,
+            state, completed_at, terminal_reason, terminal_at,
             connection_id, issuer, provider_organization_id, provider_subject, oidc_nonce_hash)
          SELECT $1, $2, 'identity.support.approve', $3, NOW() + INTERVAL '5 minutes',
-                'fresh_and_mfa_policy', 'completed', NOW(),
+                'fresh_and_mfa_policy', 'completed', NOW(), 'granted', NOW(),
                 c.connection_id, c.issuer, c.provider_organization_id, 'approver', $4
            FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
          RETURNING reauth_txn_id`,
@@ -608,7 +650,8 @@ describe(
           sha256hex('approval-grant'),
         ],
       );
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE support_access_requests
           SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
               approval_grant_id = $3
@@ -618,7 +661,8 @@ describe(
 
       // a session longer than 60 minutes cannot exist
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
          VALUES ($1, $2, $3, NOW() + INTERVAL '61 minutes')`,
           [requestId, tenant.tenantId, requester],
@@ -626,14 +670,16 @@ describe(
         CHECK_VIOLATION,
         'over-60-minute session',
       );
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
        VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
         [requestId, tenant.tenantId, requester],
       );
       // one session per request
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
          VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
           [requestId, tenant.tenantId, requester],
@@ -645,9 +691,10 @@ describe(
 
     test('identity_provider_connections: one active connection per tenant, one home per external org', async () => {
       const { tenant } = await seedChain();
-      const other = await createTenant({ name: 'Other Group', status: 'active' });
+      const other = await seedTenantViaService({ name: 'Other Group', status: 'active' });
 
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO identity_provider_connections
          (connection_scope, tenant_id, provider, provider_organization_id, issuer)
        VALUES ('dealership', $1, 'workos', 'org_alpha', 'https://issuer.test.local')`,
@@ -655,7 +702,8 @@ describe(
       );
       // an external organization maps to exactly one internal home
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO identity_provider_connections
            (connection_scope, tenant_id, provider, provider_organization_id, issuer)
          VALUES ('dealership', $1, 'workos', 'org_alpha', 'https://issuer.test.local')`,
@@ -666,7 +714,8 @@ describe(
       );
       // a second ACTIVE connection for the same tenant is rejected
       await assertSqlState(
-        query(
+        fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
           `INSERT INTO identity_provider_connections
            (connection_scope, tenant_id, provider, provider_organization_id, issuer)
          VALUES ('dealership', $1, 'workos', 'org_beta', 'https://issuer.test.local')`,
@@ -676,7 +725,8 @@ describe(
         'second active connection per tenant',
       );
       // ...but a DISABLED one can coexist (history preserved, no hard delete)
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO identity_provider_connections
          (connection_scope, tenant_id, provider, provider_organization_id, status, issuer)
        VALUES ('dealership', $1, 'workos', 'org_beta', 'disabled', 'https://issuer.test.local')`,

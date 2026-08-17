@@ -6,15 +6,15 @@ import {
   ensureActiveConnection,
   resetDatabase,
   skipIntegration,
+  withPresentedSession,
+  fixtureAuthorizationStateWrite,
+  seedDealerGroup,
+  seedDepartment,
+  seedLegalEntity,
+  seedRooftop,
+  seedTenantViaService,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
-import {
-  createDealerGroup,
-  createDepartment,
-  createLegalEntity,
-  createRooftop,
-  createTenant,
-} from '@dealer/organization';
 import {
   POLICY_VERSION,
   RoleScopeMismatchError,
@@ -51,10 +51,16 @@ describe(
 
     beforeEach(async () => {
       await resetDatabase();
-      engine = createPolicyEngine({
-        catalog: mergeActionCatalogs(createServiceActionCatalog(), createIdentityActionCatalog()),
-        resolveResourceScope: resolveServiceResourceScope,
-      });
+      // FBL-020-R4 §2: an ALLOW must name the session the request presented, so the
+      // fixture engine presents the actor's own live session for any call that does
+      // not name one itself. It never overrides an explicit `sessionId`, so the tests
+      // below that are ABOUT the presented credential still control it exactly.
+      engine = withPresentedSession(
+        createPolicyEngine({
+          catalog: mergeActionCatalogs(createServiceActionCatalog(), createIdentityActionCatalog()),
+          resolveResourceScope: resolveServiceResourceScope,
+        }),
+      );
     });
 
     interface World {
@@ -67,31 +73,31 @@ describe(
     }
 
     async function buildWorld(): Promise<World> {
-      const tenant = await createTenant({ name: 'Policy Motors', status: 'active' });
-      const group = await createDealerGroup({
+      const tenant = await seedTenantViaService({ name: 'Policy Motors', status: 'active' });
+      const group = await seedDealerGroup({
         tenantId: tenant.tenantId,
         name: 'Group',
         status: 'active',
       });
-      const entity = await createLegalEntity({
+      const entity = await seedLegalEntity({
         tenantId: tenant.tenantId,
         dealerGroupId: group.dealerGroupId,
         name: 'Entity LLC',
         status: 'active',
       });
-      const rooftopA = await createRooftop({
+      const rooftopA = await seedRooftop({
         tenantId: tenant.tenantId,
         legalEntityId: entity.legalEntityId,
         name: 'North Store',
         status: 'active',
       });
-      const rooftopB = await createRooftop({
+      const rooftopB = await seedRooftop({
         tenantId: tenant.tenantId,
         legalEntityId: entity.legalEntityId,
         name: 'South Store',
         status: 'active',
       });
-      const departmentA = await createDepartment({
+      const departmentA = await seedDepartment({
         tenantId: tenant.tenantId,
         rooftopId: rooftopA.rooftopId,
         code: 'service',
@@ -122,7 +128,8 @@ describe(
 
     async function makeUser(tenantId: string | null): Promise<string> {
       await ensureActiveConnection(tenantId);
-      const result = await query(
+      const result = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO user_links
          (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
           connection_id, issuer, provider_organization_id)
@@ -305,9 +312,11 @@ describe(
       assert.equal((await engine.decide(input)).decision, 'allow');
 
       // retire the rooftop the documented way — the binding row is untouched
-      await query(`UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`, [
-        world.rooftopA,
-      ]);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`,
+        [world.rooftopA],
+      );
       const afterArchive = await engine.decide(input);
       assert.equal(afterArchive.decision, 'deny', 'an archived rooftop must authorize nothing');
       assert.equal(afterArchive.resourceVisible, false);
@@ -333,9 +342,11 @@ describe(
       };
       assert.equal((await engine.decide(input)).decision, 'allow');
       // deactivate the LEGAL ENTITY above the rooftop
-      await query(`UPDATE legal_entities SET status = 'inactive' WHERE tenant_id = $1`, [
-        world.tenantId,
-      ]);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE legal_entities SET status = 'inactive' WHERE tenant_id = $1`,
+        [world.tenantId],
+      );
       assert.equal((await engine.decide(input)).decision, 'deny');
     });
 
@@ -344,9 +355,11 @@ describe(
       const user = await makeUser(world.tenantId);
       await bind(world.tenantId, user, 'service_advisor', 'tenant', world.tenantId);
       // migration 055 writes backfilled rooftops as pending_configuration
-      await query(`UPDATE rooftops SET status = 'pending_configuration' WHERE rooftop_id = $1`, [
-        world.rooftopA,
-      ]);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'pending_configuration' WHERE rooftop_id = $1`,
+        [world.rooftopA],
+      );
       const decision = await engine.decide({
         actor: { userLinkId: user, actorScope: 'dealership', tenantId: world.tenantId },
         action: 'service.ro.transition',
@@ -434,37 +447,56 @@ describe(
     test('the database refuses ambiguous and incomplete resource scope', async () => {
       const world = await buildWorld();
       const user = await makeUser(world.tenantId);
-      const attempts: Array<[string, string, unknown[]]> = [
+      // FBL-020-R4 §5: four ADVERSARIAL bypass attempts. Each writes a binding shape the
+      // grant service refuses to construct, and the assertion is that the DATABASE
+      // refuses it too — so the write has to be raw, and is therefore declared.
+      const attempts: Array<[string, () => Promise<unknown>]> = [
         [
           'resource level without a resource',
-          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level)
+          () =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level)
          VALUES ($1, $2, 'service_advisor', 'resource')`,
-          [world.tenantId, user],
+              [world.tenantId, user],
+            ),
         ],
         [
           'resource level with only a type',
-          `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, resource_type)
+          () =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, resource_type)
          VALUES ($1, $2, 'service_advisor', 'resource', 'repair_order')`,
-          [world.tenantId, user],
+              [world.tenantId, user],
+            ),
         ],
         [
           'resource level ALSO claiming an organization node',
-          `INSERT INTO role_bindings
+          () =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `INSERT INTO role_bindings
            (tenant_id, user_link_id, role, scope_level, scope_id, resource_type, resource_id)
          VALUES ($1, $2, 'service_advisor', 'resource', $3, 'repair_order', $4)`,
-          [world.tenantId, user, world.rooftopA, world.roA],
+              [world.tenantId, user, world.rooftopA, world.roA],
+            ),
         ],
         [
           'an organization level carrying a resource',
-          `INSERT INTO role_bindings
+          () =>
+            fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `INSERT INTO role_bindings
            (tenant_id, user_link_id, role, scope_level, scope_id, resource_type, resource_id)
          VALUES ($1, $2, 'service_advisor', 'rooftop', $3, 'repair_order', $4)`,
-          [world.tenantId, user, world.rooftopA, world.roA],
+              [world.tenantId, user, world.rooftopA, world.roA],
+            ),
         ],
       ];
-      for (const [label, sql, params] of attempts) {
+      for (const [label, attempt] of attempts) {
         await assert.rejects(
-          () => query(sql, params as never[]),
+          attempt,
           (err: unknown) => (err as { code?: string }).code === '23514',
           `${label} must be refused by a CHECK`,
         );
@@ -496,7 +528,7 @@ describe(
 
     test('cross-tenant is denied unconditionally, resource invisible', async () => {
       const world = await buildWorld();
-      const other = await createTenant({ name: 'Other Motors', status: 'active' });
+      const other = await seedTenantViaService({ name: 'Other Motors', status: 'active' });
       const user = await makeUser(other.tenantId);
       await bind(other.tenantId, user, 'service_advisor', 'tenant', other.tenantId);
 
@@ -640,7 +672,8 @@ describe(
       //    service now refuses to produce it: the engine must refuse to honour
       //    such a row however it got there — a pre-correction row, a manual
       //    database fix, some future writer.
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO role_bindings (tenant_id, user_link_id, role, scope_level, scope_id)
          VALUES ($1, $2, 'platform_admin', 'tenant', $1)`,
         [world.tenantId, user],
@@ -648,23 +681,25 @@ describe(
 
       // one catalog, two actions, the SAME allowed role — the only difference
       // between them is the `platform.` prefix.
-      const twoActions = createPolicyEngine({
-        catalog: createActionCatalog([
-          {
-            action: 'platform.tenant.provision',
-            description: 'provision a tenant (control plane)',
-            resourceType: null,
-            allowedRoles: ['platform_admin'],
-          },
-          {
-            action: 'org.unit.create',
-            description: 'a TENANT-context action admitting the same role name',
-            resourceType: null,
-            allowedRoles: ['platform_admin'],
-          },
-        ]),
-        resolveResourceScope: () => Promise.resolve(null),
-      });
+      const twoActions = withPresentedSession(
+        createPolicyEngine({
+          catalog: createActionCatalog([
+            {
+              action: 'platform.tenant.provision',
+              description: 'provision a tenant (control plane)',
+              resourceType: null,
+              allowedRoles: ['platform_admin'],
+            },
+            {
+              action: 'org.unit.create',
+              description: 'a TENANT-context action admitting the same role name',
+              resourceType: null,
+              allowedRoles: ['platform_admin'],
+            },
+          ]),
+          resolveResourceScope: () => Promise.resolve(null),
+        }),
+      );
       const actor = {
         userLinkId: user,
         actorScope: 'dealership' as const,
@@ -715,7 +750,7 @@ describe(
     });
 
     test('a pending_configuration tenant cannot act — activation is explicit', async () => {
-      const tenant = await createTenant({ name: 'Sleepy Motors' }); // pending_configuration
+      const tenant = await seedTenantViaService({ name: 'Sleepy Motors' }); // pending_configuration
       const user = await makeUser(tenant.tenantId);
       await bind(tenant.tenantId, user, 'service_advisor', 'tenant', tenant.tenantId);
 
@@ -760,10 +795,11 @@ describe(
         // nonce digest, and is proven in the schema and reauthentication suites.
         `INSERT INTO reauthentication_transactions
          (tenant_id, user_link_id, action, nonce_hash, expires_at, required_assurance,
-          state, completed_at,
+          state, completed_at, terminal_reason, terminal_at,
           connection_id, issuer, provider_organization_id, provider_subject, oidc_nonce_hash)
        SELECT $1, $2, 'identity.support.approve', $3, NOW() + INTERVAL '5 minutes',
-              'fresh_and_mfa_policy', 'completed', NOW(), c.connection_id, c.issuer,
+              'fresh_and_mfa_policy', 'completed', NOW(), 'granted', NOW(),
+              c.connection_id, c.issuer,
               c.provider_organization_id, 'approver', $4
          FROM identity_provider_connections c WHERE c.tenant_id = $1 LIMIT 1
        RETURNING reauth_txn_id`,
@@ -783,7 +819,8 @@ describe(
         ],
       );
 
-      const request = await query(
+      const request = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_requests
          (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
           requested_duration_minutes, status, decided_by_user_link_id, decided_at, approval_grant_id)
@@ -794,7 +831,8 @@ describe(
         [world.tenantId, supportActor, world.rooftopA, approver],
       );
       const requestId = String((request.rows[0] as { request_id: unknown }).request_id);
-      const session = await query(
+      const session = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
        VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes') RETURNING support_session_id`,
         [requestId, world.tenantId, supportActor],
@@ -834,6 +872,28 @@ describe(
         sessionId,
       );
 
+      // FBL-020-R4 §3 — SUPPORT USE IS AUDITED, once, in the evidence transaction.
+      //
+      // A request SERVED under delegated support access is a platform person
+      // reaching into a customer's data. `policy_decisions` recorded it; the
+      // `audit_events` trail an operator reads for "who touched this tenant"
+      // recorded it nowhere. The row names the session, the actor and the
+      // decision it belongs to — and never the free-text support reason.
+      const used = await query(
+        `SELECT actor_user_id, details FROM audit_events
+          WHERE event_type = 'identity.support.used' AND entity_id = $1`,
+        [sessionId],
+      );
+      assert.equal(used.rows.length, 1, 'a served support request writes exactly one audit event');
+      const usedRow = used.rows[0] as { actor_user_id: unknown; details: Record<string, unknown> };
+      assert.equal(String(usedRow.actor_user_id), supportActor, 'and names the TRUE actor');
+      assert.equal(String(usedRow.details.action), 'service.ro.view');
+      assert.equal(String(usedRow.details.decision_id), allowed.decisionId);
+      assert.ok(
+        !JSON.stringify(usedRow.details).includes('ticket 9'),
+        'the support reason text never reaches the audit trail',
+      );
+
       // outside the approved action set: denied
       const wrongAction = await engine.decide({
         actor,
@@ -854,7 +914,8 @@ describe(
       assert.equal(wrongScope.resourceVisible, false);
 
       // revocation ends access immediately
-      await query(
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE support_access_sessions SET revoked_at = NOW() WHERE support_session_id = $1`,
         [sessionId],
       );
@@ -950,7 +1011,8 @@ describe(
 
       // The window closes; `status` stays 'active' — the shape a predicate that
       // checks only the status accepts.
-      const moved = await query(
+      const moved = await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
         `UPDATE role_bindings
             SET effective_from = NOW() - INTERVAL '2 days',
                 effective_to = NOW() - INTERVAL '1 day'

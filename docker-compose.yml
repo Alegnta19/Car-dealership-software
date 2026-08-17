@@ -75,6 +75,32 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # FBL-020-R4 section 4 — the background process, and the reason it is deployed.
+  #
+  # A delegated support-access window closes on its own schedule, so the transition that
+  # RECORDS the closing (one row, one advancing authorization version, one audit event) has
+  # no request to hang off. This service runs it on a bounded interval. It serves no
+  # traffic, exposes no port, and needs nothing but the database.
+  #
+  # It is NOT a queue and not a scheduler: the job's exactly-once property comes from the
+  # database claim itself, so running two of these — or none for an hour — is safe. Access
+  # stops at the session's own expiry whether or not this process is running; what depends
+  # on it is the COMPLETENESS OF THE AUDIT TRAIL.
+  worker:
+    build: .
+    command: ['node', 'apps/worker/dist/main.js']
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+      SUPPORT_ACCESS_EXPIRY_INTERVAL_MS: ${SUPPORT_ACCESS_EXPIRY_INTERVAL_MS:-60000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   # /metrics and /healthz are unauthenticated by design (README "Observability") — in any
   # deployment where port 3000 is reachable from outside, gate them at the ingress.
 

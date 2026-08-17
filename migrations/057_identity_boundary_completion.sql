@@ -1,7 +1,31 @@
 -- ============================================================
--- 057_identity_boundary_completion.sql — FBL-020-R2
+-- 057_identity_boundary_completion.sql — ORIGINATED IN FBL-020-R2,
+-- CORRECTED IN PLACE BY FBL-020-R3 AND FBL-020-R4.
 --
--- Governing document: Master Blueprint v2.0 §14.3.
+-- Governing document: Master Blueprint v2.0 §14.3. That citation belongs to
+-- this file's ORIGIN and is unchanged: v2.0 §14.3 is genuinely the FBL-020-R2
+-- order. What follows it is the file's revision history, because no persistent
+-- environment has ever applied `057` — the architect's §0 census — so each
+-- revision corrects this file IN PLACE rather than adding an `058`. The
+-- consequence is stated rather than left to be discovered: THE CHECKSUM OF
+-- THIS FILE HAS MOVED WITH EVERY REVISION, and
+-- `docs/FBL-020-DELIVERY-REPORT.md` §6 publishes the current value beside this
+-- file's git blob OID.
+--
+--   * R2 wrote sections 1–13: exact external-identity binding, provable
+--     session provenance, the server-side login transaction, delegated
+--     support access and the policy evidence ledger.
+--   * R3 corrected sections in place, each marked `FBL-020-R3` where it sits —
+--     recoverable refresh state and the refresh lease, provider-token expiry,
+--     the credential a session belongs to, the explicit terminal state on a
+--     login transaction, the local session a step-up starts from, and the
+--     removal of the `approver_assurance` column that asserted a fact nothing
+--     proved.
+--   * R4 added the five sections marked `FBL-020-R4`: §2.1's identity tuple
+--     foreign keys, §2.2's `auth_time` and assurance provenance, the nil-UUID
+--     tenant refusal, the support-session tenant check and the grant-backed
+--     approval check. Those five, plus the R3 corrections above, are why line
+--     2 no longer names R2 alone.
 --
 -- Forward-only. Migrations 000 and 049–056 remain byte-identical; nothing
 -- here edits, renames, reorders or recomputes them.
@@ -762,22 +786,721 @@ CREATE UNIQUE INDEX uq_sar_approval_grant ON support_access_requests (approval_g
   WHERE approval_grant_id IS NOT NULL;
 
 -- ──────────────────────────────────────────────────────────────
--- Section 6 — policy evidence: auth_time and the true actor
+-- Section 6 — policy evidence: auth_time, the true actor, and an
+-- EVIDENCE VERSION that makes an incomplete new decision unrepresentable
+--
+-- FBL-020-R4 §2.2 — WHAT WAS WRONG HERE. R3 added `auth_time`,
+-- `connection_id`, `session_id` and `actor_provider_subject` as four
+-- nullable columns with NO completeness rule and NO referential integrity.
+-- Every one of them could therefore be NULL on an ALLOW, which is the only
+-- direction that matters: a decision that let somebody into a tenant's data
+-- was permitted to record nothing about the credential that was presented,
+-- and nothing anywhere would notice. Evidence that MAY be absent is evidence
+-- that will be absent on the day it is needed.
+--
+-- The mechanism is a VERSION DISCRIMINATOR plus constraints CONDITIONAL on
+-- it, so history stays legal and the present cannot be written incomplete:
+--
+--   * every row that exists when this migration runs is version 1. Those
+--     rows are append-only evidence of decisions that were genuinely made
+--     with less recorded — rewriting or deleting them would be the real
+--     falsification, so they stay exactly as they are and stay READABLE;
+--   * the column DEFAULT then becomes 2, and version-2 rows must carry the
+--     complete set below;
+--   * and a BEFORE INSERT trigger refuses any NEW row below the current
+--     version. Without it the version would be a self-certification: a
+--     writer could keep claiming version 1 forever and inherit the historic
+--     exemption. INSERT-only, so no existing row is touched.
 -- ──────────────────────────────────────────────────────────────
 
 ALTER TABLE policy_decisions
   ADD COLUMN auth_time            TIMESTAMPTZ,
-  ADD COLUMN connection_id        UUID,
-  ADD COLUMN session_id           UUID,
-  ADD COLUMN actor_provider_subject TEXT;
+  -- REFERENTIAL, not merely shaped: an evidence row that names a connection
+  -- or a session names one that EXISTS. A digit-string that resolves to
+  -- nothing is not evidence of a credential, and an operator who cannot
+  -- follow the id to the object cannot revoke it.
+  ADD COLUMN connection_id        UUID REFERENCES identity_provider_connections (connection_id),
+  ADD COLUMN session_id           UUID REFERENCES identity_sessions (session_id),
+  ADD COLUMN actor_provider_subject TEXT,
+  -- The applicable support session's EXPIRY, recorded on the decision that
+  -- relied on it. Without it a stored support allow could not be re-judged
+  -- later against the window it was supposed to fall inside.
+  ADD COLUMN support_session_expires_at TIMESTAMPTZ,
+  ADD COLUMN evidence_version     SMALLINT NOT NULL DEFAULT 1;
+
+-- RECONCILIATION BEFORE CONSTRAINTS, as everywhere in this file. Existing
+-- rows are declared version 1 — the version whose requirements they actually
+-- met. Stated plainly: the column is created with DEFAULT 1 in the statement
+-- above, so this matches ZERO rows on a database that migrates in order. It
+-- is written anyway because the ORDERING is the property under review, and
+-- because a later edit to the default must not silently promote historic rows
+-- into a completeness class they were never written to satisfy.
+UPDATE policy_decisions
+   SET evidence_version = 1
+ WHERE evidence_version IS DISTINCT FROM 1;
+
+-- From here on, a decision is written at version 2 unless a writer names a
+-- version explicitly — and the trigger below refuses anything lower.
+ALTER TABLE policy_decisions ALTER COLUMN evidence_version SET DEFAULT 2;
 
 ALTER TABLE policy_decisions
   ADD CONSTRAINT pd_actor_subject_shape CHECK (
     actor_provider_subject IS NULL OR length(actor_provider_subject) BETWEEN 1 AND 200
+  ),
+  ADD CONSTRAINT pd_evidence_version_known CHECK (evidence_version IN (1, 2)),
+  -- THE PRESENTED CREDENTIAL IS ONE FACT, NOT FOUR. Either the decision names
+  -- the session it was made for AND everything derived from that session, or
+  -- it names none of them. A half-populated group is how "we recorded the
+  -- session id" quietly coexists with "we never recorded which connection or
+  -- subject it belonged to".
+  ADD CONSTRAINT pd_credential_group_is_atomic CHECK (
+    evidence_version < 2
+    OR (session_id IS NOT NULL)
+       = (auth_time IS NOT NULL AND connection_id IS NOT NULL
+          AND actor_provider_subject IS NOT NULL)
+  ),
+  -- The identified-actor completeness rule. `system` decisions are excluded
+  -- BY NAME rather than by omission: a scheduler or a migration acts with no
+  -- actor, no tenant and no credential, and forcing it to invent them would
+  -- put fiction in the audit trail.
+  --
+  -- On the tenant clause: a `platform.*` action targets the control plane and
+  -- has no tenant to name, and a DENY may be the very decision that no target
+  -- tenant could be resolved — for those two cases the ABSENCE is the recorded
+  -- fact. Every other row, and every ALLOW into tenant data, must name its
+  -- target tenant.
+  ADD CONSTRAINT pd_v2_identified_actor_is_complete CHECK (
+    evidence_version < 2
+    OR actor_type = 'system'
+    OR (
+      actor_user_link_id IS NOT NULL
+      AND request_id IS NOT NULL
+      AND correlation_id IS NOT NULL
+      AND (resource_type IS NULL) = (resource_id IS NULL)
+      AND (tenant_id IS NOT NULL OR decision = 'deny' OR action ~ '^platform\.')
+    )
+  ),
+  -- AN ALLOW MUST NAME THE CREDENTIAL IT BELIEVED. This is the clause the
+  -- whole section exists for: a decision that granted access to an identified
+  -- actor cannot be recorded without the presented session, its authentication
+  -- instant, its connection and its provider subject. A deny is allowed to
+  -- record "nothing was presented", because that is frequently the reason.
+  ADD CONSTRAINT pd_v2_allow_names_presented_credential CHECK (
+    evidence_version < 2
+    OR actor_type = 'system'
+    OR decision = 'deny'
+    OR session_id IS NOT NULL
+  ),
+  -- …and it must name the AUTHORITY it relied on: matched role bindings, or a
+  -- support session. An allow that can name neither is unreconstructable.
+  ADD CONSTRAINT pd_v2_allow_names_its_authority CHECK (
+    evidence_version < 2
+    OR actor_type = 'system'
+    OR decision = 'deny'
+    OR scope_level IS NOT NULL
+  ),
+  ADD CONSTRAINT pd_v2_allow_has_authority_evidence CHECK (
+    evidence_version < 2
+    OR actor_type = 'system'
+    OR decision = 'deny'
+    OR cardinality(matched_role_binding_ids) > 0
+    OR support_session_id IS NOT NULL
+  ),
+  -- SUPPORT ACCESS EVIDENCE IS ALL THREE FACTS OR NONE. A decision taken
+  -- under delegated support access must name the session, the approved
+  -- request it derives from and the window it fell inside; and only a
+  -- platform-support actor can be inside one.
+  ADD CONSTRAINT pd_support_evidence_is_complete CHECK (
+    support_session_id IS NULL
+    OR (
+      support_request_id IS NOT NULL
+      AND actor_type = 'platform_support'
+      AND (evidence_version < 2 OR support_session_expires_at IS NOT NULL)
+    )
+  ),
+  ADD CONSTRAINT pd_support_expiry_needs_a_session CHECK (
+    support_session_expires_at IS NULL OR support_session_id IS NOT NULL
   );
+
+-- The version floor. A CHECK cannot express "new rows only", so the floor is
+-- a BEFORE INSERT trigger: historic rows are untouched and remain readable,
+-- and no future writer can opt back into the weaker class.
+CREATE OR REPLACE FUNCTION policy_decisions_require_current_evidence() RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.evidence_version < 2 THEN
+    RAISE EXCEPTION
+      'policy_decisions INSERT refused: evidence_version % is below the current minimum 2 '
+      '(historic rows keep their version; new decisions must carry complete evidence)',
+      NEW.evidence_version;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_policy_decisions_current_evidence ON policy_decisions;
+CREATE TRIGGER trg_policy_decisions_current_evidence
+  BEFORE INSERT ON policy_decisions
+  FOR EACH ROW EXECUTE FUNCTION policy_decisions_require_current_evidence();
+
+-- ──────────────────────────────────────────────────────────────
+-- Section 7 — THE IDENTITY TUPLE, ENFORCED BY THE DATABASE
+--
+-- FBL-020-R4 §2.1. Up to here every one of these relationships was checked
+-- by application SQL: `createBearerSession` re-verifies the seven facts in
+-- its INSERT ... WHERE EXISTS, `startReauthentication` derives its binding
+-- from the session, and the migration above reconciles what it can. All of
+-- that is correct and none of it is a GUARANTEE — a new code path, a fixture,
+-- a repair script or a psql session can still write a row whose tenant,
+-- connection, issuer, organization, subject and UserLink do not belong
+-- together, and every reader downstream would then trust it.
+--
+-- This section moves the relationship into the schema, as composite foreign
+-- keys, so a partial or cross-tenant identity tuple is REFUSED BY POSTGRES.
+--
+-- THE `tenant_key` PROBLEM, AND WHY IT IS SOLVED THIS WAY. A composite
+-- foreign key uses MATCH SIMPLE: if ANY referencing column is NULL the
+-- constraint is satisfied without a lookup. `tenant_id` is legitimately NULL
+-- for PLATFORM-scope connections, links and sessions, so a foreign key
+-- carrying `tenant_id` would be silently unenforced on exactly the rows that
+-- reach across the platform/dealership boundary — a platform-scope link could
+-- name a dealership connection and nothing would object. Each table therefore
+-- carries a GENERATED, always-present `tenant_key`: the tenant id, or the nil
+-- UUID for platform scope. It is derived by the database from `tenant_id` in
+-- the same row, so it cannot drift, cannot be written by application code and
+-- cannot be forgotten.
+--
+-- The nil UUID is not a tenant, and the CHECK below makes that permanent
+-- rather than a convention.
+-- ──────────────────────────────────────────────────────────────
+
+DO $$
+DECLARE nil_tenants INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO nil_tenants
+    FROM tenants WHERE tenant_id = '00000000-0000-0000-0000-000000000000';
+  IF nil_tenants > 0 THEN
+    RAISE EXCEPTION
+      'FBL-020-R4 refused: the nil UUID is used as a tenant id, so it cannot also stand '
+      'for "platform scope" in the identity tuple keys';
+  END IF;
+END $$;
+
+ALTER TABLE tenants
+  ADD CONSTRAINT tenants_id_is_not_the_platform_key CHECK (
+    tenant_id <> '00000000-0000-0000-0000-000000000000'
+  );
+
+ALTER TABLE identity_provider_connections
+  ADD COLUMN tenant_key UUID GENERATED ALWAYS AS (
+    COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  ) STORED;
+ALTER TABLE user_links
+  ADD COLUMN tenant_key UUID GENERATED ALWAYS AS (
+    COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  ) STORED;
+ALTER TABLE identity_sessions
+  ADD COLUMN tenant_key UUID GENERATED ALWAYS AS (
+    COALESCE(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  ) STORED;
+
+-- FK targets. These are plain unique indexes over columns that are already
+-- unique by construction (each begins with the table's primary key), so they
+-- constrain nothing new — they exist to give the composite foreign keys below
+-- something to point at.
+CREATE UNIQUE INDEX uq_ipc_identity_tuple
+  ON identity_provider_connections
+     (connection_id, tenant_key, provider, provider_organization_id, issuer);
+CREATE UNIQUE INDEX uq_ul_identity_tuple
+  ON user_links
+     (user_link_id, tenant_key, connection_id, provider_organization_id, issuer, provider_user_id);
+CREATE UNIQUE INDEX uq_is_identity_tuple
+  ON identity_sessions
+     (session_id, tenant_key, user_link_id, connection_id, provider_organization_id, issuer,
+      provider_subject);
+CREATE UNIQUE INDEX uq_rat_identity_tuple
+  ON reauthentication_transactions
+     (reauth_txn_id, tenant_id, user_link_id, action, connection_id);
+
+-- ── 7a. ACTIVATED UserLinks ───────────────────────────────────────────────
+--
+-- RECONCILIATION FIRST. A link whose five-column binding does not resolve to
+-- a real connection is closed the same way section 1 closes an ambiguous one:
+-- deactivated, and its binding cleared so the constraint below skips it
+-- rather than being satisfied by a fiction.
+--
+-- Stated plainly: section 1 SET this binding from the connection row it read,
+-- so on a database that migrates in order this matches ZERO rows. It is
+-- written anyway because the ORDERING is the property under review — the
+-- foreign key installed ahead of it would abort the whole migration on any
+-- database holding a link whose connection had been re-pointed.
+UPDATE user_links ul
+   SET status = 'deactivated',
+       deactivated_at = COALESCE(ul.deactivated_at, NOW()),
+       connection_id = NULL,
+       provider_organization_id = NULL,
+       issuer = NULL,
+       authorization_version = ul.authorization_version + 1,
+       updated_at = NOW()
+ WHERE ul.connection_id IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM identity_provider_connections c
+      WHERE c.connection_id = ul.connection_id
+        AND c.tenant_key = ul.tenant_key
+        AND c.provider = ul.provider
+        AND c.provider_organization_id = ul.provider_organization_id
+        AND c.issuer = ul.issuer
+   );
+
+-- A link's external identity is now ONE composite fact. Because
+-- `ul_activated_is_bound` (section 1) already forbids an activated link with
+-- any of these NULL, MATCH SIMPLE bites on every activated link: the tuple
+-- must resolve to a real connection in the SAME tenant, of the same provider,
+-- with the same configured issuer and the same provider organization. A
+-- PENDING link that is not bound yet keeps NULLs and is not yet constrained,
+-- which is the only state that legitimately has nothing to check.
+ALTER TABLE user_links
+  ADD CONSTRAINT ul_connection_identity_tuple
+    FOREIGN KEY (connection_id, tenant_key, provider, provider_organization_id, issuer)
+    REFERENCES identity_provider_connections
+      (connection_id, tenant_key, provider, provider_organization_id, issuer);
+
+-- ── 7b. LIVE identity_sessions ────────────────────────────────────────────
+--
+-- RECONCILIATION FIRST, in two statements that between them leave nothing the
+-- foreign key can abort on:
+--   * a session that is not revoked and whose tuple does not resolve to its
+--     own UserLink is REVOKED, exactly as section 2 revokes an unprovable one;
+--   * a session that is ALREADY revoked and still carries a tuple that does
+--     not resolve keeps its audit trail and loses the two values THIS
+--     MIGRATION wrote (subject and organization, created in section 2). That
+--     is not erasing history: those columns did not exist before this file
+--     ran, so the only writer that could have filled them is section 2's own
+--     derivation.
+--
+-- Stated plainly: both match ZERO rows on a database that migrates in order,
+-- because section 2 derived the tuple from the link's own connection or
+-- revoked the session with the columns left NULL.
+UPDATE identity_sessions s
+   SET revoked_at = NOW(),
+       revoked_reason = COALESCE(s.revoked_reason, 'fbl_020_r4_tuple_unprovable')
+ WHERE s.revoked_at IS NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM user_links ul
+      WHERE ul.user_link_id = s.user_link_id
+        AND ul.tenant_key = s.tenant_key
+        AND ul.connection_id = s.connection_id
+        AND ul.provider_organization_id = s.provider_organization_id
+        AND ul.issuer = s.issuer
+        AND ul.provider_user_id = s.provider_subject
+   );
+
+UPDATE identity_sessions s
+   SET provider_subject = NULL,
+       provider_organization_id = NULL
+ WHERE s.revoked_at IS NOT NULL
+   AND s.provider_subject IS NOT NULL
+   AND s.provider_organization_id IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1 FROM user_links ul
+      WHERE ul.user_link_id = s.user_link_id
+        AND ul.tenant_key = s.tenant_key
+        AND ul.connection_id = s.connection_id
+        AND ul.provider_organization_id = s.provider_organization_id
+        AND ul.issuer = s.issuer
+        AND ul.provider_user_id = s.provider_subject
+   );
+
+-- `is_live_session_fully_bound` (section 2) forbids a live session with any of
+-- connection, issuer, organization or subject NULL, so for every live session
+-- this foreign key is fully enforced: the session's tenant, connection,
+-- issuer, organization and provider subject must all belong to the very
+-- UserLink it was issued to. A session cannot be issued to a link in another
+-- tenant, cannot claim a subject its link does not have, and cannot name a
+-- connection its link is not bound to.
+ALTER TABLE identity_sessions
+  ADD CONSTRAINT is_link_identity_tuple
+    FOREIGN KEY (user_link_id, tenant_key, connection_id, provider_organization_id, issuer,
+                 provider_subject)
+    REFERENCES user_links
+      (user_link_id, tenant_key, connection_id, provider_organization_id, issuer,
+       provider_user_id);
+
+-- ── 7c. ACTIVE reauthentication rows ──────────────────────────────────────
+--
+-- RECONCILIATION FIRST. A step-up that is still 'started' and whose tuple
+-- does not resolve to its session is EXPIRED — the same closed state section 4
+-- uses — and its binding cleared so nothing partial is left to check.
+--
+-- Stated plainly: the binding columns are created in section 4 of this file
+-- and set only by `startReauthentication`, which DERIVES them from the
+-- session, so this matches ZERO rows on a database that migrates in order.
+UPDATE reauthentication_transactions r
+   SET state = 'expired',
+       connection_id = NULL,
+       issuer = NULL,
+       provider_organization_id = NULL,
+       provider_subject = NULL,
+       session_id = NULL,
+       updated_at = NOW()
+ WHERE r.state = 'started'
+   AND NOT EXISTS (
+     SELECT 1 FROM identity_sessions s
+      WHERE s.session_id = r.session_id
+        AND s.tenant_key = r.tenant_id
+        AND s.user_link_id = r.user_link_id
+        AND s.connection_id = r.connection_id
+        AND s.provider_organization_id = r.provider_organization_id
+        AND s.issuer = r.issuer
+        AND s.provider_subject = r.provider_subject
+   );
+
+-- A step-up names the exact live session it steps up FROM, and inherits that
+-- session's whole identity tuple. `rat_started_is_bound` (section 4) forbids a
+-- 'started' transaction with any of these NULL, so every active step-up is
+-- fully enforced; a terminal one (completed, failed, expired) that predates
+-- these columns keeps its NULLs and its history.
+ALTER TABLE reauthentication_transactions
+  ADD CONSTRAINT rat_session_identity_tuple
+    FOREIGN KEY (session_id, tenant_id, user_link_id, connection_id,
+                 provider_organization_id, issuer, provider_subject)
+    REFERENCES identity_sessions
+      (session_id, tenant_key, user_link_id, connection_id,
+       provider_organization_id, issuer, provider_subject);
+
+-- The GRANT the step-up mints inherits the transaction's identity: same
+-- transaction, same tenant, same person, same action. Before this, a grant was
+-- tied to its transaction by `reauth_txn_id` alone, so a writer could mint one
+-- naming a different tenant, a different user or a different action than the
+-- transaction that authorized it — and `consumeReauthenticationGrant` matches
+-- on the GRANT's copies of those values, so the substitution would have been
+-- honoured.
+--
+-- RECONCILIATION FIRST for the connection: a grant's connection is its
+-- transaction's connection, by definition, so it is DERIVED here rather than
+-- trusted. A legacy transaction that predates section 4's `connection_id`
+-- carries NULL, and its grant honestly becomes NULL too — such a transaction
+-- is terminal and can never be started again, so no future grant can inherit
+-- the gap. Stated plainly: `completeReauthentication` already writes the
+-- transaction's own connection, so this matches ZERO rows in order.
+UPDATE reauthentication_grants g
+   SET connection_id = t.connection_id,
+       updated_at = NOW()
+  FROM reauthentication_transactions t
+ WHERE t.reauth_txn_id = g.reauth_txn_id
+   AND g.connection_id IS DISTINCT FROM t.connection_id;
+
+ALTER TABLE reauthentication_grants
+  ADD CONSTRAINT rag_transaction_identity_tuple
+    FOREIGN KEY (reauth_txn_id, tenant_id, user_link_id, action, connection_id)
+    REFERENCES reauthentication_transactions
+      (reauth_txn_id, tenant_id, user_link_id, action, connection_id);
+
+-- ── 7d. support access cannot cross a tenant ──────────────────────────────
+--
+-- A support SESSION belongs to its request's tenant, and an APPROVING GRANT
+-- belongs to the approver, in that same tenant. Neither was enforced: the
+-- session carried its own `tenant_id` column and the grant was referenced by
+-- id alone, so a grant minted in tenant B could approve access into tenant A.
+--
+-- A mismatch here would mean the retained rows are already inconsistent, and
+-- there is no honest repair — inventing which tenant was meant is exactly the
+-- guess this file refuses to make. It fails LOUDLY instead, the way migration
+-- 055's location backfill does. Zero rows on a database that migrates in order.
+DO $$
+DECLARE bad INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO bad
+    FROM support_access_sessions s
+    JOIN support_access_requests r ON r.request_id = s.request_id
+   WHERE r.tenant_id <> s.tenant_id;
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R4 refused: % support session(s) name a different tenant than '
+                    'the request they were granted under', bad;
+  END IF;
+
+  SELECT COUNT(*) INTO bad
+    FROM support_access_requests r
+    JOIN reauthentication_grants g ON g.grant_id = r.approval_grant_id
+   WHERE g.tenant_id <> r.tenant_id
+      OR (r.decided_by_user_link_id IS NOT NULL AND g.user_link_id <> r.decided_by_user_link_id);
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R4 refused: % approved support request(s) are backed by a grant '
+                    'from another tenant or another person', bad;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX uq_sar_tenant_scoped ON support_access_requests (request_id, tenant_id);
+CREATE UNIQUE INDEX uq_rag_tenant_scoped ON reauthentication_grants (grant_id, tenant_id);
+CREATE UNIQUE INDEX uq_rag_actor_scoped ON reauthentication_grants (grant_id, user_link_id);
+
+ALTER TABLE support_access_sessions
+  ADD CONSTRAINT sas_request_same_tenant
+    FOREIGN KEY (request_id, tenant_id) REFERENCES support_access_requests (request_id, tenant_id);
+
+ALTER TABLE support_access_requests
+  ADD CONSTRAINT sar_approval_grant_same_tenant
+    FOREIGN KEY (approval_grant_id, tenant_id)
+    REFERENCES reauthentication_grants (grant_id, tenant_id),
+  -- …and the grant that approved it belongs to the person who approved it.
+  -- Enforced whenever both are named; `sar_approval_is_high_assurance` above
+  -- already forbids an approved row with no grant.
+  ADD CONSTRAINT sar_approval_grant_is_the_decider
+    FOREIGN KEY (approval_grant_id, decided_by_user_link_id)
+    REFERENCES reauthentication_grants (grant_id, user_link_id);
+
+-- ──────────────────────────────────────────────────────────────
+-- Section 8 — MFA-POLICY CERTIFICATION GETS A VALIDITY AND A REVOCATION
+--
+-- Migration 056 recorded the organization's MFA policy as a bare boolean plus
+-- the instant and the person that set it. Nothing bounded it. A certification
+-- made once was therefore true for ever, and the only way to withdraw it was to
+-- flip the same boolean back — so "this organization still requires MFA", an
+-- external fact that goes stale without announcing itself, was the permanent
+-- foundation of every high-assurance step-up in the system.
+--
+-- Two facts are added, and both make the CLOSED answer reachable:
+--   * a VALIDITY DEADLINE, after which the certification counts for nothing
+--     until an authorized administrator re-confirms it;
+--   * an explicit REVOCATION, attributable to the person who withdrew it, so a
+--     withdrawal is a recorded act rather than the absence of one.
+--
+-- Missing, false, revoked and expired become ONE answer: not certified. The
+-- application-side predicate lives in ONE place
+-- (`EFFECTIVE_MFA_CERTIFICATION_SQL`) and is interpolated by every reader.
+-- ──────────────────────────────────────────────────────────────
+
+ALTER TABLE identity_provider_connections
+  ADD COLUMN mfa_policy_certification_expires_at TIMESTAMPTZ,
+  ADD COLUMN mfa_policy_certification_revoked_at TIMESTAMPTZ,
+  ADD COLUMN mfa_policy_certification_revoked_by_user_link_id
+    UUID REFERENCES user_links (user_link_id);
+
+-- RECONCILIATION FIRST, and it FAILS CLOSED. A certification carrying no
+-- deadline was never a bounded certification, and inventing a deadline for it
+-- would be fabricating the very fact under review — so it is WITHDRAWN. The
+-- authorization version advances because what the connection authorizes has
+-- just changed, which is precisely what a version exists to announce.
+--
+-- Stated plainly: on a database that migrates in order this matches ZERO rows,
+-- because the column is created three statements above. It is written anyway,
+-- ahead of the CHECKs that depend on it, because the ORDERING is the property
+-- under review.
+UPDATE identity_provider_connections
+   SET mfa_policy_certified = FALSE,
+       mfa_policy_certified_at = NULL,
+       mfa_policy_certified_by_user_link_id = NULL,
+       authorization_version = authorization_version + 1,
+       updated_at = NOW()
+ WHERE mfa_policy_certified = TRUE
+   AND mfa_policy_certification_expires_at IS NULL;
+
+-- Now, and only now, the invariants.
+ALTER TABLE identity_provider_connections
+  -- A certification that cannot say WHEN it stops counting is unrepresentable.
+  ADD CONSTRAINT ipc_mfa_certification_is_bounded CHECK (
+    mfa_policy_certified = FALSE
+    OR (mfa_policy_certified_at IS NOT NULL
+        AND mfa_policy_certification_expires_at IS NOT NULL
+        AND mfa_policy_certification_expires_at > mfa_policy_certified_at)
+  ),
+  -- A withdrawal nobody performed is not a withdrawal.
+  ADD CONSTRAINT ipc_mfa_revocation_is_attributable CHECK (
+    (mfa_policy_certification_revoked_at IS NULL)
+    = (mfa_policy_certification_revoked_by_user_link_id IS NULL)
+  ),
+  -- …and a revoked certification can never simultaneously be in force.
+  ADD CONSTRAINT ipc_mfa_revoked_is_not_certified CHECK (
+    mfa_policy_certification_revoked_at IS NULL OR mfa_policy_certified = FALSE
+  );
+
+-- ──────────────────────────────────────────────────────────────
+-- Section 9 — THE REAUTHENTICATION ROW BECOMES THE AUTHORITY ON ITS CALLBACK
+--
+-- R3 generated the reauthentication leg's `state` and PKCE verifier inside the
+-- HTTP route and put them in a sealed cookie. The server stored NEITHER. So the
+-- only record of what the callback was supposed to present was the copy held by
+-- the browser: the round-trip state was CLIENT-AUTHORITATIVE, the seal was the
+-- whole of the defence, and a client that kept a copy could present the same
+-- state again because no server row said "this one is spent". The login leg had
+-- been corrected in R2 for exactly this; the step-up leg had not.
+--
+-- Everything the callback must satisfy now lives on this row:
+--   * `state_hash` / `code_verifier_hash` — the round-trip digests, UNIQUE on
+--     state so the claim is structurally single-use;
+--   * `callback_uri` — the exact redirect this leg was issued for, so a leg
+--     issued for one callback cannot be completed at another;
+--   * `request_id` / `correlation_id` — the same generated pair the logs carry,
+--     screened before arrival (the CHECKs are the second line, not the first);
+--   * `claimed_at` — the instant the round trip was spent, exactly once;
+--   * `terminal_reason` / `terminal_at` — WHY the transaction ended and WHEN.
+--     R3 could reach 'failed' with no reason and no instant, and several
+--     provider-side failures reached no terminal state at all, so a row left at
+--     'started' was indistinguishable from one still legitimately in flight.
+-- ──────────────────────────────────────────────────────────────
+
+ALTER TABLE reauthentication_transactions
+  ADD COLUMN state_hash          TEXT,
+  ADD COLUMN code_verifier_hash  TEXT,
+  ADD COLUMN callback_uri        TEXT,
+  ADD COLUMN request_id          TEXT,
+  ADD COLUMN correlation_id      TEXT,
+  ADD COLUMN claimed_at          TIMESTAMPTZ,
+  ADD COLUMN terminal_reason     TEXT,
+  ADD COLUMN terminal_at         TIMESTAMPTZ;
+
+-- RECONCILIATION FIRST, in five statements.
+--
+-- A transaction still 'started' that cannot name the callback state its
+-- completion has to compare against could only ever be completed by SKIPPING
+-- the comparison. It is expired instead — the same closed treatment section 4
+-- gives a transaction that cannot name its nonce digest.
+UPDATE reauthentication_transactions
+   SET state = 'expired',
+       terminal_reason = 'fbl_020_r4_callback_state_unbound',
+       terminal_at = NOW(),
+       updated_at = NOW()
+ WHERE state = 'started'
+   AND (state_hash IS NULL OR code_verifier_hash IS NULL OR callback_uri IS NULL);
+
+-- Rows that were ALREADY terminal keep their history and gain the two facts
+-- this migration introduces. The instant is DERIVED, never invented: a
+-- completed transaction has `completed_at`, and anything else can only honestly
+-- claim the last time the row was touched.
+UPDATE reauthentication_transactions
+   SET terminal_at = COALESCE(terminal_at, completed_at, updated_at, started_at),
+       terminal_reason = COALESCE(
+         terminal_reason,
+         CASE state
+           WHEN 'completed' THEN 'granted'
+           WHEN 'expired'   THEN 'expired'
+           ELSE 'fbl_020_r4_unclassified'
+         END
+       ),
+       updated_at = NOW()
+ WHERE state IN ('completed', 'failed', 'expired');
+
+-- …and a NON-terminal row carrying either fact is a contradiction, so it loses
+-- them rather than being admitted by a constraint that reads only one direction.
+UPDATE reauthentication_transactions
+   SET terminal_reason = NULL, terminal_at = NULL
+ WHERE state = 'started' AND (terminal_reason IS NOT NULL OR terminal_at IS NOT NULL);
+
+-- Correlation values that do not satisfy the shape are DROPPED, never truncated
+-- into something that looks like a different request.
+UPDATE reauthentication_transactions
+   SET request_id = NULL
+ WHERE request_id IS NOT NULL AND request_id !~ '^[A-Za-z0-9._-]{8,128}$';
+
+UPDATE reauthentication_transactions
+   SET correlation_id = NULL
+ WHERE correlation_id IS NOT NULL AND correlation_id !~ '^[A-Za-z0-9._-]{8,128}$';
+
+-- Constraints follow reconciliation, never precede it.
+ALTER TABLE reauthentication_transactions
+  ADD CONSTRAINT rat_state_hash_shape CHECK (
+    state_hash IS NULL OR state_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD CONSTRAINT rat_code_verifier_hash_shape CHECK (
+    code_verifier_hash IS NULL OR code_verifier_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD CONSTRAINT rat_callback_uri_shape CHECK (
+    callback_uri IS NULL OR length(callback_uri) BETWEEN 1 AND 2000
+  ),
+  ADD CONSTRAINT rat_request_id_shape CHECK (
+    request_id IS NULL OR request_id ~ '^[A-Za-z0-9._-]{8,128}$'
+  ),
+  ADD CONSTRAINT rat_correlation_id_shape CHECK (
+    correlation_id IS NULL OR correlation_id ~ '^[A-Za-z0-9._-]{8,128}$'
+  ),
+  ADD CONSTRAINT rat_terminal_reason_shape CHECK (
+    terminal_reason IS NULL OR length(terminal_reason) BETWEEN 1 AND 100
+  ),
+  -- A STARTED transaction must be able to judge its own callback before it can
+  -- complete. The unbound state is made unrepresentable rather than tolerated.
+  ADD CONSTRAINT rat_started_is_callback_bound CHECK (
+    state <> 'started'
+    OR (state_hash IS NOT NULL AND code_verifier_hash IS NOT NULL AND callback_uri IS NOT NULL)
+  ),
+  -- EVERY terminal state says why and when; no non-terminal state pretends to.
+  -- This is what makes "stuck at started" a DETECTABLE condition rather than an
+  -- ambiguity: a row with no terminal facts is, by construction, still in flight.
+  ADD CONSTRAINT rat_terminal_is_explained CHECK (
+    (state IN ('completed', 'failed', 'expired'))
+    = (terminal_at IS NOT NULL AND terminal_reason IS NOT NULL)
+  ),
+  ADD CONSTRAINT rat_terminal_follows_claim CHECK (
+    claimed_at IS NULL OR terminal_at IS NULL OR terminal_at >= claimed_at
+  );
+
+-- The round trip is SINGLE-USE by construction: one row may own a given state.
+CREATE UNIQUE INDEX uq_rat_state_hash ON reauthentication_transactions (state_hash);
+
+-- ──────────────────────────────────────────────────────────────
+-- Section 10 — A SUPPORT WINDOW CLOSING IS A RECORDED TRANSITION
+--
+-- R3 expressed a support session's end in exactly one way that anybody ever
+-- observed: `revoked_at`, set by a person. Expiry was expressed only as
+-- `expires_at` being in the past, and NOTHING watched it go by. Access does stop
+-- on time — every reader filters `expires_at > NOW()` — but no row changes, no
+-- authorization version advances, and no audit event is written, so the trail an
+-- operator reads for "what happened to this platform person's access" shows a
+-- session granted and then silence. "Its hour ran out" and "it is still open"
+-- are the same evidence, which is precisely the shape of gap this revision keeps
+-- closing elsewhere.
+--
+-- `expired_at` is that transition, and the three constraints below are what make
+-- it a transition rather than a hopeful timestamp:
+--
+--   * IT CANNOT BE RECORDED EARLY. `expired_at >= expires_at` means the row can
+--     only say "this window closed" once the window has actually closed. A
+--     processor bug, a clock-skewed host or a hand-written UPDATE cannot retire a
+--     live session by claiming it expired — that act is revocation, it has its
+--     own columns, and it names the person who did it.
+--   * A SESSION ENDS ONCE, ONE WAY. `revoked_at` and `expired_at` are mutually
+--     exclusive: a revoked session's end is attributed to the revoker for ever,
+--     and an expired one's to the clock. Allowing both would make the audit
+--     trail's answer to "who ended this" depend on which write landed last.
+--   * IT IS ONLY EVER SET, NEVER MOVED. Ordinary readers do not consult
+--     `expired_at` at all: it is redundant with `expires_at <= NOW()` BY
+--     CONSTRUCTION (the first constraint), so this column adds evidence and
+--     changes no authorization answer. That is deliberate — an expiry processor
+--     that fell behind must never widen access, and one that ran twice must never
+--     narrow it.
+--
+-- Together with the partial index, "the sessions whose expiry has not been
+-- recorded yet" is a cheap, exact, self-draining set: the claim is
+-- `expired_at IS NULL`, so a transition is idempotent under repetition and under
+-- concurrency without a queue, a lease table or an outbox.
+--
+-- NO RECONCILIATION IS NEEDED OR PERFORMED, and that is a statement about the
+-- data rather than an omission: the column arrives NULL on every existing row,
+-- NULL satisfies all three constraints, and the processor picks up any already
+-- lapsed session on its next pass and records the transition then. Nothing is
+-- back-dated, because an instant nobody observed cannot be invented.
+-- ──────────────────────────────────────────────────────────────
+
+ALTER TABLE support_access_sessions
+  ADD COLUMN expired_at TIMESTAMPTZ;
+
+ALTER TABLE support_access_sessions
+  ADD CONSTRAINT sas_expiry_is_not_early CHECK (
+    expired_at IS NULL OR expired_at >= expires_at
+  ),
+  ADD CONSTRAINT sas_ends_once_and_one_way CHECK (
+    revoked_at IS NULL OR expired_at IS NULL
+  );
+
+-- The processor's claim set, and nothing else: due, unrevoked, unrecorded.
+CREATE INDEX idx_sas_expiry_due ON support_access_sessions (expires_at)
+  WHERE revoked_at IS NULL AND expired_at IS NULL;
 
 -- ============================================================
 -- Total: 1 table created (login_transactions), 0 rows deleted.
--- Unprovable sessions revoked; ambiguous links disabled; every new
--- security assertion defaults CLOSED.
+-- Unprovable sessions revoked; ambiguous links disabled; the identity
+-- tuple enforced by composite foreign keys rather than by convention;
+-- policy evidence versioned so a new decision cannot be incomplete;
+-- MFA certification bounded and revocable; the step-up callback made
+-- server-authoritative and every terminal state explained; a support
+-- window's expiry made a recorded, once-only transition;
+-- every new security assertion defaults CLOSED.
 -- ============================================================
