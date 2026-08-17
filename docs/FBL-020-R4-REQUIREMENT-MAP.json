@@ -642,7 +642,7 @@
         },
         {
           "file": "tests/delivery-documentation.test.ts",
-          "name": "the report is about the revision being delivered, and does not claim an unmeasured CI run"
+          "name": "the report is about the revision being delivered, and its CI position is internally consistent"
         },
         {
           "file": "tests/delivery-documentation.test.ts",

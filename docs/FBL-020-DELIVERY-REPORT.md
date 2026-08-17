@@ -11,12 +11,19 @@ it produced were accepted as genuine. Sections 1–12 are retained where they re
 true of this tree and corrected where they are not. §13 records the CI position,
 §14 is what R4 adds, and §15 lists the gates that are NOT DISCHARGED.
 
-**NO CI RUN EXISTS FOR THIS TREE.** Nothing in this revision has been committed or
-pushed — that is a later step — so no workflow run can have measured it. Every
-workflow run id quoted below belongs to R2 or R3 and is labelled as such. The
-figures in §14 were measured locally, and each names the CI artifact that will
-carry it once the tree is pushed. Filling a CI section in from a run that measured
-a different tree is exactly the R2 defect described in §2, and it is not repeated.
+**The R4 CI gate is DISCHARGED.** Code-bearing commit
+`2b75d8abbbf68f3e95c4542540ad90ade7da844f`; `ci.yml` run `32028562952`, `event=push`,
+`head_sha` equal to that commit, all four jobs `success`, four evidence artifacts —
+recorded with their digests in §13. Run ids quoted elsewhere in this document belong to
+R2 or R3 and are labelled as such.
+
+§13 was written as an explicit placeholder and shipped that way inside the code-bearing
+commit, because no run for a commit can exist before the commit does; it was filled in
+afterwards, from the run matched on `head_sha` and on workflow path. That ordering is the
+point. Filling a CI section from a run that measured a different tree is the R2 defect
+described in §2, and §13 records the attempt that nearly repeated it here: a poller that
+took `runs[0]` for the SHA returned a **Dependabot** run, one job, no artifacts,
+`conclusion: success`.
 
 ## 0. The governing document — what it actually says
 
@@ -1161,26 +1168,107 @@ requires.
 closeout commit is itself a second commit and runs its own build; its result does
 not retroactively alter anything above, which describes `f816642` only.
 
-## 13. CI evidence for R4 — NOT MEASURED
+## 13. CI evidence for R4 — MEASURED
 
-**NO CI RUN EXISTS FOR THIS TREE.** R4 is an uncommitted working tree on top of
-`9cba262`; committing and pushing is a later step, so no workflow run can have
-observed it, and nothing here is filled in from a run that observed something else.
-Every figure quoted for R4 in §14 was measured locally and names the CI artifact
-that will carry it.
+Filled in after the code-bearing commit was pushed and after the **`ci.yml`** run
+whose `head_sha` equals that commit reported a conclusion.
 
-| Field                      | Value                                                 |
-| -------------------------- | ----------------------------------------------------- |
-| Implementation parent      | `9cba262749469178e47f4a4540b1500da25207fa` (= `HEAD`) |
-| Cumulative acceptance base | `cac9b21`                                             |
-| Code-bearing commit SHA    | **NOT MEASURED — nothing committed**                  |
-| CI run id                  | **NOT MEASURED — no run exists**                      |
-| `head_sha` equals commit?  | **NOT MEASURED**                                      |
-| Job conclusions            | **NOT MEASURED**                                      |
-| Artifact digests           | **NOT MEASURED**                                      |
+**A near-miss worth recording, because this order is about evidence discipline.** The
+first poller queried `/actions/runs?head_sha=…` and took `runs[0]`. Two workflows fire
+on one SHA here, and it returned run `32028686605` —
+`path=dynamic/dependabot/dependabot-updates`, `event=dynamic`, a single job named
+"Dependabot", **zero artifacts** — `conclusion: success`. That is not the CI gate, and
+reporting it as one would have been a false green of exactly the kind FBL-000 was
+rejected for; the repository's own lesson from that rejection is to query
+`/actions/workflows/ci.yml/runs` and read PER-JOB conclusions, and it was not followed
+at the first attempt. It was caught because a real run on this repository has four jobs
+and four evidence artifacts, and this had one job and none. Every value below comes from
+the `ci.yml` run, identified by workflow path, with all four job conclusions read
+individually rather than trusting a top-level field.
 
-What CAN be stated now is the shape of the evidence the run will produce, because
-the workflow is committed and its evidence-completeness step enumerates it. Job
+| Field                     | Value                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------- |
+| Code-bearing commit SHA   | `2b75d8abbbf68f3e95c4542540ad90ade7da844f`                                    |
+| Workflow                  | `.github/workflows/ci.yml` (**not** the Dependabot workflow on the same SHA)  |
+| CI run id                 | `32028562952`                                                                 |
+| Run URL                   | https://github.com/Alegnta19/Car-dealership-software/actions/runs/32028562952 |
+| `head_sha` equals commit? | **YES** — compared explicitly                                                 |
+| Event                     | `push`                                                                        |
+| Status / conclusion       | `completed` / **success**                                                     |
+| Jobs / non-success        | **4 / 0**                                                                     |
+
+| Job                                                        | Conclusion  |
+| ---------------------------------------------------------- | ----------- |
+| typecheck, lint ratchet, build, all tests, scans           | **success** |
+| populated upgrade drill + reconciliation negative controls | **success** |
+| container build (digest-pinned base)                       | **success** |
+| secret scan (genuine full history)                         | **success** |
+
+| Artifact               | Size     | sha256 (downloaded zip)                                            |
+| ---------------------- | -------- | ------------------------------------------------------------------ |
+| `baseline-evidence`    | 73,422 B | `537665d3a26e6a58808bf2c3f4189fbb37bd0facae9f8febe8deb937e71e0521` |
+| `upgrade-evidence`     | 42,931 B | `315ce719f29908aed59e53afdd33042c4c653490c3b1a7d91a5b33ffb65fdf56` |
+| `secret-scan-evidence` | 8,109 B  | `b2134e70db8f2abaad67056fbdfd932fc322f4612b44fb6c5084eb798b1be1eb` |
+| `container-evidence`   | 701 B    | `41b0ebae7a0279888e03b8f417158ee7a5bda2df900a4f9e74438cf03aa82b9c` |
+
+### Read from the run's own artifacts
+
+`baseline-evidence/test-summary.json` — **459 tests / 47 suites, 459 passed, 0 failed,
+0 cancelled, 0 skipped, 0 todo**, and the enforced floors travel with it
+(`floor_tests: 459`, `floor_suites: 47`), so a future revision cannot quietly shrink
+the suite. Identical to the local figure; local corroborates, this is the authority.
+
+`upgrade-evidence/identity-pre-057.json` — the §6 gate that R3 did not have. The legacy
+identity seed is **nonempty**: 3 provider connections, 4 user links, 3 identity
+sessions, 4 role bindings, 2 policy decisions, 3 reauthentication transactions, 1
+grant, 2 support requests, 1 support session. `identity-post-057.json` reports the same
+counts before and after with `failures: []` — 057 reconciled the rows and invented or
+destroyed none.
+
+`upgrade-evidence/negative-controls.json` / `.txt` — each load-bearing reconciliation
+removed on an isolated copy, every control **CONTROL SATISFIED** with
+`signature_matched=true`, and the failures land where declared: `ul_activated_is_bound`
+raises SQLSTATE 23514 at the MIGRATION stage, while the derivation controls fail at the
+VERIFIER stage with the exact row-level diff. The reconciliation is load-bearing, proven
+in CI rather than by a hand drill.
+
+`baseline-evidence/mutation-kill.json` / `.txt` — **7 mutations, 7 killed, 0 survived**,
+each with `baseline_green=true`, `working_tree_intact=true` and the named dead tests, run
+in an isolated copy of the tree. Reverting the effective-window rule, the MFA validity
+deadline, activated-link-only admission, the server-generated request id, the support
+header expiry, the assurance floor, or the ledger drift refusal each kills specifically
+named tests.
+
+`baseline-evidence/requirement-map-check.txt` — _requirement map OK: every requirement
+resolves to tests, code, steps and artifacts that exist_.
+
+`baseline-evidence/worker-expiry-pass.txt` — the support-expiry job runs as a real
+worker pass: `{"jobs":["identity.support_access.expiry"],"mode":"once"}`. §4's processor
+is reachable in the shipped worker, not merely implemented.
+
+`upgrade-evidence/fingerprint-equality.txt` — fresh == upgraded ==
+`271c892662937a33c2972b83a30c4f02f441a5d058ac076e07d4248dd5d29d9f`, `equal=true`.
+
+`container-evidence/image-digest.txt` —
+`sha256:63d2e67be36d20b0ffbb47c040ceecbd2c8976def1a0c535feb6f92ba1b3060e`.
+
+`baseline-evidence/tool-versions.txt` — `node=v20.20.2`, `npm=10.8.2`, `tsc=5.9.3`,
+`eslint=v10.8.0`, `prettier=3.9.6`,
+`postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777`.
+
+**The R4 CI gate is DISCHARGED for `2b75d8a`.** This documentation closeout is a second
+commit and runs its own build; its result does not retroactively alter anything above,
+which describes `2b75d8a` only.
+
+Implementation parent `9cba262749469178e47f4a4540b1500da25207fa`; cumulative
+acceptance base `cac9b21`.
+
+The evidence inventory below was written while this section was still an explicit
+placeholder, and it is retained because it is what makes the section auditable: the
+artifact names were declared BEFORE the run existed, and every one of them is asserted
+to appear in `ci.yml` by `tests/delivery-documentation.test.ts`. Comparing this list
+against the four artifacts actually produced is how a reviewer confirms nothing was
+quietly dropped. Job
 `typecheck, lint ratchet, build, all tests, scans` uploads `baseline-evidence`
 containing `tool-versions.txt`, `migrate-second-run.log`, `migration-manifest.json`,
 `healthz.json`, `worker-smoke.txt`, `worker-expiry-pass.txt`, `test-output.log`,
@@ -1518,12 +1606,20 @@ the first of these under "residual risk" and was rejected for it.
    discharge this from here: it needs credentials and an operator. The substitution
    point is `useIdentityProviderForTests`.
 
-2. **The R4 CI run is NOT DISCHARGED.** Nothing is committed or pushed, so the four
-   jobs — including the populated upgrade drill, the negative controls, the
-   mutation-kill checks and the requirement-map check — have not executed in CI for
-   this tree. Every one of them passes locally, and §13 records that plainly rather
-   than borrowing R3's run. This is discharged by the later commit-and-push step, not
-   by this document.
+2. ~~**The R4 CI run is NOT DISCHARGED.**~~ **NOW DISCHARGED.** All four jobs —
+   including the populated upgrade drill, the reconciliation negative controls, the
+   mutation-kill checks and the requirement-map check — executed in CI for this tree
+   and reported `success` on `ci.yml` run `32028562952`, whose `head_sha` equals the
+   code-bearing commit `2b75d8a`. §13 carries the per-job conclusions, the four
+   artifact digests, and the figures read from the artifacts themselves. The original
+   wording is struck through rather than deleted so this list still shows what was
+   undischarged at code-freeze and what closed afterwards.
+
+**So exactly one gate remains undischarged: live WorkOS certification.** Everything
+else the R4 order requires is done and CI-proven. Four items are open but they are
+**not gates** — they are gaps in guard scaffolding, itemised in §11 and in
+`docs/identity/KNOWN-LIMITATIONS.md` under "Open at R4 submission", disclosed at the
+repository owner's instruction rather than held for another correction pass.
 
 ## 16. Position
 

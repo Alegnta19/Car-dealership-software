@@ -88,12 +88,45 @@ describe('the delivery documentation describes this delivery (FBL-020-R4 §7)', 
     );
   });
 
-  test('the report is about the revision being delivered, and does not claim an unmeasured CI run', () => {
+  test('the report is about the revision being delivered, and its CI position is internally consistent', () => {
     assert.ok(/^# FBL-020 .*R4/m.test(REPORT), 'the report heading must name the revision R4');
+
+    // This assertion used to be one-directional: it REQUIRED the string
+    // 'NO CI RUN EXISTS FOR THIS TREE', which is correct only before the push and
+    // becomes a demand for a falsehood the moment the run exists. The property worth
+    // pinning is not "the report says no run exists" — it is "the report's CI claim
+    // matches its own evidence". Both states are legal; claiming both at once, or
+    // claiming discharge with no attributed run, is not.
+    const declaresNoRun = REPORT.includes('NO CI RUN EXISTS FOR THIS TREE');
+    const declaresDischarged = /R4 CI (gate|run) is DISCHARGED/.test(REPORT);
+
     assert.ok(
-      REPORT.includes('NO CI RUN EXISTS FOR THIS TREE'),
-      'with nothing pushed, the report must say so rather than filling in a stale run',
+      declaresNoRun !== declaresDischarged,
+      'the report must either declare NO CI RUN EXISTS FOR THIS TREE or declare the R4 CI gate DISCHARGED — exactly one, never both and never neither',
     );
+
+    if (declaresDischarged) {
+      // Discharge is only meaningful with the three facts that make it checkable: the
+      // commit, the run, and the statement that the run observed THAT commit. R2 filed
+      // a run id for one tree as evidence for another; requiring head_sha equality in
+      // the prose is what makes that visible to a reader.
+      assert.match(
+        REPORT,
+        /head_sha` equals commit\?\s*\|\s*\*\*YES\*\*/,
+        'a discharged CI gate must state that head_sha equals the code-bearing commit',
+      );
+      assert.match(
+        REPORT,
+        /\.github\/workflows\/ci\.yml/,
+        'a discharged CI gate must name the workflow it was measured on — a run id alone does not distinguish ci.yml from another workflow on the same SHA',
+      );
+      assert.match(
+        REPORT,
+        /Jobs \/ non-success\s*\|\s*\*\*\d+ \/ 0\*\*/,
+        'a discharged CI gate must report per-job conclusions, not only the run-level one',
+      );
+    }
+
     // Every workflow run id the report mentions must be attributed to the revision it
     // belongs to. R3's report is where a run id for one tree was presented as evidence
     // for another; an unqualified id is the shape of that mistake.
@@ -101,7 +134,7 @@ describe('the delivery documentation describes this delivery (FBL-020-R4 §7)', 
       const at = m.index ?? 0;
       const around = REPORT.slice(Math.max(0, at - 300), at + 300);
       assert.ok(
-        /\bR2\b|\bR3\b|superseded/.test(around),
+        /\bR2\b|\bR3\b|\bR4\b|superseded|Dependabot/.test(around),
         `run ${m[1]} is cited without saying which revision it measured`,
       );
     }
