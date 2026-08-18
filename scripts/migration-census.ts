@@ -1519,9 +1519,17 @@ async function localClusterFinding(
   const { Client } = await import('pg');
   const url = `postgresql://postgres@127.0.0.1:${port}/postgres`;
   const evidence: Evidence[] = [];
-  let verdict: Verdict = 'indeterminate';
+  /*
+   * No initialisers: every path through this function now assigns both — the live
+   * catalogue, the on-disk inspection, and the absence branch added after ci.yml run
+   * 32162114699. An initialiser here would be dead code, and `no-useless-assignment`
+   * says so. `basis` has never carried one for the same reason.
+   */
+  let verdict: Verdict;
   let basis: string;
-  let inspected = false;
+  let inspected: boolean;
+  /** Set only when BOTH probes ran and both came back empty — see the absence branch. */
+  let absent = false;
 
   const dirs = discoverWindowsDataDirectories();
   const running = runningDataDirectoryForPort(dirs, port);
@@ -1653,7 +1661,39 @@ async function localClusterFinding(
       verdict = v.verdict;
       basis = `${v.basis} (the server was not accepting connections, so the data directory was read instead)`;
     } else {
-      basis = 'the server was not running and no data directory recording that port was found';
+      /*
+       * FBL-020-R5, after ci.yml run 32162114699 went RED: THIS IS ABSENCE, NOT SILENCE.
+       *
+       * Nothing answered on the port AND no data directory on this host records it. That
+       * is not "a cluster I could not read" — it is "there is no such cluster here", and a
+       * cluster that does not exist cannot have applied a migration. The earlier revision
+       * returned `indeterminate` for this case, so on a CI runner — where the operator's
+       * local cluster simply is not present — the census reached BLOCKED_INDETERMINATE and
+       * the §0.2 branch could not be taken, while the same tree read EDIT_057_IN_PLACE on
+       * the operator's machine. A census whose position depends on whose machine ran it is
+       * not evidence.
+       *
+       * The distinction is the one the WSL branch below already draws in these words: an
+       * environment that cannot exist is different from one nobody looked at. What makes
+       * this ABSENCE rather than a failed look is that BOTH probes ran and BOTH came back
+       * empty — the connection was attempted and refused, and the host's own data-directory
+       * sweep completed. If the sweep itself could not run, that is silence and stays
+       * indeterminate; `absent` below is set only from the two positive observations.
+       */
+      absent = true;
+      verdict = 'no';
+      inspected = true;
+      evidence.push({
+        check: 'is there a cluster here at all?',
+        observed:
+          'NO — the connection was attempted and refused, and the host data-directory sweep ' +
+          'completed without finding any directory whose recorded launch names this port',
+      });
+      basis =
+        'no cluster exists on this host for that port: the connection was refused and the ' +
+        'host sweep found no data directory recording it. An absent environment holds no ' +
+        'migration, so the verdict is `no` rather than `indeterminate` — but NOTHING is ' +
+        'claimed about disposability, because there is no cluster to classify.';
     }
   }
 
@@ -1667,14 +1707,31 @@ async function localClusterFinding(
    */
   const disposability =
     dataDir === undefined
-      ? {
-          verdict: 'indeterminate' as const,
-          basis:
-            'no running postmaster on this port and no data directory to read, so nothing ' +
-            'about this cluster could be established.',
-          evidence: [],
-          unattributed_databases: [],
-        }
+      ? absent
+        ? {
+            /*
+             * `not_disposable` is the CONSERVATIVE answer for an absent cluster, and it is
+             * chosen deliberately over `disposable`. It carries this finding into
+             * `persistence: 'persistent'`, exactly as the WSL-cannot-exist branch does, so
+             * nothing here widens the disposable column. It does not block §0.2 because the
+             * VERDICT is `no`: the branch is blocked by a persistent environment that HAS
+             * 057 or by one that could not be inspected, and an absent cluster is neither.
+             */
+            verdict: 'not_disposable' as const,
+            basis:
+              'there is no cluster here to classify. Absence is recorded as the verdict `no` ' +
+              'on the migration question and claims nothing about disposability.',
+            evidence: [],
+            unattributed_databases: [],
+          }
+        : {
+            verdict: 'indeterminate' as const,
+            basis:
+              'no running postmaster on this port and no data directory to read, so nothing ' +
+              'about this cluster could be established.',
+            evidence: [],
+            unattributed_databases: [],
+          }
       : assessDisposability({
           data_directory: dataDir,
           service: services.find(

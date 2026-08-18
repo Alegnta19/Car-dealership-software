@@ -712,40 +712,33 @@ git diff --shortstat cac9b21 -- . ':(exclude)docs/FBL-020-DELIVERY-REPORT.md'
 ```
 
 ```
-164 files changed, 42085 insertions(+), 2434 deletions(-)
+183 files changed, 52508 insertions(+), 2434 deletions(-)
 ```
 
 ```bash
-git status --porcelain --untracked-files=all | grep -c '^??'
-```
-
-```
-19
-```
-
-```bash
-git status --porcelain --untracked-files=all | grep -vc '^??'
-```
-
-```
-45
+git status --porcelain --untracked-files=all
 ```
 
 The two measurements answer different questions and are not summed. The first is the whole
-delta from the cumulative acceptance base `cac9b21` to this working tree — **164 files changed, 42085 insertions(+), 2434 deletions(-)** —
+delta from the cumulative acceptance base `cac9b21` to this working tree — **183 files changed, 52508 insertions(+), 2434 deletions(-)** —
 excluding this report, which the pathspec removes so that editing the report cannot move the
 figure. The second and third describe only what is UNCOMMITTED against `HEAD` (`e08af42`):
-**19** untracked paths git does not yet know and **45** tracked paths it does, **64**
-working-tree paths in total.
+**that command prints nothing**, because the code-bearing commit takes every changed path
+with it.
 
-**These last two figures are pre-commit measurements and are 0 by construction afterwards.**
-They describe an UNCOMMITTED tree, so the code-bearing commit sets both to zero; they are
-recorded here because the order asks what this tree is before it is committed, not because
-they survive it. The first figure — the cumulative delta from `cac9b21` — is unaffected by
-committing, because committing moves no content. That asymmetry is why only the first is
-gate-bound: `scripts/check-published-figures.ts` recomputes it, while the two working-tree
-counts are labelled NOT GATE-CHECKED and were re-measured by hand for this revision after
-the completed gate found the previous values stale — the second recurrence of that finding.
+**NO WORKING-TREE COUNT IS PUBLISHED HERE, AND THAT IS THE CORRECTION.**
+Twice now a published working-tree count went stale, and the second time it was the act of
+publishing that invalidated it: a count of uncommitted paths is a statement the commit
+carrying it makes false. The figure was reported as 16, then 18, then 19, and would have
+been wrong again the moment this file was committed. So the count is gone and the COMMAND
+stands in its place — a reader runs it and sees the tree, which is the only form of that
+figure that cannot rot.
+
+The cumulative delta above is different and IS published, because committing moves no
+content: it is the same number before and after, `scripts/check-published-figures.ts`
+recomputes it, and the pathspec excludes this report so editing the report cannot move it.
+That asymmetry — a diff against a fixed base is stable, a count of uncommitted work is not
+— is the whole reason one is quoted and the other is not.
 
 R4's report carried a per-file diffstat table of 163 rows; it is **removed rather than
 carried forward**, because it was the single largest source of stale figures in this

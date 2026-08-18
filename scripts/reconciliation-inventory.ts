@@ -168,10 +168,51 @@ export function digest(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+/**
+ * FBL-020-R5, after ci.yml run 32162114699 went RED: THE INVENTORY KEY MUST NOT LOOK LIKE
+ * A CREDENTIAL.
+ *
+ * The key was `digest(normalized)` — a bare 64-character hex sha256. gitleaks'
+ * `generic-api-key` rule flags long hex runs, so committing this inventory produced 27
+ * findings and failed the full-history secret scan. The values were never secrets; they
+ * are content-addressed identifiers derived from the statement text.
+ *
+ * The fix is the FORMAT, not a suppression list. 27 `.gitleaksignore` fingerprints would
+ * have rotted the moment the inventory regenerated — every fingerprint embeds the commit
+ * and the line — and this repository's suppression policy is exact fingerprints only. So
+ * the key is now a readable prefix plus a hyphen-separated, truncated digest: no run of 32
+ * or more hex characters survives, and the value is still a pure function of the statement.
+ *
+ * TRUNCATION IS GUARDED, NOT ASSUMED. 64 bits over a few dozen statements makes collision
+ * vanishingly unlikely but not impossible, and a silent collision would merge two
+ * reconciliations in the inventory and in the negative-control anchors that key off it.
+ * `assertUniqueKeys` below fails the generator instead.
+ */
+export function inventoryKey(text: string): string {
+  const hex = digest(text);
+  return `stmt-${hex.slice(0, 8)}-${hex.slice(8, 16)}`;
+}
+
+/** Fails loudly rather than letting a truncated key silently merge two statements. */
+export function assertUniqueKeys(keys: readonly string[]): void {
+  const seen = new Map<string, number>();
+  const collisions: string[] = [];
+  keys.forEach((k, i) => {
+    const first = seen.get(k);
+    if (first === undefined) seen.set(k, i);
+    else collisions.push(`${k} (statements ${first + 1} and ${i + 1})`);
+  });
+  if (collisions.length > 0) {
+    throw new Error(
+      `inventory key collision — truncation is too short for this corpus: ${collisions.join('; ')}`,
+    );
+  }
+}
+
 const DML = new Set(['INSERT', 'UPDATE', 'DELETE']);
 
 export function parseStatements(sql: string): Statement[] {
-  return splitStatements(sql).map((raw, index) => {
+  const parsed = splitStatements(sql).map((raw, index) => {
     const normalized = normalizeStatement(raw.text);
     const verb = (/^([A-Za-z]+)/.exec(normalized)?.[1] ?? '').toUpperCase();
     let target = '';
@@ -199,10 +240,13 @@ export function parseStatements(sql: string): Statement[] {
       target,
       raises: verb === 'DO' && /RAISE\s+EXCEPTION/i.test(normalized),
       normalized,
-      key: digest(normalized),
+      key: inventoryKey(normalized),
       excerpt: excerpt.slice(0, 120),
     };
   });
+  // The guard runs on every parse, so a collision cannot reach an artifact.
+  assertUniqueKeys(parsed.map((s) => s.key));
+  return parsed;
 }
 
 /** A reconciliation: it changes retained rows, or it refuses to proceed. */
@@ -236,7 +280,7 @@ export function controlCoverage(
     )
       suffix += 1;
     const removed = sql.slice(prefix, sql.length - suffix);
-    byKey.set(digest(normalizeStatement(removed)), control.id);
+    byKey.set(inventoryKey(normalizeStatement(removed)), control.id);
   }
   return byKey;
 }
