@@ -78,11 +78,17 @@ jobs:
       # The worker's wiring, proved WITHOUT a schema: --list-jobs touches no database, so
       # this step also proves the job registry is reachable from the compiled entry point
       # before migrations have run.
+      #
+      # FBL-020-R5 §4.8: ALL THREE sweeps are grepped, not just the first. Greping one
+      # name is what let the login-transaction and step-up sweeps stay unregistered for
+      # four revisions while this step stayed green.
       - name: Worker job registry smoke test
         run: |
           set -o pipefail
           node apps/worker/dist/main.js --list-jobs | tee artifacts/worker-smoke.txt
           grep -q 'identity.support_access.expiry' artifacts/worker-smoke.txt
+          grep -q 'identity.login_transaction.expiry' artifacts/worker-smoke.txt
+          grep -q 'identity.reauthentication_transaction.expiry' artifacts/worker-smoke.txt
 
       - name: Migrations apply from an empty database
         run: npm run migrate
@@ -102,8 +108,47 @@ jobs:
           npm run migrate 2>&1 | tee artifacts/migrate-second-run.log
           grep -q '"applied":0' artifacts/migrate-second-run.log
 
-      - name: Migration manifest (filenames + SHA-256)
+      - name: Migration manifest (filenames + canonical-LF SHA-256)
         run: npx tsx scripts/migration-manifest.ts migrations --out artifacts/migration-manifest.json
+
+      # FBL-020-R5 §0.6: EVERY reconciliation in 057 is either covered by a negative control
+      # or declared, with its reason, in architecture/reconciliation-inventory-057.json. The
+      # control coverage is COMPUTED from each control's anchors, so it cannot be overstated
+      # the way R4's prose was. An unaccounted reconciliation fails this step.
+      # FBL-020-R5 §0.1 — THE CENSUS RUNS HERE TOO, AND WHAT THAT DOES AND DOES NOT SHOW.
+      #
+      # A census is a statement about the machine it runs on, so THIS run reports the RUNNER:
+      # it proves the script executes on a clean host and records that the runner holds no
+      # persistent PostgreSQL of its own. The §0.2 decision rests on the census taken on the
+      # implementer's machine, which is delivered as its own artifact and quoted in
+      # docs/FBL-020-DELIVERY-REPORT.md §0. This step is therefore EVIDENCE, NOT A GATE: it
+      # asserts the artifact exists and is non-empty and nothing else, because a runner cannot
+      # observe the environments the order asks about.
+      - name: Persistent-environment census (this runner; evidence, not a gate)
+        run: |
+          set -o pipefail
+          npx tsx scripts/migration-census.ts --out artifacts/migration-census.json \
+            --log artifacts/migration-census.txt
+          grep -q '"acceptance": "NOT_REVIEWED"' artifacts/migration-census.json
+
+      # FBL-020-R5 gate finding G5 — THIS ONE IS A GATE.
+      #
+      # The census above is evidence about the runner and cannot decide §0.2. What CAN be
+      # decided anywhere, on any host, is whether the delivery documents state the position
+      # the census artifact in front of them actually carries. R5 shipped an artifact
+      # concluding FREEZE 057 alongside a report and a requirement map asserting the
+      # opposite branch, with 057 edited in place and no 058 — and nothing compared them.
+      # This step compares them, and fails the run when they disagree.
+      - name: Census position vs delivery prose (the artifact and the documents must agree)
+        run: npx tsx scripts/check-census-prose.ts
+
+      - name: Reconciliation inventory of 057 (every reconciliation accounted for)
+        run: |
+          set -o pipefail
+          npx tsx scripts/reconciliation-inventory.ts \
+            --out artifacts/reconciliation-inventory-057.json \
+            --log artifacts/reconciliation-inventory-057.txt
+          grep -q '"reconciliations_unaccounted": 0' artifacts/reconciliation-inventory-057.json
 
       - name: Application starts and readiness succeeds (compiled output)
         run: |
@@ -129,7 +174,7 @@ jobs:
       - name: Enforce test summary (all eight fields, floors, zero failed/cancelled/skipped/todo)
         run: npx tsx scripts/parse-test-summary.ts artifacts/test-output.log artifacts/test-summary.json
 
-      - name: Requirement map (every R4 requirement resolves to tests that exist)
+      - name: Requirement map (every R5 clause is covered and every requirement resolves to tests that exist)
         run: |
           set -o pipefail
           npx tsx scripts/check-requirement-map.ts --out artifacts/requirement-map-check.txt
@@ -144,6 +189,16 @@ jobs:
           npx tsx scripts/mutation-kill.ts --out artifacts/mutation-kill.json \
             --log artifacts/mutation-kill.txt
           grep -q '"mutations_survived": 0' artifacts/mutation-kill.json
+
+      # FBL-020-R5 §3.3: no delivery document may publish a figure that disagrees with the
+      # run or the constant producing it. This step runs AFTER the summary parser and the
+      # mutation runner precisely because it reads their artifacts; the same comparison
+      # runs in-suite against whatever artifacts exist there.
+      - name: Published figures vs their artifacts (no figure is retyped)
+        run: |
+          set -o pipefail
+          npx tsx scripts/check-published-figures.ts | tee artifacts/published-figures.txt
+          npx tsx scripts/check-published-figures.ts --list > artifacts/published-figures.tsv
 
       - name: Schema fingerprint (fresh chain)
         run: |
@@ -164,6 +219,9 @@ jobs:
                    worker-smoke.txt worker-expiry-pass.txt \
                    test-output.log test-summary.json schema-fingerprint.json schema-fingerprint.txt \
                    requirement-map-check.txt mutation-kill.json mutation-kill.txt \
+                   published-figures.txt published-figures.tsv \
+                   reconciliation-inventory-057.json reconciliation-inventory-057.txt \
+                   migration-census.json migration-census.txt \
                    npm-audit.json sbom.cdx.json; do
             test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }
           done
@@ -221,15 +279,28 @@ jobs:
       - name: Locked install
         run: npm ci
 
-      - name: Retained-fixture checksums (must stay byte-identical to f76a27a)
+      # FBL-020-R5 §0.5: the retained fixture is COMPARED against FIXED COMMITTED DIGESTS in
+      # architecture/migration-fixture-chains.json, not merely recorded. The previous step was
+      # named "must stay byte-identical to f76a27a" and could not detect that it had not: it
+      # wrote down whatever it found and the job carried on.
+      - name: Retained fixture must match its committed digests (f76a27a)
         run: |
+          set -o pipefail
           mkdir -p artifacts
-          npx tsx scripts/migration-manifest.ts tests/fixtures/schema-f76a27a --out artifacts/fixture-checksums.json
+          npx tsx scripts/migration-manifest.ts tests/fixtures/schema-f76a27a \
+            --expect-chain schema-f76a27a --out artifacts/fixture-checksums.json
+          grep -q '"comparison": "OK"' artifacts/fixture-checksums.json
 
+      # FBL-020-R5 §0.4: a migrations directory that is not the canonical one must be opted
+      # into BY NAME, and the runner then requires the directory to match the chain's declared
+      # filenames and digests exactly. It weakens no ledger refusal: a body this directory
+      # withholds is still resolved from migrations/ and still verified there.
       - name: Apply the earliest retained schema (f76a27a; migrations 000 + 049)
         run: |
           set -o pipefail
-          MIGRATIONS_DIR=tests/fixtures/schema-f76a27a npm run migrate 2>&1 | tee artifacts/upgrade-log.txt
+          MIGRATIONS_DIR=tests/fixtures/schema-f76a27a MIGRATION_FIXTURE_CHAIN=schema-f76a27a \
+            npm run migrate 2>&1 | tee artifacts/upgrade-log.txt
+          grep -q '"mode":"fixture"' artifacts/upgrade-log.txt
 
       - name: Seed legacy Fixed Ops data that schema allowed
         run: |
@@ -260,7 +331,8 @@ jobs:
       - name: Migrate through the last PRE-057 migration (050..056)
         run: |
           set -o pipefail
-          MIGRATIONS_DIR="$PRE057" npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+          MIGRATIONS_DIR="$PRE057" MIGRATION_FIXTURE_CHAIN=pre-057 \
+            npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
 
       # The assertion the previous version of this job made as its ONLY assertion, kept
       # at the one point where it is a true statement about 055/056: before any identity
@@ -298,6 +370,9 @@ jobs:
             --out artifacts/negative-controls.json \
             --log artifacts/negative-controls.txt
           grep -q '"controls_failed": 0' artifacts/negative-controls.json
+          # `--only` exists for the revert-proof loop; a narrowed run must never stand in for
+          # the gate, so the artifact records that it was narrowed and this asserts it was not.
+          grep -q '"controls_filtered": false' artifacts/negative-controls.json
 
       - name: Apply 057 on top of the populated legacy data
         run: |
@@ -313,6 +388,16 @@ jobs:
             --before artifacts/identity-pre-057.json \
             --out artifacts/identity-post-057.json | tee artifacts/constraint-state.txt
           grep -q '"result": "OK"' artifacts/identity-post-057.json
+
+      # FBL-020-R5 §0.3 and §0.4, exercised against the very database this job just built:
+      # the refusals have to hold on a real migrated schema, not only on the probe fixtures the
+      # suite uses. Each probe runs on a COPY, so the drill database is left exactly as it was.
+      - name: Ledger and fixture-mode refusals (probed on copies of the upgraded database)
+        run: |
+          set -o pipefail
+          npx tsx scripts/migrate-refusal-probe.ts --out artifacts/refusal-probes.json \
+            --log artifacts/refusal-probes.txt
+          grep -q '"probes_failed": 0' artifacts/refusal-probes.json
 
       - name: Fingerprint the upgraded schema
         run: |
@@ -354,6 +439,7 @@ jobs:
                    pre-057-chain.txt upgrade-backfill.txt upgrade-backfill.json \
                    identity-pre-057.txt identity-pre-057.json identity-post-057.json \
                    negative-controls.txt negative-controls.json \
+                   refusal-probes.txt refusal-probes.json \
                    upgraded-schema-fingerprint.json fresh-schema-fingerprint.json \
                    fingerprint-equality.txt upgraded-healthz.json; do
             test -s "artifacts/$f" || { echo "MISSING OR EMPTY: artifacts/$f"; exit 1; }

@@ -168,6 +168,15 @@ const EXPECTED_OWNED_TABLES = [
   'identity_provider_connections',
   'identity_sessions',
   'legal_entities',
+  // FBL-020-R5 §2.3 — the normalized matched-binding evidence migration 057 §11 adds.
+  // It is derived here because it carries `authorization_version`: the version each
+  // matched binding HAD when the decision was taken. The declaration is ACCEPTED rather
+  // than argued away — the rows name a role binding and the actor it belongs to, so an
+  // unattributed write to them is exactly what this guard exists to refuse. Its only
+  // writer is the database trigger that expands the array inside the same statement that
+  // writes the decision; the suite reaches the table solely to prove it is append-only,
+  // and does so through the fixture primitive like every other deliberate bypass.
+  'policy_decision_matched_bindings',
   'role_bindings',
   'rooftops',
   'support_access_requests',

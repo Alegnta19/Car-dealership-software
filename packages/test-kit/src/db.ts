@@ -63,6 +63,11 @@ if (INTEGRATION_DATABASE_URL) {
 /** Every table the service writes, ordered so truncation is safe. */
 const TABLES = [
   // FBL-020 identity/organization (children before parents)
+  // FBL-020-R5 §2: the normalized matched-binding evidence is a child of BOTH
+  // policy_decisions and role_bindings, so it is named first and explicitly —
+  // relying on CASCADE would leave the suite's reset depending on a foreign key
+  // it does not state.
+  'policy_decision_matched_bindings',
   'policy_decisions',
   'support_access_sessions',
   'support_access_requests',

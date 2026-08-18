@@ -425,11 +425,36 @@ const RECONCILED_STATE: Array<{ id: string; sql: string; expect: Record<string, 
     expect: { total: 4, at_version_1: 4, effective: 1, ineffective: 3 },
   },
   {
-    // 057 §5 — the supersession is an AUDITED act, not a silent one.
-    id: 'audit_supersession_is_recorded',
+    /*
+     * 057 §5 — the supersession is an AUDITED act, not a silent one.
+     *
+     * FBL-020-R5 §0.6: the REASON is part of the assertion now. 057 §5 contains TWO
+     * statements that write `identity.support.approval_superseded` — the grantless-approval
+     * one, and the duplicate-grant one that matches zero rows on a pre-057 fixture — and
+     * they are distinguishable only by the reason they record. Counting the event type
+     * alone would be satisfied by either, so it could not tell "the grantless supersession
+     * was audited" from "some supersession was audited", and the negative control that
+     * removes the grantless audit insert needs exactly that distinction to fail on.
+     */
+    id: 'audit_grantless_supersession_is_recorded_with_its_reason',
     sql: `SELECT COUNT(*)::int AS n FROM audit_events
-           WHERE event_type = 'identity.support.approval_superseded'`,
+           WHERE event_type = 'identity.support.approval_superseded'
+             AND entity_type = 'support_access_request'
+             AND details->>'reason' = 'fbl_020_r3_no_approving_grant'
+             AND details->>'previous_status' = 'approved'`,
     expect: { n: 1 },
+  },
+  {
+    // …and the OTHER supersession reason must appear NOWHERE. 057 §5's duplicate-grant
+    // statements match zero rows on this fixture by construction (`approval_grant_id` is
+    // created by 057, so no retained row can name a grant twice), so an event carrying
+    // their reason would mean a reconciliation acted on rows nobody put there. Asserted
+    // separately from the count above so the two fail for different reasons.
+    id: 'audit_no_duplicate_grant_supersession_invented',
+    sql: `SELECT COUNT(*)::int AS n FROM audit_events
+           WHERE event_type = 'identity.support.approval_superseded'
+             AND details->>'reason' = 'fbl_020_r3_duplicate_approval_grant'`,
+    expect: { n: 0 },
   },
 ];
 

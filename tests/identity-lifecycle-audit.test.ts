@@ -501,6 +501,104 @@ describe(
       );
     });
 
+    /**
+     * FBL-020-R5 §1.9 — CERTIFICATION IS SUBJECT TO THE TENANT'S OWN AUTHORITY RULE.
+     *
+     * "Tenant-scoped MFA certification must require a currently active/effective
+     * tenant under the same authority rule as policy evaluation."
+     *
+     * The policy engine applies that rule to every non-platform decision: it resolves
+     * the target tenant and denies TENANT_INACTIVE unless the row is `active` AND
+     * inside its effective window. The certification gate applied NO tenant rule at
+     * all — it read role bindings and user links and never looked at the tenant — so a
+     * suspended dealership, or one whose effective window had closed, could still have
+     * the single fact its whole high-assurance step-up path rests on re-asserted.
+     *
+     * Three legs, because the first two alone would pass for an actor who simply had
+     * no authority:
+     *
+     *   CONTROL   — an active, effective tenant: the same administrator certifies.
+     *   SUSPENDED — status is not 'active': refused.
+     *   LAPSED    — status IS 'active' but the effective window has closed: refused.
+     *
+     * The third is the one that distinguishes "the same rule as policy evaluation"
+     * from "a status check": a status-only gate would let the lapsed tenant through.
+     */
+    test('tenant-scoped MFA certification requires a currently ACTIVE and EFFECTIVE tenant', async () => {
+      const connectionId = await connectionIdFor(tenantId);
+      const tenantAdmin = await makeLink('user_mfa_tenant_admin_' + randomUUID().slice(0, 8));
+      await grantRole({
+        actingUserLinkId: await bootstrapAdministrator(tenantId),
+        tenantId,
+        userLinkId: tenantAdmin,
+        role: 'tenant_admin',
+        scopeLevel: 'tenant',
+        scopeId: tenantId,
+      });
+
+      // CONTROL — with a live tenant this administrator certifies successfully.
+      assert.ok(
+        await certifyProviderMfaPolicy({
+          actingUserLinkId: tenantAdmin,
+          connectionId,
+          certified: true,
+        }),
+        'CONTROL: a live tenant admits the certification',
+      );
+      assert.equal((await findActiveConnectionById(connectionId))?.mfaPolicyCertified, true);
+
+      // SUSPENDED — the tenant is no longer active. A DECLARED fixture bypass: no
+      // production service suspends a tenant on this path, and a suspended tenant is
+      // exactly the authorization state under test.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE tenants SET status = 'suspended' WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      await assert.rejects(
+        () =>
+          certifyProviderMfaPolicy({
+            actingUserLinkId: tenantAdmin,
+            connectionId,
+            certified: true,
+          }),
+        MutationAuthorityError,
+        'a suspended tenant has no live authority to certify anything for',
+      );
+
+      // LAPSED — active, but outside its effective window. A status-only gate would
+      // let this through, which is precisely the drift this clause forbids.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE tenants
+            SET status = 'active',
+                effective_from = NOW() - INTERVAL '2 days',
+                effective_to = NOW() - INTERVAL '1 day'
+          WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      await assert.rejects(
+        () =>
+          certifyProviderMfaPolicy({
+            actingUserLinkId: tenantAdmin,
+            connectionId,
+            certified: true,
+          }),
+        MutationAuthorityError,
+        'an effective window that has closed is the same fact as an inactive tenant',
+      );
+
+      // …and the certification the CONTROL leg wrote is untouched by either refusal:
+      // a refused certification changes nothing at all.
+      const row = (
+        await query(
+          `SELECT mfa_policy_certified FROM identity_provider_connections WHERE connection_id = $1`,
+          [connectionId],
+        )
+      ).rows[0] as { mfa_policy_certified: unknown };
+      assert.equal(row.mfa_policy_certified, true, 'a refusal is not a withdrawal');
+    });
+
     test('only an AUTHORIZED administrative actor may certify an MFA policy', async () => {
       const connectionId = await connectionIdFor(tenantId);
 
@@ -593,6 +691,29 @@ describe(
       };
     }
 
+    /**
+     * FBL-020-R5 §1.8 — `refreshProviderSession` no longer accepts an absent
+     * verifier, so every call in this battery supplies one. `authTime` is older
+     * than the instant the session was established with, because a refresh is not
+     * an authentication event and this fake must never be what moves auth_time.
+     */
+    function verifiedRefresh(
+      subject: string,
+      providerSessionId: string,
+    ): Promise<VerifiedAccessToken> {
+      return Promise.resolve({
+        providerUserId: subject,
+        providerSessionId,
+        organizationId: testOrganizationId(tenantId),
+        authTime: new Date(Date.now() - 3_600_000),
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 300_000),
+        roleHints: [],
+        nonceDigest: null,
+        impersonation: NOT_IMPERSONATED,
+      });
+    }
+
     async function subjectOf(session: string): Promise<string> {
       const r = await query(
         `SELECT provider_subject FROM identity_sessions WHERE session_id = $1`,
@@ -616,6 +737,9 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: testIssuer(),
         ttlSeconds: 3600,
+        // both carriers name the SAME foreign provider session, so the disagreement
+        // under test is with the local row and nothing else
+        verifyAccessToken: () => verifiedRefresh(subject, 'sid_somebody_elses_session'),
       });
       assert.equal(outcome.outcome, 'revoked');
       assert.equal(outcome.outcome === 'revoked' ? outcome.reason : null, 'identity_mismatch');
@@ -712,7 +836,17 @@ describe(
       };
       assert.ok(await claimLoginTransactionAtomically(claimArgs));
       assert.equal(await eventCount('identity.login.claimed', ok.loginTxnId), 1);
-      assert.equal(await succeedLoginTransaction(ok.loginTxnId), true);
+      assert.equal(
+        await succeedLoginTransaction({
+          loginTxnId: ok.loginTxnId,
+          tenantId,
+          // FBL-020-R5 §1.11: the success names the ADMITTED identity, so the
+          // `identity.login.succeeded` row lands in this tenant's trail with an
+          // actor on it rather than under the nil tenant naming nobody.
+          userLinkId: await makeLink('user_login_ok_' + randomUUID().slice(0, 8)),
+        }),
+        true,
+      );
       assert.equal(await eventCount('identity.login.succeeded', ok.loginTxnId), 1);
       // replay of a terminal transaction
       assert.equal(await claimLoginTransactionAtomically(claimArgs), null);
@@ -749,6 +883,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: testIssuer(),
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefresh(subject, f.providerSessionId),
       });
       assert.equal(refreshed.outcome, 'refreshed');
       assert.equal(await eventCount('identity.session.refreshed', f.sessionId), 1);

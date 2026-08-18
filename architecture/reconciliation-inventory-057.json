@@ -1,0 +1,218 @@
+{
+  "$comment": [
+    "FBL-020-R5 §0.6 — DECLARATIONS FOR EVERY RECONCILIATION IN 057 THAT NO NEGATIVE",
+    "CONTROL COVERS.",
+    "",
+    "scripts/reconciliation-inventory.ts parses 057, extracts every statement that changes",
+    "retained rows or refuses to proceed, and computes which ones the negative controls",
+    "delete. Anything left over must appear here, with the reason it is not covered — and a",
+    "declaration that matches no statement fails too, so this file cannot quietly go stale.",
+    "",
+    "`key` is the sha256 of the statement's whitespace-normalized text. Editing what a",
+    "statement DOES changes its key and forces it to be reclassified deliberately; moving it",
+    "or re-wrapping it does not.",
+    "",
+    "TWO CLASSIFICATIONS ARE USED HERE.",
+    "",
+    "`not-load-bearing` — the statement matches ZERO rows on any pre-057 database, because it",
+    "operates on a column or a table that 057 ITSELF creates. It is kept in 057 because the",
+    "ORDERING is the property under review: a later edit that re-points a column, or an",
+    "operator repair between migrations, brings the rows it guards into existence. A pre-057",
+    "fixture CANNOT show it load-bearing, and no such claim is made for it anywhere.",
+    "",
+    "`refusal-guard` — a DO block that counts inconsistent retained rows and RAISEs. It",
+    "reconciles nothing on purpose: there is no honest repair for the inconsistency it looks",
+    "for, so inventing one is refused and the migration stops instead."
+  ],
+  "declared": [
+    {
+      "key": "32a15fc2da4d0db23a6d5b6b6c1c5c5117f71d328e81404e52883eda1cc1be71",
+      "classification": "not-load-bearing",
+      "section": "§2 — locally revocable sessions",
+      "statement": "every retained session is declared a cookie session (credential_kind = 'cookie')",
+      "reason": "credential_kind is added by 057 two statements earlier WITH DEFAULT 'cookie', so every retained row already reads 'cookie' and the predicate matches nothing. It precedes the CHECKs that depend on it because a later edit dropping the default must not turn legacy rows into unclassified ones."
+    },
+    {
+      "key": "c84daf48e5b423b6cc27ff49c7e98bdacd4c9fed6c330ab340acd26a267311f6",
+      "classification": "not-load-bearing",
+      "section": "§2 — locally revocable sessions",
+      "statement": "a cookie session carries no bearer key (bearer_key_hash = NULL)",
+      "reason": "bearer_key_hash is created by 057 and therefore arrives NULL on every retained row, so no cookie session can be carrying one."
+    },
+    {
+      "key": "df51d4d849e15e239e34857b99c0d7b8ecfa415469d29cd71a016179ca9cae25",
+      "classification": "not-load-bearing",
+      "section": "§2 — locally revocable sessions",
+      "statement": "a bearer session holds no provider-token expiry (provider_access_token_expires_at = NULL)",
+      "reason": "two reasons at once: provider_access_token_expires_at is created by 057, and no retained session can be of kind 'bearer' because credential_kind is created defaulting to 'cookie'. The predicate is empty on both counts."
+    },
+    {
+      "key": "2a6145ea07d8b9251022c3abcca5da281a0acf9836b64b672164842b56fd1f7f",
+      "classification": "not-load-bearing",
+      "section": "§2 — locally revocable sessions",
+      "statement": "a revoked session carries no refresh state (refresh_token_hash, refresh_state_sealed, refresh_state_key_version cleared)",
+      "reason": "all three refresh columns are created by 057, so they arrive NULL on every retained row and no revoked session can be carrying refresh state to destroy."
+    },
+    {
+      "key": "64990a620bc192c09cf402464c1164eae1c8bed6cda234a2672d7a521859c8d2",
+      "classification": "not-load-bearing",
+      "section": "§2 — locally revocable sessions",
+      "statement": "every refresh lease is released",
+      "reason": "the lease columns are created by 057, so no retained row can hold a lease. Kept ahead of is_refresh_lease_paired and is_refresh_lease_needs_state because installing those constraints first would abort the migration on any database that had ever held a half-written lease."
+    },
+    {
+      "key": "a9a1e361cf3afaed22cc13cf17d61c559a2c196ab04c83256e91abd664e3f52a",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "the login-transaction status is derived from the R2 columns that recorded it",
+      "reason": "login_transactions is CREATED by 057 three statements earlier, so the table holds no retained rows and every statement in this group matches zero of them."
+    },
+    {
+      "key": "0d4fea271731e140ad4b22b9dace3fc89ca294985b8672d30b6d200fcc56fcc2",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "a succeeded transaction's claimed_at is derived from its consumed_at",
+      "reason": "login_transactions is CREATED by 057, so it holds no retained rows."
+    },
+    {
+      "key": "d350006417610c4ab1d721f31837d239b01c7361b891d4f51298458f36b6c713",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "a failed transaction with no recorded cause is classified unclassified rather than given a plausible one",
+      "reason": "login_transactions is CREATED by 057, so it holds no retained rows."
+    },
+    {
+      "key": "360cfae07182274f726a3825c67017947dc9d85cd1f9a64f016d143b916324ec",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "a non-failed transaction carries no failure reason",
+      "reason": "login_transactions is CREATED by 057, so it holds no retained rows."
+    },
+    {
+      "key": "eb29bceca6ced32c56ddd8295604cb4b9bb8e6297d02fe28622a6df5ee9ac44a",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "a request_id that fails the shape is DROPPED, never truncated",
+      "reason": "login_transactions is CREATED by 057, so it holds no retained rows."
+    },
+    {
+      "key": "677afe394343e27c99867d7ca462338521055356147fa93fa18fe09fcc29d114",
+      "classification": "not-load-bearing",
+      "section": "§3 — the server-side login transaction",
+      "statement": "a correlation_id that fails the shape is DROPPED, never truncated",
+      "reason": "login_transactions is CREATED by 057, so it holds no retained rows."
+    },
+    {
+      "key": "5f1ed90d3754d042525eff0c86fcf58af210b5f24cbc5ea2742dd1f35e00246a",
+      "classification": "not-load-bearing",
+      "section": "§5 — support access authority (duplicate approval grant)",
+      "statement": "the support session of a duplicate-grant approval is ended",
+      "reason": "approval_grant_id is created by 057, so on any pre-057 database every value is NULL and no request can name a grant that an earlier decision already named. All three duplicate-grant statements are therefore empty here — unlike their grantless-approval counterparts, which the fixture DOES populate and which each have a control."
+    },
+    {
+      "key": "11cb43a4af6e1e7054941bba0b4baf75a12b2307d3f7e0b631bfe83109c67526",
+      "classification": "not-load-bearing",
+      "section": "§5 — support access authority (duplicate approval grant)",
+      "statement": "the duplicate-grant supersession is recorded as an audit event",
+      "reason": "approval_grant_id is created by 057, so no retained row can name a grant twice. The post-057 verifier additionally asserts that NO event carrying this reason exists, so a statement that acted on rows nobody seeded would be caught."
+    },
+    {
+      "key": "1e541905abba91b896024d77b332c2fe37a87e3a85d16bd887a81623b5683025",
+      "classification": "not-load-bearing",
+      "section": "§5 — support access authority (duplicate approval grant)",
+      "statement": "the later duplicate-grant approval is moved to a terminal state, the earliest decision keeping the grant",
+      "reason": "approval_grant_id is created by 057, so no retained row can name a grant twice."
+    },
+    {
+      "key": "1cf7ccf1c9d04766e1eab0c954d2d877c8310883626abcdb4b478d26612c7bf6",
+      "classification": "not-load-bearing",
+      "section": "§6 — policy evidence version",
+      "statement": "retained policy decisions are restated at evidence_version 1",
+      "reason": "evidence_version is added in the statement above WITH DEFAULT 1, so every retained row already reads 1. Kept because a later edit to the default must not silently promote historic rows into a completeness class they were never written to satisfy. The version FLOOR that stops a NEW decision claiming version 1 is a separate statement, and that one HAS a control (pd_evidence_version_floor)."
+    },
+    {
+      "key": "3390e238b672dfb76d0d8fd09ed21442b94e1a4898792cfe0c5bb9657a110979",
+      "classification": "refusal-guard",
+      "section": "§6/§7 — the nil UUID is not a tenant",
+      "statement": "DO block: refuses if the nil UUID is in use as a tenant id",
+      "reason": "The identity tuple keys use the nil UUID to stand for platform scope. If a real tenant already held it there is no honest repair — renumbering somebody's tenant, or redefining platform scope, are both fabrications — so the migration RAISEs and stops. It reconciles nothing by design, and it matches zero rows on every database this project has, so removing it would change no outcome and it cannot be a negative control."
+    },
+    {
+      "key": "43703e46cab00ae3431a6ed8f2ef58a6dc7033bf9d9cd13680896f68a239e411",
+      "classification": "not-load-bearing",
+      "section": "§7a — the identity tuple on activated UserLinks",
+      "statement": "an activated link whose five-column binding does not resolve to a real connection is deactivated and unbound",
+      "reason": "the tuple columns this predicate reads are written EARLIER IN 057, by §1, from the very connection rows they are then checked against — so on a database that migrates in order nothing can fail to resolve. §1's derivation and its ambiguous-link closure are the statements the fixture exercises, and both have controls (ul_deterministic_binding, ul_ambiguous_deactivation)."
+    },
+    {
+      "key": "c5f2ed06ec4735d6244960be0a5ee18b264f5d4044002b277fc183ae17030d1b",
+      "classification": "not-load-bearing",
+      "section": "§7b — the identity tuple on live sessions",
+      "statement": "a live session whose tuple does not resolve to its own UserLink is revoked",
+      "reason": "the session tuple is written earlier in 057, by §2, from that session's own link — so a live session that reaches §7b already resolves. §2's derivation and both of its revocation branches are what the fixture exercises, and all three have controls."
+    },
+    {
+      "key": "77e0c68d1e918ae00d738959b1ec0fb4f026065db0bad23361fb3c23adb07d8f",
+      "classification": "not-load-bearing",
+      "section": "§7b — the identity tuple on live sessions",
+      "statement": "an ALREADY revoked session that still carries a non-resolving tuple has it cleared",
+      "reason": "§2 clears the tuple of every session it revokes, and a session revoked before 057 has no tuple to carry because the columns are new — so this matches zero rows on a database that migrates in order."
+    },
+    {
+      "key": "6a762795dc67bbd56329354178214b2a6f654cd990ba16cdd2bde8429a75aab8",
+      "classification": "not-load-bearing",
+      "section": "§7c — the identity tuple on active reauthentication rows",
+      "statement": "a started step-up whose tuple does not resolve to its session is expired and unbound",
+      "reason": "§4 has already expired every retained started transaction by the time this runs, because the binding columns §4 requires are also new in 057. No row is left in the state this predicate selects."
+    },
+    {
+      "key": "0f8664d3071de1b5c7fefbc7828fd541592322f1bc6e8298b08fdb83e1d47ae7",
+      "classification": "not-load-bearing",
+      "section": "§7c — the identity tuple on reauthentication grants",
+      "statement": "a grant's connection_id is derived from its own transaction's connection_id",
+      "reason": "both columns are created by 057, so on every retained row both are NULL and IS DISTINCT FROM is false. The post-057 verifier still asserts the OUTCOME on the seeded grant (rag_grant_connection_derived_from_its_transaction expects NULL, not an invented connection), so a statement that fabricated a value would be caught even though its removal cannot be."
+    },
+    {
+      "key": "a7001b58d8cb9901c534e50c190b9897c4fcd3f9a85ed54c4a892021b969762f",
+      "classification": "refusal-guard",
+      "section": "§7d — support access cannot cross a tenant",
+      "statement": "DO block: refuses if a support session names a different tenant than its request, or if an approving grant comes from another tenant or another person",
+      "reason": "A mismatch means the retained rows are already inconsistent, and inventing which tenant or which approver was meant is exactly the guess 057 refuses to make. It RAISEs instead, the way migration 055's location backfill does. It reconciles nothing, and it matches zero rows on the fixture, so removing it would change no outcome and it cannot be a negative control."
+    },
+    {
+      "key": "22ea0b2bdb62308618065e5be16f6c1309aab0471ff1e205acf168ed528ecaee",
+      "classification": "not-load-bearing",
+      "section": "§9 — the reauthentication row owns its callback",
+      "statement": "a started step-up that cannot name the callback state its completion must compare against is expired",
+      "reason": "§4 has already expired every retained started transaction by the time this runs, so no row is left in 'started'."
+    },
+    {
+      "key": "c80867b0ab69d3dd506c8f032a9fe700c1ec4965f56b6b65b03d0a25c5fbd99a",
+      "classification": "not-load-bearing",
+      "section": "§9 — the reauthentication row owns its callback",
+      "statement": "a NON-terminal row carrying a terminal reason or instant loses both",
+      "reason": "terminal_reason and terminal_at are created by 057, so they arrive NULL on every retained row and no non-terminal row can be carrying them. The complementary statement — explaining every ALREADY-terminal row from its own history — is the one the fixture exercises, and it has a control (rat_terminal_explained)."
+    },
+    {
+      "key": "d2efa734dc4c2d02896e0bbc54f0963901d49a0c0e18f25eb98ef32248a20f26",
+      "classification": "not-load-bearing",
+      "section": "§9 — the reauthentication row owns its callback",
+      "statement": "a request_id that fails the shape is DROPPED, never truncated",
+      "reason": "request_id is created by 057 on this table, so it arrives NULL on every retained row."
+    },
+    {
+      "key": "28189a4172643875fcec4df956b68b67c737699eaf4f7689372476389efaec66",
+      "classification": "not-load-bearing",
+      "section": "§9 — the reauthentication row owns its callback",
+      "statement": "a correlation_id that fails the shape is DROPPED, never truncated",
+      "reason": "correlation_id is created by 057 on this table, so it arrives NULL on every retained row."
+    },
+    {
+      "key": "49fb0127d00a9652ca79fbc6f0b4dec677253766dabb1b167b3fa3ba9e1c75e4",
+      "classification": "refusal-guard",
+      "section": "§11 — policy evidence becomes relational (FBL-020-R5 §2)",
+      "statement": "DO block: refuses if any retained policy decision names a tenant, actor, credential tuple, support tuple or matched binding that does not exist or does not belong together",
+      "reason": "policy_decisions is append-only under trg_policy_decisions_append_only, so this migration CANNOT rewrite a historic evidence row and must not — rewriting the audit trail to fit a new constraint is the falsification every other section of this file refuses. There is therefore no reconciliation available here, only a refusal, and it RAISEs the way §7d does. It matches zero rows on a database that migrates in order and zero rows on the retained pre-057 fixture, so removing it changes no outcome and it cannot be a negative control. The relational rules it precedes ARE proved load-bearing, by direct SQL in tests/identity-evidence.test.ts and by dropping each constraint and watching a named test die."
+    }
+  ]
+}

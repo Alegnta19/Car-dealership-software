@@ -19,8 +19,9 @@ import { closePool, query } from '@dealer/database';
 import { ROLES } from '@dealer/contracts';
 import {
   NOT_IMPERSONATED,
-  admitLoginIdentity,
+  admitLoginAndEstablishSession,
   exchangeMatchesVerifiedToken,
+  expireStaleLoginTransactions,
   openCookiePayload,
   type CodeExchangeResult,
   type IdentityProviderPort,
@@ -557,15 +558,41 @@ describe(
      * a refusal that answered neutrally and still kept the refresh token would satisfy an
      * indistinguishability test and fail the requirement behind it.
      *
-     * NOTHING IS SKIPPED as unreachable. The scenarios the order enumerates are held
-     * against the table by label below, so deleting one is a failure rather than a
-     * shorter loop; the three internal failure reasons the callback can ALSO reach
-     * (`provider_exchange_failed`, `token_verification_failed`,
-     * `session_establishment_failed`) are not refusals of an admission decision — they
-     * are provider faults and a local write failure — and each is already driven to its
-     * own terminal state and single audit event by
-     * `tests/identity-lifecycle-audit.test.ts` ("every provider-side failure reaches
-     * exactly ONE terminal state and ONE audit event").
+     * NOTHING IS SKIPPED as unreachable AMONG THE ADMISSION REFUSALS. The scenarios the
+     * order enumerates are held against the table by label below, so deleting one is a
+     * failure rather than a shorter loop.
+     *
+     * THE THREE INTERNAL REASONS, STATED ACCURATELY. The callback can also reach
+     * `provider_exchange_failed`, `token_verification_failed` and
+     * `session_establishment_failed`. None of them is a refusal of an admission decision —
+     * they are two provider faults and a local write failure — so none belongs in the
+     * indistinguishability table above. What this comment used to claim about their
+     * coverage was WRONG IN TWO WAYS, and both are corrected here rather than left:
+     *
+     *   · it cited `tests/identity-lifecycle-audit.test.ts` ("every provider-side failure
+     *     reaches exactly ONE terminal state and ONE audit event") as covering all three.
+     *     That test drives REAUTHENTICATION transactions — `startStepUp`,
+     *     `failReauthentication`, `identity.reauthentication.failed` — which is a DIFFERENT
+     *     TRANSACTION KIND from the login transactions this file is about; and
+     *   · that test's reason list is provider_exchange_failed, impersonation_detected,
+     *     token_verification_failed, identity_not_admitted, binding_mismatch. It does not
+     *     contain `session_establishment_failed` at all.
+     *
+     * What is actually true on the LOGIN leg:
+     *   · `token_verification_failed` — terminal WITH ITS REASON, and unable to become
+     *     succeeded afterwards, by "a claimed transaction that fails is terminal WITH A
+     *     REASON and can never become succeeded" in `tests/identity-boundary.test.ts`; and
+     *     exactly one `identity.login.failed` event by "the audit inventory is complete,
+     *     and every transition in it writes its event" in
+     *     `tests/identity-lifecycle-audit.test.ts`.
+     *   · `provider_exchange_failed` — driven on the login leg only as a REFUSED
+     *     re-termination of an already-succeeded transaction (same
+     *     `tests/identity-boundary.test.ts` battery), which proves absorption, not
+     *     terminalization.
+     *   · `session_establishment_failed` — NOT COVERED BY ANY TEST. The route writes it
+     *     (`apps/api/src/routes/auth.ts`); no assertion anywhere reads it. That residue is
+     *     declared in `docs/identity/KNOWN-LIMITATIONS.md` under "Open at FBL-020-R5
+     *     submission" rather than hidden behind this comment.
      */
     test('the refusals are INDISTINGUISHABLE from one another at the wire — every one of them', async () => {
       // The order's enumeration, held against the table. A scenario removed from
@@ -708,7 +735,7 @@ describe(
     });
 
     // ── the admission service itself, called directly ─────────────────────
-    test('admitLoginIdentity refuses a PENDING link and creates no privilege', async () => {
+    test('admitLoginAndEstablishSession refuses a PENDING link and creates no privilege', async () => {
       // A first login of an unknown identity: the observation creates a PENDING
       // claim, and admission refuses it. Nothing about that is a session.
       const subject = 'user_pending_' + randomUUID().slice(0, 8);
@@ -723,7 +750,8 @@ describe(
         nonceDigest: null,
         impersonation: NOT_IMPERSONATED,
       };
-      const admission = await admitLoginIdentity({
+      const admission = await admitLoginAndEstablishSession({
+        session: { ttlSeconds: 3600, cookiePassword: env.cookiePassword },
         trustedIssuer: env.issuer.issuer,
         exchanged: {
           accessToken: 'unused',
@@ -816,7 +844,8 @@ describe(
         nonceDigest: null,
         impersonation: NOT_IMPERSONATED,
       };
-      const admission = await admitLoginIdentity({
+      const admission = await admitLoginAndEstablishSession({
+        session: { ttlSeconds: 3600, cookiePassword: env.cookiePassword },
         trustedIssuer: env.issuer.issuer,
         exchanged: {
           accessToken: 'unused',
@@ -845,6 +874,262 @@ describe(
       ).rows[0] as { status: string; activated_at: Date | null };
       assert.equal(after.status, 'pending', 'the refusal does not activate what it refused');
       assert.equal(after.activated_at, null);
+    });
+
+    // ── FBL-020-R5 §1.5: THE THREE ENDINGS THAT USED TO LEAVE A ROW IN FLIGHT ──
+    //
+    // §1.5 requires EVERY callback carrying a valid sealed transaction handle to go
+    // through the server-authoritative claim path, and every real transaction to
+    // finish with ONE explained terminal state and ONE terminal audit event. Three
+    // shapes did not, and each is driven below over real HTTP:
+    //
+    //   (a) a provider `error` callback — an authorization server that refuses
+    //       redirects here with the original `state` and no `code`;
+    //   (b) a callback with no authorization code at all;
+    //   (c) a transaction that runs out of time WHILE the provider exchange is in
+    //       flight, which is the one case where the leg does everything right and
+    //       still must hand out nothing.
+    //
+    // (a) and (b) were refused by the pre-claim guard, so their transactions sat at
+    // `pending` until a sweep eventually aged them — the wrong reason, hours late,
+    // and `identity.login.expired` where the truth was "the provider said no".
+
+    /** Every audit row written against one login transaction, oldest first. */
+    async function loginEvents(loginTxnId: string): Promise<string[]> {
+      const r = await query(
+        `SELECT event_type FROM audit_events
+          WHERE entity_type = 'login_transaction' AND entity_id = $1
+          ORDER BY created_at, event_id`,
+        [loginTxnId],
+      );
+      return (r.rows as Array<{ event_type: string }>).map((x) => x.event_type);
+    }
+
+    /** The whole transaction row, so a test can assert what was NOT written too. */
+    async function fullTxnRow(loginTxnId: string) {
+      const r = await query(`SELECT * FROM login_transactions WHERE login_txn_id = $1`, [
+        loginTxnId,
+      ]);
+      return r.rows[0] as Record<string, unknown>;
+    }
+
+    test('a provider ERROR callback reaches its own terminal state, and the provider message never lands', async () => {
+      await seedActor(env.issuer, { tenantId: tenant, roles: [ROLES.SERVICE_ADVISOR] });
+      const txn = await beginLogin();
+      // No provider port is installed on purpose: an error callback must never
+      // reach an exchange, and a fake that threw would hide that.
+
+      const res = await fetch(
+        `${base}/auth/callback?error=access_denied&error_description=${encodeURIComponent(
+          'The user denied the request',
+        )}&state=${txn.state}`,
+        { headers: { cookie: txn.header }, redirect: 'manual' },
+      );
+      const text = await res.text();
+      assert.equal(res.status, 401);
+      assert.equal(
+        (JSON.parse(text) as { error?: { code?: string } }).error?.code,
+        'unauthorized',
+        'the answer outward is the same neutral refusal as every other one',
+      );
+      assert.equal(await liveSessionCount(), 0, 'and nothing was established');
+
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed');
+      assert.equal(
+        row.failure_reason,
+        'provider_error_callback',
+        'the transaction says WHY, in the server vocabulary',
+      );
+      assert.notEqual(row.consumed_at, null, 'and it is terminal, not merely annotated');
+      assert.notEqual(row.claimed_at, null, 'it went through the CLAIM path, not around it');
+
+      // EXACTLY ONE terminal audit event, and it is not an expiry.
+      const events = await loginEvents(txn.loginTxnId);
+      assert.deepEqual(events, [
+        'identity.login.started',
+        'identity.login.claimed',
+        'identity.login.failed',
+      ]);
+
+      // The provider's own strings are caller-influenced text: they may not reach
+      // the row, the audit trail or the response.
+      const details = await query(
+        `SELECT details::text AS d FROM audit_events
+          WHERE entity_type = 'login_transaction' AND entity_id = $1`,
+        [txn.loginTxnId],
+      );
+      const written = JSON.stringify(row) + JSON.stringify(details.rows) + text;
+      assert.ok(!written.includes('access_denied'), 'the provider error code is not stored');
+      assert.ok(!written.includes('denied the request'), 'nor its description');
+    });
+
+    test('a callback carrying NO authorization code is terminal, and distinct from a provider error', async () => {
+      await seedActor(env.issuer, { tenantId: tenant, roles: [ROLES.SERVICE_ADVISOR] });
+      const txn = await beginLogin();
+
+      const res = await fetch(`${base}/auth/callback?state=${txn.state}`, {
+        headers: { cookie: txn.header },
+        redirect: 'manual',
+      });
+      assert.equal(res.status, 401);
+      assert.equal(await liveSessionCount(), 0);
+
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed');
+      assert.equal(
+        row.failure_reason,
+        'authorization_code_missing',
+        'a malformed callback and a refused one are different operational facts',
+      );
+      assert.deepEqual(await loginEvents(txn.loginTxnId), [
+        'identity.login.started',
+        'identity.login.claimed',
+        'identity.login.failed',
+      ]);
+    });
+
+    test('a transaction that EXPIRES during a slow provider exchange ends terminally and hands out nothing', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const txn = await beginLogin();
+
+      /*
+       * THE INTERLEAVING, MADE DETERMINISTIC.
+       *
+       * The race this proves is a real one — a provider exchange that takes longer
+       * than the transaction's remaining life, with the worker's expiry sweep
+       * landing in between — and a test that arranged it with a sleep would prove
+       * only that the sleep was long enough. So the sweep is run INSIDE the fake
+       * exchange: the transaction is already `consuming`, the exchange has begun and
+       * has not returned, and the sweep ages the row from underneath the leg. There
+       * is no window in which this can accidentally not happen.
+       */
+      let sweptDuringExchange = 0;
+      const honest = fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce });
+      useIdentityProviderForTests({
+        ...honest,
+        async exchangeCode(input) {
+          await query(
+            `UPDATE login_transactions
+                SET created_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
+              WHERE login_txn_id = $1`,
+            [txn.loginTxnId],
+          );
+          sweptDuringExchange = await expireStaleLoginTransactions();
+          return honest.exchangeCode(input);
+        },
+      });
+
+      const res = await callback(txn);
+      assert.ok(sweptDuringExchange >= 1, 'the sweep must actually have aged the transaction');
+
+      // The login FAILS CLOSED: no session cookie, and the same neutral answer.
+      assert.equal(res.status, 401);
+      assert.equal(res.body?.error?.code, 'unauthorized');
+      assert.ok(
+        !/dealer_session=[^;,]+/.test((res.setCookie ?? '').replace(/dealer_session=;/, '')),
+        'an expired transaction may not hand out a session cookie',
+      );
+
+      // ONE explained terminal state — the expiry, which happened first — and the
+      // success transition did NOT overwrite it.
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed');
+      assert.equal(row.failure_reason, 'expired');
+
+      // ONE terminal audit event, and it is the expiry.
+      const events = await loginEvents(txn.loginTxnId);
+      assert.deepEqual(events, [
+        'identity.login.started',
+        'identity.login.claimed',
+        'identity.login.expired',
+      ]);
+      assert.equal(
+        events.filter((e) => e === 'identity.login.succeeded').length,
+        0,
+        'a login that handed out nothing was not a success',
+      );
+
+      /*
+       * …and the session the admission had ALREADY established — the exchange
+       * succeeded, so it exists — is revoked rather than left live. This is the half
+       * that matters most: the row was created before the leg discovered it had run
+       * out of time, so "fail closed" has to mean destroying it, not just answering
+       * 401.
+       */
+      const session = (
+        await query(
+          `SELECT revoked_at, revoked_reason, refresh_state_sealed, refresh_token_hash
+             FROM identity_sessions`,
+        )
+      ).rows[0] as Record<string, unknown> | undefined;
+      assert.ok(session !== undefined, 'the admission did establish a session to revoke');
+      assert.notEqual(session.revoked_at, null, 'and it must not be left live');
+      assert.equal(session.revoked_reason, 'login_transaction_not_consuming');
+      assert.equal(session.refresh_state_sealed, null, 'its provider credential is destroyed');
+      assert.equal(session.refresh_token_hash, null);
+      assert.equal(await refreshStateCount(), 0);
+    });
+
+    /**
+     * FBL-020-R5 §1.11 — THE SUCCESS NAMES WHO GOT IN.
+     *
+     * `GET /auth/login` opens the transaction knowing a purpose, a redirect, a return
+     * location and a TTL — no tenant and no user, because a browser login has not
+     * identified anybody yet. The success transition RETURNed those NULLs straight to
+     * the audit writer, so every successful browser login was recorded against the NIL
+     * tenant with `actor_user_id = NULL`: the one lifecycle event that answers "who was
+     * admitted" answered nobody, and could not be found by filtering a tenant's trail.
+     */
+    test('the successful-login audit event names the ADMITTED tenant and user', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const txn = await beginLogin('/ros/11');
+      useIdentityProviderForTests(
+        fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce }),
+      );
+      assert.equal((await callback(txn)).status, 302);
+
+      const session = (
+        await query(`SELECT tenant_id, user_link_id, connection_id FROM identity_sessions`)
+      ).rows[0] as Record<string, unknown>;
+
+      // (1) the transaction row itself now carries the admitted identity
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'succeeded');
+      assert.equal(String(row.tenant_id), tenant);
+      assert.equal(String(row.user_link_id), String(session.user_link_id));
+      assert.equal(String(row.connection_id), String(session.connection_id));
+
+      // (2) …and so does the audit event, which is what an operator actually reads
+      const succeeded = await query(
+        `SELECT tenant_id, actor_user_id FROM audit_events
+          WHERE entity_type = 'login_transaction' AND entity_id = $1
+            AND event_type = 'identity.login.succeeded'`,
+        [txn.loginTxnId],
+      );
+      assert.equal(succeeded.rows.length, 1, 'exactly one success event');
+      const event = succeeded.rows[0] as { tenant_id: unknown; actor_user_id: unknown };
+      assert.equal(
+        String(event.tenant_id),
+        tenant,
+        'the success lands in the ADMITTED tenant trail, not under the nil tenant',
+      );
+      assert.equal(
+        String(event.actor_user_id),
+        String(session.user_link_id),
+        'and it names the user link that was admitted',
+      );
+      assert.notEqual(
+        String(event.tenant_id),
+        '00000000-0000-0000-0000-000000000000',
+        'the nil tenant is what this clause exists to stop',
+      );
     });
   },
 );

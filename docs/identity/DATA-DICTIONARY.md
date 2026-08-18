@@ -1,10 +1,25 @@
 # Identity and Organization — Data Dictionary (migration 055)
 
-Fourteen tables, five sections. Every table is tenant-qualified where it holds
-dealership data; parent edges carry `tenant_id` in a composite foreign key, so
-cross-tenant parentage is a database error rather than a review question.
-Nothing here is ever hard-deleted: retirement is a status transition plus an
-effective window.
+**Current as of FBL-020-R5.** The tables and constraints below are those of migrations 055,
+056 and 057 as this tree carries them.
+
+**Governing authority.** The active order is FBL-020-R5, checked in at
+[`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
+`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+**every R5 clause is UNVERIFIED until the final package proves it**; this document describes
+schema and closes no clause.
+
+**Sixteen tables in all.** The five sections immediately below are migration `055`'s
+**fourteen** tables. Migration `057` adds **two** more, each documented in its own part
+further down: `login_transactions` (§1 of the 057 part) and
+`policy_decision_matched_bindings` (§5 of the 057 part). The opening line of this document
+read "Fourteen tables, five sections" without that qualification, which was true of 055 and
+false of the schema as a whole — corrected here rather than left to be read as a total.
+
+Every table is tenant-qualified where it holds dealership data; parent edges carry
+`tenant_id` in a composite foreign key, so cross-tenant parentage is a database error rather
+than a review question. Nothing here is ever hard-deleted: retirement is a status transition
+plus an effective window.
 
 ## 1. Organization hierarchy
 
@@ -133,9 +148,12 @@ policy decision is ever invented** — proven by `verify-upgrade-state.ts`.
 
 # Migration 056 — FBL-020-R1 contract completion
 
-Forward-only and additive. Migrations 000 and 049–055 are byte-identical to
-the accepted head (`git diff 1b1a1bc..HEAD -- migrations/` is empty); 056 only
-adds columns, constraints and indexes.
+Forward-only and additive. Migrations 000 and 049–055 were byte-identical to the head
+accepted when 056 landed; 056 only adds columns, constraints and indexes. (This sentence
+used to reproduce that claim as `git diff 1b1a1bc..HEAD -- migrations/` **is empty**. It is
+not empty and has not been since — that range now also spans 056 and 057, which were added
+inside it. The current frozen-chain check is the one stated in the 057 part above, scoped to
+the files it actually claims: `git ls-tree cac9b21 migrations/`.)
 
 ## 1. `identity_provider_connections` — the trust anchor
 
@@ -214,11 +232,20 @@ status transition or an effective-window close, and policy evidence cannot be
 deleted at all.
 ---
 
-# Migration 057 — FBL-020-R2/R3 boundary completion
+# Migration 057 — identity boundary completion (FBL-020-R2 through R5)
 
 Forward-only and additive. Migrations 000 and 049–056 are **byte-identical** to
-the accepted head; 057 creates one table (`login_transactions`), adds columns,
-constraints and indexes, and deletes no row.
+the accepted head `cac9b21` — verified by comparing each file's canonical blob OID against
+`git ls-tree cac9b21 migrations/`, and `git diff --name-only cac9b21 -- migrations/` names
+`057` and nothing else. `057` creates **two** tables — `login_transactions` (§1) and
+`policy_decision_matched_bindings` (§5, added by FBL-020-R5 §2.3) — adds columns,
+constraints, triggers and indexes, and deletes no row.
+
+**This heading read "FBL-020-R2/R3 boundary completion", and the sentence beneath it said
+057 creates one table.** Both were stale: 057 has carried R4 and R5 corrections since, and
+the second table has existed since the R5 §2 pass. `057` is still being **edited in place**
+and is not accepted, so its digest is deliberately not pinned anywhere in this repository —
+see "Migration checksums" below.
 
 **Reconciliation always precedes constraints.** Adding a CHECK before the
 UPDATE that fixes existing rows would abort the migration on a populated
@@ -299,14 +326,64 @@ therefore sufficient offboarding: a pending request becomes unapprovable and a
 live session stops authorizing on its very next decision, with no operator
 obliged to remember `revokeSupportSession`.
 
+## 5. `policy_decision_matched_bindings` — normalized authority evidence
+
+Added by FBL-020-R5 §2.3. `policy_decisions.matched_role_binding_ids` is a `UUID[]`, and an
+array cannot carry a foreign key, so a version-2 evidence row could name binding ids that
+did not exist or belonged to somebody else and the database had nothing to say about it.
+This table is the relational record of the same fact, and it is written by the database, not
+by the caller.
+
+| Column                  | Type    | Notes                                                                      |
+| ----------------------- | ------- | -------------------------------------------------------------------------- |
+| `decision_id`           | UUID    | Part of the primary key, with `role_binding_id`                            |
+| `role_binding_id`       | UUID    | The binding this decision claims matched                                   |
+| `actor_user_link_id`    | UUID    | The decision's OWN actor, carried down so both keys below can be composite |
+| `authorization_version` | BIGINT  | The version the decision saw; `>= 1` by CHECK                              |
+| `match_ordinality`      | INTEGER | Position in the original array; `>= 1` by CHECK                            |
+
+Two composite foreign keys carry the rule between them:
+
+- `pdmb_decision_names_this_actor` → `policy_decisions (decision_id, actor_user_link_id)` —
+  the decision exists and names this actor;
+- `pdmb_binding_belongs_to_the_actor` → `role_bindings (role_binding_id, user_link_id)` —
+  the binding exists and belongs to that same actor.
+
+A decision therefore cannot claim authority from a binding held by anybody else; and because
+`role_bindings` is itself keyed `(tenant_id, user_link_id)` into `user_links`, a cross-tenant
+authority claim is unrepresentable without naming a cross-tenant actor first. The primary key
+`(decision_id, role_binding_id)` also stops a decision claiming the same binding twice to
+inflate what matched.
+
+**The authorization version is bounded, not keyed.** `role_bindings` keeps one CURRENT
+`authorization_version` and no history table, so "the version this decision saw" cannot be a
+foreign key — the binding legitimately moves on, and a key over it would retroactively
+invalidate true evidence. What is enforced is the DIRECTION: trigger
+`trg_pdmb_version_reachable` refuses a version the binding has never reached. Existence stays
+the foreign key's job, so an absent binding is refused by the key and an operator reads which
+rule the row actually broke.
+
+**One writer, and it is a trigger.** `trg_policy_decisions_normalize_matches` fires
+`AFTER INSERT ON policy_decisions` and derives the child rows from the array in the same
+statement, inside the caller's transaction. There is no code path — not the policy engine,
+not a fixture, not a repair script, not `psql` — that can write the array without also
+submitting it to the keys above, and a rejected element takes the whole decision with it, so
+no half-recorded evidence survives. The rows are append-only under the same
+`identity_append_only()` function migration 055 installed for every other identity ledger.
+
 ## Migration checksums (canonical values)
 
 **All migration checksums in this repository are canonical LF / git-blob
 values**, computed as
 
 ```bash
-git show HEAD:migrations/<file>.sql | sha256sum
+sed 's/\r$//' migrations/<file>.sql | sha256sum
 ```
+
+`HEAD` is deliberately not used here: the delivery is an uncommitted working tree, so a
+digest taken from `HEAD` would describe a different body. `docs/FBL-020-DELIVERY-REPORT.md`
+publishes the same values beside their git blob OIDs, under its "The migration chain"
+heading, measured on this tree.
 
 They are **not** Windows working-tree values: a working copy checked out with
 CRLF line endings hashes differently for every file, and a checksum taken there
@@ -333,5 +410,5 @@ before it was read. It gets its checksum when it is accepted.
 
 Nothing in migrations 055, 056 or 057 deletes an organization, identity, role,
 session, reauthentication, policy or support-access record. Retirement is a
-status transition or an effective-window close, and policy evidence cannot be
-updated or deleted at all.
+status transition or an effective-window close, and policy evidence — including the
+normalized `policy_decision_matched_bindings` rows — cannot be updated or deleted at all.

@@ -27,6 +27,14 @@
     "from": "UPDATE support_access_requests\n   SET superseded_decided_by_user_link_id = decided_by_user_link_id,",
     "to": "   AND approval_grant_id IS NULL;"
   },
+  "sas_grantless_approval_session_revoked": {
+    "from": "UPDATE support_access_sessions s\n   SET revoked_at = COALESCE(s.revoked_at, NOW()),\n       revoked_by_user_link_id = NULL\n  FROM support_access_requests r\n WHERE r.request_id = s.request_id\n   AND s.revoked_at IS NULL\n   AND r.status = 'approved'",
+    "to": "   AND r.approval_grant_id IS NULL;"
+  },
+  "aud_grantless_approval_supersession_recorded": {
+    "from": "INSERT INTO audit_events (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)\nSELECT tenant_id,",
+    "to": " WHERE status = 'approved' AND approval_grant_id IS NULL;"
+  },
   "ipc_unbounded_certification_withdrawn": {
     "from": "UPDATE identity_provider_connections\n   SET mfa_policy_certified = FALSE,",
     "to": "   AND mfa_policy_certification_expires_at IS NULL;"

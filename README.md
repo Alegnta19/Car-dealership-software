@@ -21,7 +21,13 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `DATABASE_URL`, `JWT_SECRET` and `STEP_UP_SECRET` (each secret at least 32 characters), then:
+Fill in `DATABASE_URL`. That is the only variable local work needs: leave `IDENTITY_PROVIDER`
+unset and the WorkOS block empty, and the process builds, migrates and tests without a
+provider credential. To serve real logins, set `IDENTITY_PROVIDER=workos` and fill in every
+`WORKOS_*` / `OIDC_*` variable in `.env.example`, including `WORKOS_API_KEY` and
+`WORKOS_COOKIE_PASSWORD` (each at least 32 characters). **`JWT_SECRET` and `STEP_UP_SECRET`
+no longer exist** — FBL-020 removed locally signed HS256 credentials entirely, and neither
+name appears in `.env.example` or anywhere under `apps/`, `packages/` or `scripts/`. Then:
 
 ```bash
 npm run migrate
@@ -37,14 +43,16 @@ Other scripts: `npm test` (unit tests, no database required), `npm run test:inte
 ### Docker
 
 ```bash
-cp .env.example .env   # set JWT_SECRET, STEP_UP_SECRET, POSTGRES_PASSWORD
+cp .env.example .env   # set POSTGRES_PASSWORD (the only variable compose REQUIRES)
 ```
 
 ```bash
 docker compose up --build
 ```
 
-Compose refuses to start with missing secrets (`${VAR:?}` — there are no baked defaults),
+Compose refuses to start with `POSTGRES_PASSWORD` missing (`${VAR:?}` — there are no baked
+defaults); the `WORKOS_*` block is optional here and defaults to empty, which starts the
+stack with identity disabled. It
 runs migrations as a one-shot service, and only starts the API after they succeed. The
 image is a two-stage non-root build with a `/healthz` healthcheck; `/metrics` and
 `/healthz` stay unauthenticated by design, so gate them at the ingress in any deployment
@@ -62,7 +70,9 @@ docker compose exec api node scripts/dist/seed-mpi-template.js --tenant <tenant-
 apps/
   api/                               @dealer/api — HTTP composition root (server, routes,
                                      middleware, envelopes); the deployable service
-  worker/                            @dealer/worker — buildable shell; no jobs until FBL-040
+  worker/                            @dealer/worker — deployed background process; runs the
+                                     three identity expiry sweeps (support windows, login
+                                     transactions, step-ups). No queue or outbox: FBL-040
   web/                               @dealer/web — buildable shell; no product UI yet
 packages/
   contracts/                         @dealer/contracts — roles, tenant context, envelopes,
@@ -77,8 +87,12 @@ packages/
 architecture/
   modules.json                       machine-read ownership/dependency map (checker input)
 docs/
-  adr/                               ADR-001..005
-  architecture/                      MODULE-OWNERSHIP.md, LOGGING-POLICY.md
+  adr/                               ADR-001..008
+  architecture/                      MODULE-OWNERSHIP.md, LOGGING-POLICY.md,
+                                     THREAT-MODEL-DELTA-FBL-020.md
+  identity/                          AUTH-FLOWS.md, DATA-DICTIONARY.md,
+                                     KNOWN-LIMITATIONS.md
+  orders/                            the active order text + blueprint provenance
 Dockerfile / docker-compose.yml      container build + postgres/migrate/api stack
 migrations/
   000_platform_core.sql              audit_events + pgcrypto guard (prerequisite)
@@ -88,6 +102,11 @@ migrations/
   052_phase248_authorization_binding.sql  approved-price snapshot + freeze
   053_phase248_estimate_line_association.sql  which lines an estimate asked about
   054_phase248_waitlist.sql          service waitlist + waitlist appointment source
+  055_identity_organization.sql      FBL-020: 14 identity/organization tables + backfill
+  056_identity_contract_completion.sql  forward-only contract completion (additive)
+  057_identity_boundary_completion.sql  the identity boundary: login_transactions,
+                                     policy_decision_matched_bindings, reconciliations
+                                     and constraints (edited in place, not yet accepted)
 scripts/                             migrate runner, quality ratchet, schema fingerprint,
                                      architecture checkers, MPI seed
 tests/                              cross-package suites: unit, docs, HTTP contract,
@@ -133,7 +152,11 @@ than silently ignored.
 
 **Privileged actions require step-up.** Moving an RO to `authorized` or `canceled`, and recording a
 `staff_attestation` authorization, require a short-lived token bound to the exact tenant, user,
-action and resource. See `src/shared/security/step-up.ts`.
+action and resource. Since FBL-020 the step-up credential is a provider-backed
+reauthentication grant, not a locally signed token: see
+`packages/fixed-ops/src/security/sensitive-action.ts` and
+[docs/identity/AUTH-FLOWS.md](docs/identity/AUTH-FLOWS.md) §5. (`src/shared/security/step-up.ts`
+was this file's pre-FBL-010 path and no longer exists.)
 
 **Customer authorizations are derived, not asserted.** `recordAuthorization` validates that the
 estimate belongs to the RO, was actually sent, and is still the version in front of the customer,
@@ -154,9 +177,15 @@ the customer declined cannot be reopened through the work-progress endpoint.
 they describe. Best-effort platform audit rows and metrics are emitted only after the commit — a
 swallowed error inside an open Postgres transaction would poison the commit.
 
-**Step-up tokens work once.** `consumeStepUpToken` records the token's `jti` in the same transaction
-as the privileged write, so it is spent exactly when the operation commits and a rolled-back
-operation releases it. A replay is refused even inside the token's lifetime.
+**Step-up grants work once.** `consumeSensitiveActionGrant`
+(`packages/fixed-ops/src/security/sensitive-action.ts`) spends the reauthentication grant in
+the same transaction as the privileged write, so it is spent exactly when the operation
+commits and a rolled-back operation releases it. A replay, a wrong action, a wrong resource,
+a wrong user or a wrong tenant is refused, and a `fresh_only` grant can never pay for a
+`fresh_and_mfa_policy` operation. The pre-FBL-020 mechanism this replaced — a locally signed
+token whose `jti` was recorded in `step_up_token_uses` — is gone: `consumeStepUpToken` no
+longer exists in any source file, and the `step_up_token_uses` table (migration 050) is
+neither written nor read (see `docs/identity/KNOWN-LIMITATIONS.md`).
 
 ---
 
@@ -199,7 +228,7 @@ authenticated — bind them to an internal interface or gate them at the ingress
 
 All fifteen Phase-248 metrics are populated. Four are per-request events (appointments, repair
 orders, cycle time, approval time). The other eleven are rates, ratios and depths computed by
-`services/metrics-aggregator.ts`, which runs on an interval (`METRICS_INTERVAL_MS`, default 60s)
+`packages/fixed-ops/src/legacy/metrics-aggregator.ts`, which runs on an interval (`METRICS_INTERVAL_MS`, default 60s)
 over a rolling window (`METRICS_WINDOW_DAYS`, default 30) and covers parts backorder rate and wait
 time, QC failure rate, technician utilization / efficiency / proficiency, SLA breach rate,
 recommendation conversion, comeback rate, first-service capture, and queue depth.
@@ -250,8 +279,10 @@ ratcheted: `npm run ratchet:check` fails on any new strict-mode or lint finding 
 
 ### The gates that check the checks
 
-A green suite is not by itself evidence that the suite is holding anything, so four gates exist to
-make the evidence mechanical rather than trusted:
+A green suite is not by itself evidence that the suite is holding anything, so **six** gates
+exist to make the evidence mechanical rather than trusted. (This sentence read "four" while
+listing five bullets until FBL-020-R5; the count is the list, and the list has since grown by
+one.)
 
 - **The populated upgrade drill.** `tests/fixtures/legacy-identity-seed-pre-057.sql` seeds NONEMPTY
   legacy identity data against the schema as it stood before migration `057`, and
@@ -264,14 +295,40 @@ make the evidence mechanical rather than trusted:
 - **Mutation-kill checks.** `scripts/mutation-kill.ts` copies the tree, removes one security control,
   and requires the named test to die. It has already found a real gap: a status predicate whose
   removal broke no test.
-- **The requirement map.** `docs/FBL-020-R4-REQUIREMENT-MAP.json` maps every FBL-020-R4 requirement
-  to its named tests, CI steps and artifacts; `scripts/check-requirement-map.ts` fails if any named
-  test, path, step or artifact does not exist, so the map cannot rot.
+- **The requirement map.** `docs/FBL-020-R5-REQUIREMENT-MAP.json` maps every attested clause of the
+  active order to its named tests, CI steps and artifacts; `scripts/check-requirement-map.ts` fails
+  if any named test, path, step or artifact does not exist, if a requirement id is duplicated or
+  malformed, or if a declared clause has no requirement at all — so the map can neither rot nor go
+  quietly incomplete.
+- **Published figures vs their artifacts.** `scripts/check-published-figures.ts` reads every
+  figure the delivery report and the requirement map publish — suite totals, floor constants,
+  mutation totals, inventory totals, battery sizes, digests — out of the run or the constant
+  that produces it, and fails when a document states anything else, whether the figure sits
+  in a marked span or in a sentence. Four figures had shipped at two values each before it
+  existed. A figure no source can derive must carry a `NOT GATE-CHECKED` label where it
+  appears.
+- **The order and the blueprint it comes from.** The active order text is checked in at
+  `docs/orders/FBL-020-R5.md`, verbatim and in full, canonical-LF SHA-256
+  `75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`
+  (`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`), with a clause register that marks
+  **all twenty-nine clauses as held verbatim**. An earlier revision of this bullet described
+  that register as listing "the clauses this repository does NOT hold"; that was an artefact
+  of the order having been routed to the implementation waves one section at a time, and it
+  is **withdrawn** — no clause is registered as unheld, and
+  `tests/delivery-documentation.test.ts` fails if one ever is again. Which blueprint governs —
+  and which one a reviewer is probably holding, since the two number their sections
+  differently — is `docs/orders/BLUEPRINT-PROVENANCE.md`. The superseded Version 1.0 blueprint
+  is committed beside it and `tests/delivery-documentation.test.ts` reads its bytes, so the
+  recorded facts cannot drift from the document.
+
+**Every R5 clause is UNVERIFIED until the final package proves it** (the order's Appendix A).
+Nothing in this README closes one, and no "closed"/"discharged" claim about an R5 clause
+stands anywhere in this repository as a governing status.
 
 **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Every provider property is proven against a
 deterministic local issuer and a provider-neutral fake, and the WorkOS adapter itself is invoked
-only over a mocked transport. See `docs/identity/KNOWN-LIMITATIONS.md` and
-`docs/FBL-020-DELIVERY-REPORT.md` §15.
+only over a mocked transport. See `docs/identity/KNOWN-LIMITATIONS.md` and the "Gates NOT
+DISCHARGED" section of `docs/FBL-020-DELIVERY-REPORT.md`.
 
 The database-backed suites TRUNCATE every table, so two guards stand in front of them:
 `TEST_DATABASE_URL` is read on its own and never falls back to `DATABASE_URL`, and the database

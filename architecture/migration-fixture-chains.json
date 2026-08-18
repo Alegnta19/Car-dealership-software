@@ -1,0 +1,73 @@
+{
+  "$comment": [
+    "FBL-020-R5 §0.4 — THE ALLOWLIST OF PARTIAL MIGRATION CHAINS.",
+    "",
+    "scripts/migrate.ts applies migrations/ . Pointing it at any other directory is how a",
+    "partial or altered chain could reach a database, so that is now an OPT-IN mode: the",
+    "caller must name a chain declared here, and the directory it hands over must match this",
+    "declaration exactly. An unnamed chain, an unknown name, an extra file, a missing file or",
+    "a changed body all REFUSE.",
+    "",
+    "NOTHING HERE WEAKENS A CHECK. Every refusal in the runner — a NULL or unsupported",
+    "checksum, a missing migration body, a body that no longer matches its recorded digest —",
+    "applies identically in fixture mode. What a chain grants is only the right to use a",
+    "restricted directory; bodies of already-applied migrations that the restricted directory",
+    "does not carry are still resolved from migrations/ and still verified there.",
+    "",
+    "Digests are sha256 over the CANONICAL-LF text, the same value the ledger records. A",
+    "digest of the working bytes would differ between a Windows checkout (CRLF) and CI (LF)",
+    "and could not be pinned at all."
+  ],
+  "chains": {
+    "schema-f76a27a": {
+      "kind": "pinned",
+      "reason": "The earliest retained schema, as of commit f76a27a: migrations 000 and 049 only. The CI upgrade job applies it to reproduce the database a real deployment would have had before the Phase 248 chain, then seeds legacy Fixed Ops rows against it. §0.5: these are the FIXED EXPECTED digests, so a changed retained fixture fails the job instead of being re-recorded by it.",
+      "files": {
+        "000_platform_core.sql": "a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d",
+        "049_phase248_service_cockpit.sql": "523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242"
+      }
+    },
+    "pre-057": {
+      "kind": "pinned",
+      "reason": "The chain up to but NOT including 057, so the populated identity fixture can be seeded against the schema a retained database would actually have had. Every file is byte-identical to migrations/; the chain exists to WITHHOLD 057, not to alter anything.",
+      "files": {
+        "000_platform_core.sql": "a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d",
+        "049_phase248_service_cockpit.sql": "523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242",
+        "050_phase248_hardening.sql": "009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522",
+        "051_phase248_metrics_support.sql": "e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4",
+        "052_phase248_authorization_binding.sql": "94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41",
+        "053_phase248_estimate_line_association.sql": "a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a",
+        "054_phase248_waitlist.sql": "8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58",
+        "055_identity_organization.sql": "52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d",
+        "056_identity_contract_completion.sql": "ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d"
+      }
+    },
+    "negative-control-057": {
+      "kind": "single-statement-deletion",
+      "reason": "scripts/upgrade-negative-controls.ts proves each reconciliation in 057 is load-bearing by DELETING exactly one statement and requiring the intended failure. The mutated body cannot be pinned to a committed digest — its whole purpose is to differ — so this chain pins the other nine files by digest AND pins the canonical digest of the file being mutated, then requires the mutated text to be the canonical text with ONE contiguous span removed containing exactly ONE statement terminator. That is a stricter admission rule than a checksum: a checksum admits one specific body, this admits only bodies reachable by the single operation the harness is allowed to perform.",
+      "mutated_file": "057_identity_boundary_completion.sql",
+      "mutated_file_canonical_sha256": "d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67",
+      "files": {
+        "000_platform_core.sql": "a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d",
+        "049_phase248_service_cockpit.sql": "523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242",
+        "050_phase248_hardening.sql": "009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522",
+        "051_phase248_metrics_support.sql": "e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4",
+        "052_phase248_authorization_binding.sql": "94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41",
+        "053_phase248_estimate_line_association.sql": "a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a",
+        "054_phase248_waitlist.sql": "8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58",
+        "055_identity_organization.sql": "52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d",
+        "056_identity_contract_completion.sql": "ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d"
+      }
+    },
+    "ledger-probe": {
+      "kind": "reserved-probe-filenames",
+      "reason": "tests/migration-ledger.test.ts drives the runner as a real process against a throwaway database in order to exercise its REFUSALS — a changed body, a NULL checksum, a missing body. Those bodies must therefore be free to change, so this chain pins FILENAMES ONLY, in a reserved namespace no real migration may occupy (tests/ci-gates.test.ts asserts migrations/ holds no 9xx file). Every ledger refusal still applies in full: this chain is what the drift and NULL-checksum tests fire the refusals THROUGH, so a chain that suppressed them would make its own tests unfalsifiable.",
+      "filename_pattern": "^9[0-9]{2}_ledger_probe_[a-z]+\\.sql$",
+      "filenames": [
+        "900_ledger_probe_alpha.sql",
+        "901_ledger_probe_beta.sql",
+        "902_ledger_probe_gamma.sql"
+      ]
+    }
+  }
+}

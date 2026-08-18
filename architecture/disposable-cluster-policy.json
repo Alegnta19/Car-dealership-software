@@ -1,0 +1,63 @@
+{
+  "order": "FBL-020-R5 §0.1/§0.2",
+  "purpose": "The inputs scripts/migration-census.ts uses to decide whether a PostgreSQL cluster found on this host is one THIS PROJECT created for its own testing (disposable) or an environment whose contents somebody depends on (persistent). Disposability is decided by PROVENANCE and CONTENT. It is NOT decided by where the data directory sits: the R5 census classified this project's own scratch cluster as persistent solely because its path did not begin with the OS temporary directory, and ordered migration 057 frozen on that basis. A path prefix is not evidence about a cluster; the facts below are.",
+  "fail_closed": "Every condition here is NECESSARY. When any input cannot be read the assessment is `indeterminate`, never `disposable`. An `indeterminate` cluster is counted with the persistent ones, so an unclassifiable environment blocks the §0.2 branch instead of being waved through.",
+
+  "durability_settings_that_must_be_off": {
+    "settings": ["fsync"],
+    "why": "PostgreSQL documents that with fsync off a crash can leave the cluster irrecoverably corrupt. A cluster launched that way carries its operator's own recorded declaration that NOTHING it holds is depended on — a property of the whole cluster's content, readable from the cluster itself, and one no genuinely persistent environment can satisfy. This is the single condition that most sharply separates a drill cluster from a real one, and it is why the classifier can be conservative without being useless."
+  },
+
+  "loopback_addresses": ["localhost", "127.0.0.1", "::1", "*disabled*"],
+  "loopback_why": "A cluster reachable from off-box is a shared target. `listen_addresses` is resolved from the recorded postmaster arguments first, then postgresql.conf, then PostgreSQL's own default of `localhost`; anything naming a non-loopback interface is NOT disposable.",
+
+  "disposable_database_patterns": [
+    {
+      "pattern": "^dealership_test$",
+      "declared_by": "docs/DEVELOPMENT.md",
+      "literal": "anything_test",
+      "note": "The database TEST_DATABASE_URL points at. DEVELOPMENT.md tells a reader to point it at 'a scratch cluster, not a shared one'."
+    },
+    {
+      "pattern": "^dealership_test_ledger_probe$",
+      "declared_by": "tests/migration-ledger.test.ts",
+      "literal": "dealership_test_ledger_probe"
+    },
+    {
+      "pattern": "^dealership_test_ledger_drop_probe$",
+      "declared_by": "tests/migration-ledger.test.ts",
+      "literal": "dealership_test_ledger_drop_probe"
+    },
+    {
+      "pattern": "^dealership_test_rp[0-9]+$",
+      "declared_by": "scripts/migrate-refusal-probe.ts",
+      "literal": "_rp${index}",
+      "note": "One throwaway copy per ledger-refusal probe."
+    },
+    {
+      "pattern": "^dealership_test_nc[0-9]+$",
+      "declared_by": "scripts/upgrade-negative-controls.ts",
+      "literal": "_nc${index}",
+      "note": "One throwaway copy per reconciliation negative control."
+    },
+    {
+      "pattern": "^cockpit_fresh_check$",
+      "declared_by": ".github/workflows/ci.yml",
+      "literal": "cockpit_fresh_check"
+    }
+  ],
+
+  "non_disposable_database_names": [
+    "dealership",
+    "dealership_prod",
+    "dealership_production",
+    "dealership_staging",
+    "dealership_stage",
+    "cockpit",
+    "cockpit_prod",
+    "cockpit_production"
+  ],
+  "non_disposable_why": "The names this project would give a database somebody depends on. One of these present in a cluster makes it NOT disposable whatever else is true of it.",
+
+  "unattributed_names_are_reported_not_ignored": "A database whose name matches no pattern above is listed in the finding's evidence as `unattributed`. It does not on its own defeat disposability — the durability declaration above already establishes that everything in such a cluster is expendable — but it is published so a reviewer can disagree with the reading, and a name matching `non_disposable_database_names` overrides it outright."
+}

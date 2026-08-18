@@ -4,17 +4,23 @@ Human-readable companion to `architecture/modules.json` (the machine-read source
 dependency-cruiser rules are generated from; `scripts/check-architecture-manifest.ts`
 keeps the two and the real workspace manifests consistent, in CI).
 
-| Module            | Owner                 | Purpose                                                                       | May depend on                                                           | Never                                         |
-| ----------------- | --------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
-| @dealer/contracts | platform-architecture | Shared contract types: roles, tenant context, envelopes, Problem Details      | —                                                                       | Frameworks, drivers, business rules           |
-| @dealer/platform  | platform-architecture | Config boundary, request context, logging, error primitives, JWT verify       | contracts                                                               | Express, pg, business rules                   |
-| @dealer/database  | platform-architecture | Pool, query, transactions                                                     | platform (logging)                                                      | Business rules, schema definitions            |
-| @dealer/fixed-ops | fixed-operations      | Service-cockpit domain + application behavior (legacy/ unsplit until FBL-060) | contracts, platform, database                                           | Express, other modules' persistence internals |
-| @dealer/test-kit  | platform-architecture | Test guards, world builders                                                   | contracts, platform, database, fixed-ops                                | Being imported by production code             |
-| @dealer/ui        | web-experience        | UI primitives (shell)                                                         | contracts                                                               | Business rules, server dependencies           |
-| @dealer/api       | fixed-operations      | HTTP composition root: middleware order, routes, envelopes, lifecycle         | contracts, platform, database, fixed-ops                                | Business rules, SQL, direct pg                |
-| @dealer/worker    | platform-architecture | Background process: the FBL-020-R4 support-access expiry job (deployed)       | contracts, platform, database, fixed-ops, organization, identity-access | Queues/outbox/schedulers until FBL-040; SQL   |
-| @dealer/web       | web-experience        | Web shell (no product UI; not deployed)                                       | contracts, ui                                                           | Server-side logic, database access            |
+**Governing authority.** The active order is FBL-020-R5, checked in at
+[`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
+`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+**every R5 clause is UNVERIFIED until the final package proves it**. This document records
+ownership and the gates that enforce it; it closes no clause.
+
+| Module            | Owner                 | Purpose                                                                                                         | May depend on                                                           | Never                                         |
+| ----------------- | --------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------- |
+| @dealer/contracts | platform-architecture | Shared contract types: roles, tenant context, envelopes, Problem Details                                        | —                                                                       | Frameworks, drivers, business rules           |
+| @dealer/platform  | platform-architecture | Config boundary, request context, logging, error primitives, JWT verify                                         | contracts                                                               | Express, pg, business rules                   |
+| @dealer/database  | platform-architecture | Pool, query, transactions                                                                                       | platform (logging)                                                      | Business rules, schema definitions            |
+| @dealer/fixed-ops | fixed-operations      | Service-cockpit domain + application behavior (legacy/ unsplit until FBL-060)                                   | contracts, platform, database                                           | Express, other modules' persistence internals |
+| @dealer/test-kit  | platform-architecture | Test guards, world builders                                                                                     | contracts, platform, database, fixed-ops                                | Being imported by production code             |
+| @dealer/ui        | web-experience        | UI primitives (shell)                                                                                           | contracts                                                               | Business rules, server dependencies           |
+| @dealer/api       | fixed-operations      | HTTP composition root: middleware order, routes, envelopes, lifecycle                                           | contracts, platform, database, fixed-ops                                | Business rules, SQL, direct pg                |
+| @dealer/worker    | platform-architecture | Background process (deployed): the three identity expiry sweeps — support windows, login transactions, step-ups | contracts, platform, database, fixed-ops, organization, identity-access | Queues/outbox/schedulers until FBL-040; SQL   |
+| @dealer/web       | web-experience        | Web shell (no product UI; not deployed)                                                                         | contracts, ui                                                           | Server-side logic, database access            |
 
 Layer rules inside business packages: domain imports no transport/database/metrics/env;
 application depends on domain and declared ports; adapters implement ports; composition
@@ -28,7 +34,8 @@ imports, calls to those primitives, and SQL statement literals in app production
 proven in both directions by `architecture/fixtures/forbidden-app-sql`. The composition
 root may import `closePool` for lifecycle shutdown only.
 
-Authorization state has ONE set of writers (FBL-020-R4 section 5). A table that carries
+Authorization state has ONE set of writers (introduced by FBL-020-R4 section 5, unchanged
+through FBL-020-R5). A table that carries
 `authorization_version` — tenants, the four organization levels, user links, role
 bindings, provider connections, identity sessions and the two support-access tables — may
 be written only by the attributed mutation services in @dealer/identity-access (plus the

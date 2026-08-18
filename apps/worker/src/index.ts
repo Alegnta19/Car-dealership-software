@@ -7,10 +7,14 @@
  * a test that reached a copy of it would prove nothing about the copy that ships).
  */
 export {
+  LOGIN_TRANSACTION_EXPIRY_JOB,
+  REAUTHENTICATION_EXPIRY_JOB,
   SUPPORT_ACCESS_EXPIRY_JOB,
   WORKER_JOBS,
   main,
   runAllJobsOnce,
+  runLoginTransactionExpiryOnce,
+  runReauthenticationExpiryOnce,
   runSupportAccessExpiryOnce,
   startWorker,
 } from './main';

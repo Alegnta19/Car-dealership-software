@@ -221,6 +221,21 @@ export const EFFECTIVE_ROLE_BINDING_SQL = `rb.status = 'active'
         AND rb.effective_from <= NOW()
         AND (rb.effective_to IS NULL OR rb.effective_to > NOW())`;
 
+/**
+ * FBL-020-R5 §1.9 — the AUTHORITY RULE for a tenant, written ONCE, with `t` as the
+ * table alias.
+ *
+ * A tenant confers authority only while it is `active` AND inside its effective
+ * window. Step 3 of `decide()` below applies it to every non-platform decision and
+ * denies `TENANT_INACTIVE`; §1.9 requires MFA-policy certification — a
+ * tenant-scoped administrative act — to be judged by THE SAME rule, and R4 judged
+ * it by no tenant rule at all. `mayActTenantWide` and the certification gate in
+ * `mutations.ts` interpolate this text, so there is no second copy to drift.
+ */
+export const ACTIVE_EFFECTIVE_TENANT_SQL = `t.status = 'active'
+        AND t.effective_from <= NOW()
+        AND (t.effective_to IS NULL OR t.effective_to > NOW())`;
+
 /** The two binding columns the shared scope rule reads. */
 export interface ScopedBinding {
   readonly scope_level: string;
@@ -484,6 +499,19 @@ export function createPolicyEngine(options: {
     freshness: FreshnessClassification;
     mfaAssurance: MfaAssuranceClassification;
     supportRequestId?: string | null | undefined;
+    /**
+     * FBL-020-R5 §2 — the AUDIT copy of the delegated window, and only that.
+     *
+     * The EVIDENCE column `policy_decisions.support_session_expires_at` is no
+     * longer written from here: the INSERT below reads it out of the support
+     * session row it names, in the same statement, so the stored window is the
+     * database's own value rather than one this process believed. Migration 057
+     * §11 then refuses any decision whose recorded window is not that session's
+     * window, and a value that had round-tripped through a JavaScript `Date`
+     * would fail that comparison — PostgreSQL keeps microseconds, `Date` keeps
+     * milliseconds. This field survives because the audit row's JSON details
+     * still carry the instant for a human reader.
+     */
     supportSessionExpiresAt?: Date | null | undefined;
     /**
      * FBL-020-R4 §4 — the whole delegated-access fact set, present on exactly the
@@ -532,7 +560,9 @@ export function createPolicyEngine(options: {
           support_request_id, auth_time, connection_id, session_id, actor_provider_subject,
           support_session_expires_at, evidence_version)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-               $24, ${CURRENT_EVIDENCE_VERSION})
+               (SELECT s.expires_at FROM support_access_sessions s
+                 WHERE s.support_session_id = $13),
+               ${CURRENT_EVIDENCE_VERSION})
        RETURNING decision_id`,
         [
           input.tenantId,
@@ -558,7 +588,6 @@ export function createPolicyEngine(options: {
           input.credential?.connectionId ?? null,
           input.credential?.sessionId ?? null,
           input.credential?.providerSubject ?? null,
-          input.supportSessionExpiresAt ?? null,
         ],
       );
       const decisionId = String((result.rows[0] as Row).decision_id);
@@ -692,10 +721,8 @@ export function createPolicyEngine(options: {
       if (!isPlatformAction) {
         if (targetTenantId === null) return deny('TARGET_TENANT_MISSING', { sensitive });
         const tenant = await query(
-          `SELECT 1 FROM tenants
-            WHERE tenant_id = $1 AND status = 'active'
-              AND effective_from <= NOW()
-              AND (effective_to IS NULL OR effective_to > NOW())`,
+          `SELECT 1 FROM tenants t
+            WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}`,
           [targetTenantId],
         );
         if (tenant.rows.length === 0) return deny('TENANT_INACTIVE', { sensitive });

@@ -44,7 +44,12 @@ import {
   type UserLinkStatus,
 } from './contracts';
 import { createIdentityActionCatalog } from './actions';
-import { EFFECTIVE_ROLE_BINDING_SQL, coversTenantWide, type ActionDefinition } from './policy';
+import {
+  ACTIVE_EFFECTIVE_TENANT_SQL,
+  EFFECTIVE_ROLE_BINDING_SQL,
+  coversTenantWide,
+  type ActionDefinition,
+} from './policy';
 import { consumeReauthenticationGrantReturningId } from './reauthentication';
 
 interface Row {
@@ -745,6 +750,34 @@ async function requireCertificationAuthority(
   actor: string,
   tenantId: string | null,
 ): Promise<void> {
+  // ── FBL-020-R5 §1.9: THE TENANT ITSELF, FIRST ────────────────────────────
+  //
+  // A TENANT-SCOPED certification is an act inside a tenant, so it is subject to
+  // the same authority rule as every other decision about that tenant: the policy
+  // engine denies TENANT_INACTIVE for any non-platform action unless the tenant is
+  // `active` AND inside its effective window, and this gate applied NO tenant rule
+  // whatsoever. A suspended dealership — or one whose effective window had closed —
+  // could therefore have the fact its whole high-assurance step-up path rests on
+  // re-asserted or withdrawn, by a tenant administrator whose own bindings were
+  // still nominally live or by a platform administrator.
+  //
+  // It is checked BEFORE either authority path on purpose. `TENANT_INACTIVE` is not
+  // a permission the platform holds more of; it is a statement that there is no
+  // live tenant to certify for, and a platform administrator escaping it would be
+  // the second authority path this codebase has already been corrected for once.
+  //
+  // The predicate is the engine's own SQL, interpolated. There is no second copy.
+  if (tenantId !== null) {
+    const tenant = await executor.query(
+      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}`,
+      [tenantId],
+    );
+    if (tenant.rows.length === 0) {
+      throw new MutationAuthorityError(
+        'certifying an organization MFA policy requires a currently active and effective tenant',
+      );
+    }
+  }
   if (await mayActPlatformWide(executor, MFA_CERTIFY_PLATFORM_ACTION, actor)) return;
   if (
     tenantId !== null &&
@@ -1769,7 +1802,51 @@ export async function decideSupportAccess(input: {
   });
 }
 
-/** Revocation ends access on the very next policy decision. */
+/**
+ * Revocation ends access on the very next policy decision — for a window that is
+ * still RUNNING.
+ *
+ * ── FBL-020-R5 §1.10: EXPIRY TAKES PRECEDENCE OVER A LATE REVOCATION ───────
+ *
+ * A support window that has passed its `expires_at` has already ended, and it ended
+ * BY THE CLOCK. §1.10 requires that such a window receive the expiry transition and
+ * that a later human revocation must not steal or relabel that ending.
+ *
+ * Migration 057 closes half of this already: `sas_ends_once_and_one_way` refuses a
+ * row carrying both endings, so once the sweep has recorded an expiry a revocation
+ * fails loudly. The half it did NOT close is the window between the expiry INSTANT
+ * passing and the sweep running — typically the whole interval between two worker
+ * passes. In that window this statement's only predicate was `revoked_at IS NULL`,
+ * so a revocation landed, `sas_ends_once_and_one_way` then made the row
+ * unexpirable, and the trail recorded `identity.support.revoked` — naming a person
+ * as the author of an ending that a clock had already made. The operator's answer
+ * to "who ended this access" was wrong, and the `identity.support.expired` event
+ * the audit inventory promises was never written.
+ *
+ * Both predicates below are therefore load-bearing, and they are different facts:
+ * `expired_at IS NULL` refuses to relabel an ending the sweep has already recorded,
+ * and `expires_at > NOW()` refuses to steal one it has not recorded yet.
+ *
+ * The answer is `false` — the same answer this function already gives for a window
+ * that is gone, unknown, or one the caller has no authority over. A revocation that
+ * changed nothing must not report that it did.
+ */
+/**
+ * FBL-020-R5 §1.10 — "this window is still RUNNING", written ONCE.
+ *
+ * Three facts, and each one is load-bearing for a different reason: `revoked_at IS
+ * NULL` (nobody has ended it already), `expired_at IS NULL` (the sweep has not
+ * recorded its ending) and `expires_at > NOW()` (the clock has not ended it yet,
+ * whether or not the sweep has noticed).
+ *
+ * It is a constant rather than two hand-written copies because the revocation below
+ * asks the question TWICE — once to authorize and once to write — and a guard that
+ * only one of them carried would be no guard at all: whichever copy was dropped, the
+ * other would still refuse, and no test could tell the two apart.
+ */
+const SUPPORT_SESSION_STILL_RUNNING_SQL = `revoked_at IS NULL
+          AND expired_at IS NULL AND expires_at > NOW()`;
+
 export async function revokeSupportSession(input: {
   supportSessionId: string;
   revokedByUserLinkId: string;
@@ -1779,7 +1856,7 @@ export async function revokeSupportSession(input: {
     // R3 section I: revocation is an authorized, scoped, attributable act.
     const target = await executor.query(
       `SELECT tenant_id, actor_user_link_id FROM support_access_sessions
-        WHERE support_session_id = $1 AND revoked_at IS NULL`,
+        WHERE support_session_id = $1 AND ${SUPPORT_SESSION_STILL_RUNNING_SQL}`,
       [input.supportSessionId],
     );
     if (target.rows.length === 0) return false;
@@ -1795,7 +1872,11 @@ export async function revokeSupportSession(input: {
               revoked_by_user_link_id = $2,
               updated_by_user_link_id = $2,
               authorization_version = authorization_version + 1
-        WHERE support_session_id = $1 AND revoked_at IS NULL
+        -- §1.10 again, on the WRITE, and the SAME text. The read above can be
+        -- overtaken: the sweep may claim and expire this row between the authority
+        -- check and here, and the loser of that race must change nothing rather
+        -- than relabel the ending.
+        WHERE support_session_id = $1 AND ${SUPPORT_SESSION_STILL_RUNNING_SQL}
         RETURNING tenant_id, actor_user_link_id, authorization_version`,
       [input.supportSessionId, actor],
     );

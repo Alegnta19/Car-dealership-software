@@ -1,10 +1,45 @@
 # Authentication, Reauthentication and Support Flows (FBL-020)
 
-One document, one implementation. Every claim below is either enforced by code
-in `packages/identity-access` / `apps/api/src/middleware/auth.ts` /
+**Current as of FBL-020-R5.** One document, one implementation. Every claim below is
+either enforced by code in `packages/identity-access` / `apps/api/src/middleware/auth.ts` /
 `apps/api/src/routes/auth.ts`, or by a CHECK constraint in migrations 055–057.
 Anything that is **not** proven by deterministic tests is labelled as such in
 [KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md).
+
+**Governing authority.** The active order is FBL-020-R5, checked in at
+[`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
+`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+**every R5 clause is UNVERIFIED until the final package proves it**; this document describes
+behaviour and closes no clause.
+
+The flows that changed under FBL-020-R5, described here in their changed form. An earlier
+revision opened with "Two flows changed under FBL-020-R5" and listed the first two bullets
+only — an understatement of the revision, corrected here rather than left:
+
+- **Revocation destroys the provider refresh credential in the same statement that sets
+  `revoked_at`** (§1.1/§1.2), on every path that revokes — cookie logout included, which is
+  the path that had been forgetting it. `tests/identity-revocation.test.ts` drives the
+  cookie logout of a session the real callback created and asserts that no trace of the
+  sealed refresh state survives.
+- **Admission and custody are ONE call** (§1.3/§1.4): no route establishes a session of its
+  own, and a concurrent administrative change is either seen by the admission query or
+  serialized behind it. `tests/login-admission-concurrency.test.ts` proves that
+  deterministically rather than by timing, with a CONTROL leg that must admit.
+- **Every callback carrying a valid sealed handle is claimed and terminalized** (§1.5),
+  including the two endings the failure vocabulary previously had no word for: a provider
+  `error` callback and a callback carrying no authorization code (§1 below).
+- **The deployed worker ages login transactions and step-ups**, not only support windows
+  (§1.6). Both sweeps were written and audited, and nothing that shipped called them.
+- **Definitive refresh revocation and its audit are one transaction** (§1.7), and the
+  exported refresh/rotation boundary REQUIRES access-token verification while the unsafe
+  lower-level primitive is module-private (§1.8) — §6 below.
+- **MFA certification requires a currently active and effective tenant** (§1.9); a support
+  session whose expiry instant has passed receives the expiry transition, and a later human
+  revocation cannot steal or relabel that ending (§1.10) — §7 below; and the successful
+  login audit names the ADMITTED tenant and user link (§1.11).
+- **Policy evidence is relationally enforced** (§2): a version-2 `policy_decisions` row's
+  matched bindings are normalized into `policy_decision_matched_bindings`, whose composite
+  foreign keys refuse a fabricated or cross-wired binding (§3 below).
 
 Two redirect URIs are registered with the provider and both are load-bearing:
 
@@ -53,13 +88,33 @@ GET /auth/callback?code&state
    └─ 302 → the return location read back FROM THE ROW, re-allowlisted
 ```
 
-Every exit after the claim is terminal: the row reaches `succeeded`, or
-`failed` with a reason from a closed server-written vocabulary
-(`provider_exchange_failed`, `impersonation_detected`,
-`token_verification_failed`, `identity_not_admitted`,
-`session_establishment_failed`, `expired`). The answer outward is always the
-same neutral 401 — an unknown organization, an unknown identity, a pending
-identity and a deactivated identity are externally indistinguishable.
+Every exit after the claim is terminal: the row reaches `succeeded`, or `failed` with a
+reason from a closed server-written vocabulary. That vocabulary is **nine** reasons, and it
+is listed here in full because an earlier revision of this paragraph listed six and silently
+omitted the three the later revisions added:
+
+| Reason                         | The fact it records                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `provider_exchange_failed`     | the provider refused or could not complete the code exchange                                 |
+| `token_verification_failed`    | the returned access token did not verify                                                     |
+| `exchange_token_mismatch`      | the exchange response and the verified token described different identities (FBL-020-R4)     |
+| `impersonation_detected`       | any of the three impersonation carriers was present                                          |
+| `identity_not_admitted`        | the six-fact chain refused this identity here                                                |
+| `session_establishment_failed` | the local session could not be established after a good exchange                             |
+| `provider_error_callback`      | the provider redirected to the callback with `error` and no code (FBL-020-R5 §1.5)           |
+| `authorization_code_missing`   | a valid sealed handle and matching state, and no authorization code at all (FBL-020-R5 §1.5) |
+| `expired`                      | the transaction's own expiry passed, including during a slow exchange                        |
+
+The provider's own `error` / `error_description` strings are deliberately NOT recorded: the
+vocabulary is server-written, and a provider message is caller-influenced text that must
+never reach the table or a log. The answer outward is always the same neutral 401 — an
+unknown organization, an unknown identity, a pending identity and a deactivated identity are
+externally indistinguishable.
+
+**One of the nine reaches no test.** `session_establishment_failed` is written by the route
+and asserted nowhere; it is declared in
+[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md) under "Open at FBL-020-R5 submission" rather
+than presented here as if it were covered.
 
 ## 2. Request authentication
 

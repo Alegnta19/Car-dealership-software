@@ -94,6 +94,14 @@ export type ReauthenticationTerminalReason =
   | 'identity_chain_broken'
   | 'assurance_not_certified'
   | 'session_establishment_failed'
+  /**
+   * FBL-020-R5 §1.5 — the step-up leg's equivalents of the two login reasons: the
+   * provider redirected to the callback with an `error` and no code, or the
+   * callback carried no authorization code. Both are terminal, both are recorded,
+   * and neither carries the provider's own message.
+   */
+  | 'provider_error_callback'
+  | 'authorization_code_missing'
   | 'replayed'
   | 'expired';
 
@@ -907,25 +915,62 @@ export async function consumeReauthenticationGrant(
   return (await consumeReauthenticationGrantReturningId(executor, input)) !== null;
 }
 
+/** How many stale step-ups ONE pass will age. Bounded on purpose. */
+export const REAUTHENTICATION_EXPIRY_DEFAULT_BATCH = 200;
+const REAUTHENTICATION_EXPIRY_MAX_BATCH = 1000;
+
 /**
- * Bookkeeping hygiene for the scheduled aggregator: transactions that were
- * started but never completed move to 'expired'. Grants need no sweep —
- * consumption and expiry are decided by their own columns at read time.
+ * FBL-020-R5 §1.6 — THE STEP-UP EXPIRY SWEEP, under exactly the same three
+ * properties and for exactly the same reasons as the login sweep in
+ * `login-transaction.ts`; the reasoning is written out once there and not restated.
+ *
+ * In short: one row claimed and transitioned per short transaction, at most `limit`
+ * times; `state = 'started'` is both the claim predicate and the predicate the
+ * write invalidates, which is what makes a repeat pass and a concurrent pass no-ops
+ * for the same reason; `FOR UPDATE SKIP LOCKED` is liveness, not the guarantee.
+ * R4's version was one unbounded UPDATE over the whole backlog.
+ *
+ * Grants need no sweep — consumption and expiry are decided from their own columns
+ * at read time — so this must not be read as retiring them.
+ *
+ * R4 section 3's property is preserved: the sweep records WHY and WHEN and writes
+ * one audit row per transaction it expires, in the same transaction as the state
+ * change. An expiry that left no trail made "this step-up was never completed" a
+ * fact an operator could only infer from a missing grant.
  */
-export async function expireStaleReauthenticationTransactions(): Promise<number> {
-  return withTransaction(async (executor) => {
-    // R4 section 3: the sweep records WHY and WHEN, and writes one audit row per
-    // transaction it expires — in the same transaction as the state change. An
-    // expiry that left no trail made "this step-up was never completed" a fact
-    // an operator could only infer from a missing grant.
-    const expired = await executor.query(
-      `UPDATE reauthentication_transactions
-          SET state = 'expired', terminal_reason = 'expired', terminal_at = NOW(),
-              updated_at = NOW()
-        WHERE state = 'started' AND expires_at < NOW()
-        RETURNING reauth_txn_id, tenant_id, user_link_id, action, resource_type`,
+export async function expireStaleReauthenticationTransactions(options?: {
+  limit?: number;
+}): Promise<number> {
+  const requested = options?.limit ?? REAUTHENTICATION_EXPIRY_DEFAULT_BATCH;
+  if (
+    !Number.isInteger(requested) ||
+    requested < 1 ||
+    requested > REAUTHENTICATION_EXPIRY_MAX_BATCH
+  ) {
+    throw new RangeError(
+      `reauthentication expiry batch limit must be an integer in 1..${REAUTHENTICATION_EXPIRY_MAX_BATCH}`,
     );
-    for (const raw of expired.rows as Row[]) {
+  }
+  let recorded = 0;
+  for (let i = 0; i < requested; i += 1) {
+    const aged = await withTransaction<boolean>(async (executor) => {
+      const expired = await executor.query(
+        `UPDATE reauthentication_transactions
+            SET state = 'expired', terminal_reason = 'expired', terminal_at = NOW(),
+                updated_at = NOW()
+          WHERE reauth_txn_id = (
+            SELECT rt.reauth_txn_id
+              FROM reauthentication_transactions rt
+             WHERE rt.state = 'started'
+               AND rt.expires_at < NOW()
+             ORDER BY rt.expires_at
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1
+          )
+          RETURNING reauth_txn_id, tenant_id, user_link_id, action, resource_type`,
+      );
+      if (expired.rows.length === 0) return false;
+      const raw = expired.rows[0] as Row;
       await auditReauthentication(executor, {
         tenantId: String(raw.tenant_id),
         reauthTxnId: String(raw.reauth_txn_id),
@@ -938,7 +983,10 @@ export async function expireStaleReauthenticationTransactions(): Promise<number>
           resource_type: raw.resource_type ?? null,
         },
       });
-    }
-    return expired.rowCount ?? 0;
-  });
+      return true;
+    });
+    if (!aged) break;
+    recorded += 1;
+  }
+  return recorded;
 }

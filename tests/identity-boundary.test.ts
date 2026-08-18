@@ -74,7 +74,6 @@ import {
   revokeRole,
   rolesForUserLink,
   revokeSupportSession,
-  rotateSessionRefresh,
   sealCookiePayload,
   startLoginTransaction,
   startReauthentication,
@@ -240,6 +239,36 @@ describe(
         },
       };
     }
+
+    /**
+     * FBL-020-R5 §1.8 — THE VERIFICATION EVERY EXPORTED REFRESH NOW REQUIRES.
+     *
+     * `RefreshProviderSessionInput.verifyAccessToken` is no longer optional, so
+     * every call below supplies one. This is the honest fake for a refresh reply
+     * that really did come back describing the same identity the session was
+     * established with.
+     *
+     * `authTime` is deliberately OLDER than the instant `seedRefreshableSession`
+     * stamps on the row. A refresh is not an authentication event: only a
+     * genuinely newer VERIFIED auth_time may move the stored one, and this fake
+     * must never be the thing that moves it.
+     */
+    const verifiedRefreshFor = (
+      subject: string,
+      overrides: Partial<VerifiedAccessToken> = {},
+    ): Promise<VerifiedAccessToken> =>
+      Promise.resolve({
+        providerUserId: subject,
+        providerSessionId: 'sid_initial',
+        organizationId: testOrganizationId(tenantId),
+        authTime: new Date(Date.now() - 3_600_000),
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 300_000),
+        roleHints: [],
+        nonceDigest: null,
+        impersonation: NOT_IMPERSONATED,
+        ...overrides,
+      });
 
     interface RefreshState {
       sealed: string | null;
@@ -502,8 +531,17 @@ describe(
         requestId: overrides?.requestId ?? 'req-boundary-0001',
         correlationId: overrides?.correlationId ?? 'corr-boundary-0001',
       });
+      // FBL-020-R5 §1.11: a success is recorded AS AN ADMITTED IDENTITY, so the
+      // state-machine tests need one to hand it. It is a real activated link in
+      // this tenant, exactly as a real admission would produce.
+      const admitted = {
+        loginTxnId: started.loginTxnId,
+        tenantId,
+        userLinkId: await makeLink('user_login_txn_' + randomUUID().slice(0, 8)),
+      };
       return {
         started,
+        admitted,
         args: {
           loginTxnId: started.loginTxnId,
           redirectUri: 'http://127.0.0.1:3000/auth/callback',
@@ -516,7 +554,7 @@ describe(
     }
 
     test('the login transaction walks pending -> consuming -> succeeded, and the replay loses at EVERY stage', async () => {
-      const { started, args } = await startLogin();
+      const { started, args, admitted } = await startLogin();
       const opened = await loginTxnRow(started.loginTxnId);
       assert.equal(opened.status, 'pending', 'a transaction opens PENDING');
       assert.equal(opened.claimedAt, null);
@@ -552,7 +590,7 @@ describe(
       );
 
       // ── consuming -> succeeded, once.
-      assert.equal(await succeedLoginTransaction(started.loginTxnId), true);
+      assert.equal(await succeedLoginTransaction(admitted), true);
       const succeeded = await loginTxnRow(started.loginTxnId);
       assert.equal(succeeded.status, 'succeeded');
       assert.equal(succeeded.consumedOutcome, 'succeeded');
@@ -561,11 +599,7 @@ describe(
 
       // a replay AFTER success loses, and both terminal transitions are spent
       assert.equal(await claimLoginTransactionAtomically(args), null);
-      assert.equal(
-        await succeedLoginTransaction(started.loginTxnId),
-        false,
-        'succeeded is absorbing',
-      );
+      assert.equal(await succeedLoginTransaction(admitted), false, 'succeeded is absorbing');
       assert.equal(
         await failLoginTransaction(started.loginTxnId, 'provider_exchange_failed'),
         false,
@@ -575,7 +609,7 @@ describe(
     });
 
     test('a claimed transaction that fails is terminal WITH A REASON and can never become succeeded', async () => {
-      const { started, args } = await startLogin();
+      const { started, args, admitted } = await startLogin();
       assert.ok(await claimLoginTransactionAtomically(args));
 
       assert.equal(
@@ -588,7 +622,7 @@ describe(
       assert.equal(failed.failureReason, 'token_verification_failed');
 
       // terminal in every direction
-      assert.equal(await succeedLoginTransaction(started.loginTxnId), false);
+      assert.equal(await succeedLoginTransaction(admitted), false);
       assert.equal(
         await failLoginTransaction(started.loginTxnId, 'identity_not_admitted'),
         false,
@@ -599,7 +633,7 @@ describe(
     });
 
     test('an UNCLAIMED transaction expires into the failed terminal state, never into success', async () => {
-      const { started, args } = await startLogin();
+      const { started, args, admitted } = await startLogin();
       await query(
         `UPDATE login_transactions
             SET created_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
@@ -616,7 +650,7 @@ describe(
         'nobody claimed it, and the sweep does not pretend somebody did',
       );
       assert.equal(await claimLoginTransactionAtomically(args), null);
-      assert.equal(await succeedLoginTransaction(started.loginTxnId), false);
+      assert.equal(await succeedLoginTransaction(admitted), false);
     });
 
     test('the schema itself refuses the states the machine forbids', async () => {
@@ -801,48 +835,187 @@ describe(
       assert.equal((stillLive.rows[0] as { revoked_at: unknown }).revoked_at, null);
     });
 
-    // ── Obligation 7: refresh rotation ────────────────────────────────────
-    test('refresh state rotates, and a replayed refresh token changes nothing', async () => {
-      const link = await makeLink('user_refresh');
-      const created = await createSession({
-        ...(await sessionBindingFor(tenantId, 'user_refresh')),
-        tenantId,
-        userLinkId: link,
-        providerSessionId: null,
-        authTime: new Date(),
-        ttlSeconds: 3600,
-        refreshToken: 'refresh-token-one',
-      });
+    /**
+     * FBL-020-R5 §1.8 — THE STRUCTURAL HALF.
+     *
+     * The behavioural tests below prove that TODAY's exported refresh boundary
+     * verifies the token it is handed. They cannot prove anything about a boundary
+     * somebody exports next quarter, and "verification happens because every caller
+     * passes a verifier" is exactly the convention this clause refuses.
+     *
+     * The clause is a disjunction — verification REQUIRED at every exported
+     * refresh/rotation boundary, or the unsafe lower-level primitives PRIVATE — and
+     * this pins both limbs against the source of `packages/identity-access/src/
+     * session.ts`:
+     *
+     *   (a) the exported functions whose names mention refreshing or rotation are
+     *       exactly three, and the two that spend a refresh credential each declare
+     *       `verifyAccessToken` as a REQUIRED input;
+     *   (b) the word `verifyAccessToken?:` does not occur, and neither does any
+     *       `=== undefined` / `!== undefined` test of it, so no code path can skip
+     *       the judgement;
+     *   (c) the rotation WRITE — the statement that puts a new refresh credential
+     *       into a session row — appears exactly once across `apps/` and
+     *       `packages/`, and that once is inside this module, unexported.
+     *
+     * Stated precisely: (a) and (b) are lexical facts about this file, and (c) is a
+     * lexical guard over the SQL this codebase writes — not a proof that no rotation
+     * could be spelled some other way.
+     */
+    test('the exported refresh surface cannot be driven without access-token verification', () => {
+      const root = join(__dirname, '..');
+      const sessionPath = join(root, 'packages', 'identity-access', 'src', 'session.ts');
+      const source = readFileSync(sessionPath, 'utf8').replace(/\r\n/g, '\n');
 
-      const rotated = await rotateSessionRefresh({
-        sessionId: created.session.sessionId,
-        presentedRefreshToken: 'refresh-token-one',
-        newRefreshToken: 'refresh-token-two',
-        authTime: new Date(),
-        ttlSeconds: 3600,
-      });
-      assert.ok(rotated);
-      assert.equal(rotated.rotationCount, 1);
-
-      // the OLD token is now worthless
-      assert.equal(
-        await rotateSessionRefresh({
-          sessionId: created.session.sessionId,
-          presentedRefreshToken: 'refresh-token-one',
-          newRefreshToken: 'refresh-token-three',
-          authTime: new Date(),
-          ttlSeconds: 3600,
-        }),
-        null,
-        'a replayed refresh token must not rotate anything',
+      // (a) the exported refresh/rotation surface, read off the source
+      const exported = [...source.matchAll(/^export (?:async )?function (\w+)/gm)].map(
+        (m) => m[1] as string,
       );
+      assert.ok(exported.length > 5, 'the export scan must actually have found this module');
+      const surface = exported.filter((name) => /refresh|rotat|maintain/i.test(name)).sort();
+      assert.deepEqual(
+        surface,
+        ['isProviderRefreshDue', 'maintainProviderSession', 'refreshProviderSession'],
+        'a new exported refresh/rotation boundary must come with its own §1.8 evidence; ' +
+          `found: ${JSON.stringify(surface)}`,
+      );
+
+      // …and BOTH boundaries that spend a credential require the verifier. The
+      // third, isProviderRefreshDue, is a pure predicate over a session row: it
+      // performs no exchange and takes no token into custody.
+      const required = source.match(
+        /readonly verifyAccessToken: \(accessToken: string\) => Promise<VerifiedAccessToken>;/g,
+      );
+      assert.equal(
+        (required ?? []).length,
+        2,
+        'RefreshProviderSessionInput and MaintainProviderSessionInput must each REQUIRE a verifier',
+      );
+
+      // (b) nothing may make it optional, and nothing may branch around it
+      assert.equal(
+        (source.match(/verifyAccessToken\?:/g) ?? []).length,
+        0,
+        'no exported refresh boundary may declare verification optional',
+      );
+      assert.equal(
+        (source.match(/verifyAccessToken\s*(!==|===)\s*undefined/g) ?? []).length,
+        0,
+        'and no code path may test for its absence — that IS the skip this clause removes',
+      );
+
+      // (c) the rotation WRITE is private, and there is exactly one of it
+      const sources: string[] = [];
+      const walk = (dir: string): void => {
+        for (const entry of readdirSync(dir)) {
+          if (entry === 'node_modules' || entry === 'dist') continue;
+          const full = join(dir, entry);
+          if (statSync(full).isDirectory()) walk(full);
+          else if (full.endsWith('.ts') && !full.endsWith('.d.ts')) sources.push(full);
+        }
+      };
+      walk(join(root, 'apps'));
+      walk(join(root, 'packages'));
+      assert.ok(sources.length > 50, 'the walk must actually have found the source trees');
+
+      const rotations: string[] = [];
+      for (const file of sources) {
+        const text = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+        let index = text.indexOf('`');
+        while (index !== -1) {
+          const close = text.indexOf('`', index + 1);
+          if (close === -1) break;
+          const literal = text
+            .slice(index + 1, close)
+            .split('\n')
+            .filter((line) => !/^\s*--/.test(line))
+            .join('\n');
+          // A statement that puts a NEW refresh credential into a session row. The
+          // predicate is deliberately narrow: only the SET list counts, so the
+          // claim statement's `AND refresh_token_hash = $4` (a WHERE comparison)
+          // and the revocation builder's `= NULL` (destruction) are not rotations.
+          const setList = literal.split(/\bWHERE\b/)[0] as string;
+          if (
+            /UPDATE\s+identity_sessions/.test(literal) &&
+            /refresh_token_hash\s*=\s*\$/.test(setList)
+          ) {
+            rotations.push(file.slice(root.length + 1).replace(/\\/g, '/'));
+          }
+          index = text.indexOf('`', close + 1);
+        }
+      }
+      assert.deepEqual(
+        rotations,
+        ['packages/identity-access/src/session.ts'],
+        'refresh state may be rotated in exactly ONE statement, inside the identity package',
+      );
+      assert.ok(
+        !/export\s+(async\s+)?function\s+rotate/.test(source),
+        'and no rotation primitive may be exported — §1.8 makes the unsafe one private',
+      );
+    });
+
+    // ── Obligation 7: refresh rotation ────────────────────────────────────
+    /**
+     * FBL-020-R5 §1.8 — DRIVEN THROUGH THE EXPORTED BOUNDARY, because there is no
+     * longer any other door.
+     *
+     * This test used to call `rotateSessionRefresh` — an exported rotation
+     * primitive that performed no provider call and verified no token, so it wrote
+     * ANY replacement a caller named into a session's refresh state. §1.8 required
+     * either verification at every exported refresh/rotation boundary or that the
+     * unsafe primitive be private; it is now the module-private
+     * `rotateRefreshStateRow`, reachable only after a verified access token has
+     * been judged. The property under test is unchanged: rotation advances the
+     * count, and a spent refresh token is gone from custody.
+     */
+    test('refresh state rotates, and a replayed refresh token changes nothing', async () => {
+      const s = await seedRefreshableSession('user_refresh', 'refresh-token-one');
+
+      const first = fakeProvider({
+        providerUserId: 'user_refresh',
+        replacement: 'refresh-token-two',
+      });
+      const rotated = await refreshProviderSession({
+        sessionId: s.sessionId,
+        provider: first,
+        cookiePassword: COOKIE_PASSWORD,
+        expectedIssuer: s.issuer,
+        ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_refresh'),
+      });
+      if (rotated.outcome !== 'refreshed')
+        assert.fail(`expected refreshed, got ${rotated.outcome}`);
+      assert.equal(rotated.rotationCount, 1);
+      assert.deepEqual(first.presented, ['refresh-token-one']);
+
+      // the OLD token is now worthless: custody moved, so neither the stored
+      // digest nor the sealed state can produce it again
+      const afterFirst = await refreshStateOf(s.sessionId);
+      assert.equal(afterFirst.digest, sha256hex('refresh-token-two'));
+      assert.notEqual(afterFirst.digest, sha256hex('refresh-token-one'));
+      assert.ok(afterFirst.sealed !== null && !afterFirst.sealed.includes('refresh-token-one'));
+
+      // …and the NEXT refresh presents the REPLACEMENT, never the spent token
+      const second = fakeProvider({
+        providerUserId: 'user_refresh',
+        replacement: 'refresh-token-three',
+      });
+      const again = await refreshProviderSession({
+        sessionId: s.sessionId,
+        provider: second,
+        cookiePassword: COOKIE_PASSWORD,
+        expectedIssuer: s.issuer,
+        ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_refresh'),
+      });
+      if (again.outcome !== 'refreshed') assert.fail(`expected refreshed, got ${again.outcome}`);
+      assert.equal(again.rotationCount, 2);
+      assert.deepEqual(second.presented, ['refresh-token-two']);
 
       // an identity breach kills the session outright
-      assert.equal(
-        await revokeForIdentityBreach(created.session.sessionId, 'identity_mismatch'),
-        true,
-      );
-      assert.equal(await validateSessionToken(created.sessionToken), null);
+      assert.equal(await revokeForIdentityBreach(s.sessionId, 'identity_mismatch'), true);
+      assert.equal(await validateSessionToken(s.sessionToken), null);
     });
 
     // ── R3 gate: a REAL provider refresh over sealed, rotating state ──────
@@ -865,6 +1038,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_refresh'),
       });
       if (outcome.outcome !== 'refreshed')
         assert.fail(`expected refreshed, got ${outcome.outcome}`);
@@ -899,24 +1073,20 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_replay'),
       });
       assert.equal(first.outcome, 'refreshed');
       const snapshot = await refreshStateOf(s.sessionId);
 
-      // the SPENT token cannot rotate anything — the conditional UPDATE is
-      // keyed on the current digest, so the replay simply loses
-      assert.equal(
-        await rotateSessionRefresh({
-          sessionId: s.sessionId,
-          presentedRefreshToken: 'provider-refresh-1',
-          newRefreshToken: 'attacker-chosen-token',
-          authTime: new Date(),
-          ttlSeconds: 3600,
-          cookiePassword: COOKIE_PASSWORD,
-        }),
-        null,
-        'a replayed refresh token must not rotate anything',
-      );
+      // FBL-020-R5 §1.8: this probe used to call the exported `rotateSessionRefresh`
+      // with the SPENT token and assert it rotated nothing. That primitive is private
+      // now, so the property is stated where it actually lives — the spent token is
+      // no longer the stored digest and is not recoverable from the sealed state, so
+      // nothing is left that could present it. The digest-keyed conditional UPDATE
+      // that refuses a stale rotation is exercised by the lease battery below.
+      assert.notEqual(snapshot.digest, sha256hex('provider-refresh-1'));
+      assert.equal(snapshot.digest, sha256hex('provider-refresh-2'));
+      assert.ok(snapshot.sealed !== null && !snapshot.sealed.includes('provider-refresh-1'));
       assert.deepEqual(await refreshStateOf(s.sessionId), snapshot, 'nothing changed');
 
       // and the NEXT real refresh presents the replacement, never the spent one
@@ -930,6 +1100,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_replay'),
       });
       if (outcome.outcome !== 'refreshed')
         assert.fail(`expected refreshed, got ${outcome.outcome}`);
@@ -947,6 +1118,8 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        // both carriers agree with each other and disagree with the SESSION
+        verifyAccessToken: () => verifiedRefreshFor('user_somebody_else'),
       });
       assert.deepEqual(outcome, { outcome: 'revoked', reason: 'identity_mismatch' });
 
@@ -973,6 +1146,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_conn'),
       });
       assert.deepEqual(outcome, { outcome: 'revoked', reason: 'identity_mismatch' });
       assert.equal(await validateSessionToken(s.sessionToken), null);
@@ -987,6 +1161,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_imp'),
       });
       assert.deepEqual(outcome, { outcome: 'revoked', reason: 'impersonation_detected' });
       const after = await refreshStateOf(s.sessionId);
@@ -1055,6 +1230,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_transient'),
       });
       assert.deepEqual(outcome, { outcome: 'transient' }, 'transient is distinguishable');
 
@@ -1068,6 +1244,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_transient'),
       });
       assert.deepEqual(definitive, { outcome: 'revoked', reason: 'refresh_failed' });
       assert.equal(await validateSessionToken(s.sessionToken), null);
@@ -1205,6 +1382,7 @@ describe(
         cookiePassword: COOKIE_PASSWORD,
         expectedIssuer: binding.issuer,
         ttlSeconds: 3600,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_nostate'),
       });
       assert.deepEqual(outcome, { outcome: 'unavailable', reason: 'no_refresh_state' });
       assert.ok(await validateSessionToken(created.sessionToken));
@@ -1217,6 +1395,7 @@ describe(
         expectedIssuer: binding.issuer,
         ttlSeconds: 3600,
         keyVersion: 2,
+        verifyAccessToken: () => verifiedRefreshFor('user_r3_keyver'),
       });
       assert.deepEqual(rotatedKey, { outcome: 'unavailable', reason: 'key_version_mismatch' });
     });
@@ -1271,7 +1450,7 @@ describe(
       }
 
       const provider = hangingProvider();
-      const attempts = sessions.map((s) =>
+      const attempts = sessions.map((s, i) =>
         refreshProviderSession({
           sessionId: s.sessionId,
           provider,
@@ -1279,6 +1458,9 @@ describe(
           expectedIssuer: s.issuer,
           ttlSeconds: 3600,
           refreshDueLeewaySeconds: 60,
+          // never reached — the provider never answers — but §1.8 makes it a
+          // required input, so the shape of the call says so
+          verifyAccessToken: () => verifiedRefreshFor(`user_d1_pool_${i}`),
           // Generously above anything this test waits for: the point is that the
           // POOL survives a hang, not that a bound eventually ends it.
           providerTimeoutMs: 60_000,
@@ -1391,6 +1573,7 @@ describe(
         ttlSeconds: 3600,
         refreshDueLeewaySeconds: 60,
         providerTimeoutMs: 60_000,
+        verifyAccessToken: () => verifiedRefreshFor('user_d1_lease'),
       });
       try {
         while (gated.presented.length < 1) {
@@ -1415,6 +1598,7 @@ describe(
           ttlSeconds: 3600,
           refreshDueLeewaySeconds: 60,
           providerTimeoutMs: 60_000,
+          verifyAccessToken: () => verifiedRefreshFor('user_d1_lease'),
         });
         assert.equal(second.outcome, 'refresh_in_flight');
         assert.deepEqual(gated.presented, ['provider-refresh-1'], 'still exactly one spend');
@@ -1464,6 +1648,7 @@ describe(
             expectedIssuer: s.issuer,
             ttlSeconds: 3600,
             refreshDueLeewaySeconds: 60,
+            verifyAccessToken: () => verifiedRefreshFor('user_d1_stale'),
           })
         ).outcome,
         'refresh_in_flight',
@@ -1491,6 +1676,7 @@ describe(
         expectedIssuer: s.issuer,
         ttlSeconds: 3600,
         refreshDueLeewaySeconds: 60,
+        verifyAccessToken: () => verifiedRefreshFor('user_d1_stale'),
       });
       if (outcome.outcome !== 'refreshed')
         assert.fail(`expected refreshed, got ${outcome.outcome}`);

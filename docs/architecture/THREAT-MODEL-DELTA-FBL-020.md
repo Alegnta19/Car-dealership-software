@@ -1,9 +1,26 @@
 # Threat-Model Delta — FBL-020 Identity and Organization
 
 What changes in the attack surface, what each change defends, and what remains
-open. Current as of FBL-020-R3; every control below is in code, and the ones
+open. Current as of FBL-020-R5; every control below is in code, and the ones
 without deterministic coverage are named in
 [KNOWN-LIMITATIONS.md](../identity/KNOWN-LIMITATIONS.md).
+
+**Governing authority.** The active order is FBL-020-R5, checked in at
+[`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
+`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+**every R5 clause is UNVERIFIED until the final package proves it**. This model states which
+threats a control addresses; it closes no clause and discharges no gate.
+
+**What FBL-020-R5 changed in this model.** The refresh credential is destroyed in the same
+statement that revokes a session, on every revoking path including cookie logout; admission
+and credential custody are one atomic database decision that a concurrent administrative
+change cannot race; every callback with a valid sealed handle is claimed and terminalized,
+with a provider `error` callback and a missing authorization code now carrying their own
+reasons; the deployed worker ages login transactions and step-ups as well as support
+windows, so an abandoned transaction is no longer left pending indefinitely; and version-2
+policy evidence is normalized into `policy_decision_matched_bindings`, whose composite
+foreign keys make a fabricated or cross-wired authority claim unrepresentable rather than
+merely unwritten.
 
 ## New surfaces introduced
 
@@ -82,14 +99,30 @@ without deterministic coverage are named in
   support decisions are performed by calling the owned mutation services. The
   operator running them is trusted to be the right operator; a route with its
   own `requireAction` gate is a later order.
-- **Live-provider behaviour.** Deterministic CI proves the verifier and the
-  platform side of the provider port against a local issuer and a fake
-  provider; WorkOS-specific behaviour, including the real organization MFA
-  policy, is covered only by the live certification gate (Gate B).
 
-## Gate B evidence hygiene
+## NOT DISCHARGED — not a residual risk
 
-Live-gate evidence is a report about identifiers and outcomes, not a transcript.
+**A mandatory gate that has not been discharged is not a risk somebody may accept; it is
+work that is not done.** FBL-020-R3 was rejected for filing one under residual risk, and
+until FBL-020-R5 this document repeated that mistake: live-provider behaviour was listed
+above as an "accepted residual risk". It is moved here, and the wording is the one every
+other delivery document uses.
+
+- **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Deterministic CI proves the verifier and
+  the platform side of the provider port against a local RSA issuer and a provider-neutral
+  fake, and the adapter itself is invoked in process over a mocked transport
+  (`tests/identity-config.test.ts`). WorkOS-specific behaviour — real AuthKit redirect
+  parameters, real token claim shapes, real `max_age=0` semantics, real organization
+  membership, and **the actual MFA-required organization policy** — is not exercised at all.
+  It cannot be discharged from this environment: it needs credentials and an operator. The
+  substitution point is `useIdentityProviderForTests`. This gate was previously referred to
+  as "Gate B"; that label is retained only in the evidence-hygiene rules below, which are
+  the operator's instructions for running it.
+
+## Live-certification evidence hygiene (the gate above)
+
+Evidence from the live certification run is a report about identifiers and outcomes, not a
+transcript.
 Never paste an access token, a refresh token, an authorization code, a nonce, a
 cookie value, a session token, a grant, an API key, a provider profile or an
 end-user email into a ticket, a log, a screenshot or a bundle. Quote the

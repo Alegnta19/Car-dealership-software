@@ -258,8 +258,9 @@ Separation of duty alone no longer approves.
 
 **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED**, so every step here is a
 platform-side procedure against a local issuer or a real WorkOS organization you
-configure yourself; the live gate is not closed (see
-`docs/FBL-020-DELIVERY-REPORT.md` §15).
+configure yourself; the live gate is not closed (see the "Gates NOT DISCHARGED" section of
+`docs/FBL-020-DELIVERY-REPORT.md`; this pointer read "§15", a section that document does
+not have).
 
 ### Binding is provenance. Activation is authority. Do not confuse them.
 
@@ -290,8 +291,9 @@ suite had no test that would notice if the status check were widened.
 
 ### What an upgrade does to the links you already have
 
-Run on a populated pre-057 database (this is a CI gate now, not a hand drill —
-`docs/FBL-020-DELIVERY-REPORT.md` §8):
+Run on a populated pre-057 database (this is a CI gate now, not a hand drill — see
+"Migration 057 on a POPULATED pre-057 database" in `docs/FBL-020-DELIVERY-REPORT.md`; this
+pointer read "§8", which is that document's undischarged-gates section):
 
 | Before                                                | After `057`                                                    |
 | ----------------------------------------------------- | -------------------------------------------------------------- |

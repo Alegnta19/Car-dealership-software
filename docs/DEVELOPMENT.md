@@ -57,8 +57,11 @@ npm run dev
 npm test
 ```
 
-Without `TEST_DATABASE_URL`, the 72 database-backed tests skip and the 43 portable
-tests run — that is the local-without-database mode. To run everything:
+Without `TEST_DATABASE_URL`, the database-backed tests skip and the portable ones run — that
+is the local-without-database mode. **Counts are deliberately not stated here** (this
+sentence read "the 72 database-backed tests … the 43 portable tests" long after both figures
+had been overtaken): the authoritative numbers are the CI artifact `test-summary.json` and
+the floors in `scripts/parse-test-summary.ts`. To run everything:
 
 ```bash
 TEST_DATABASE_URL=postgres://user@host:port/anything_test npm test
@@ -101,10 +104,13 @@ dimensions — `npm run format` formats what you're working on.
 npm run architecture:check
 ```
 
-Five checks, the same five CI runs: dependency rules, the app-SQL guard (no query
+Seven checks, the same seven CI runs: dependency rules, the app-SQL guard (no query
 primitives or SQL literals in `apps/`), the ownership manifest
-(architecture/modules.json), `process.env` confinement, and the role-bindings
-effectiveness guard. The last one (FBL-020-R3 §E3, hardened by §H1) fails the build
+(architecture/modules.json), `process.env` confinement, the role-bindings
+effectiveness guard, the owned-mutation guard (one declared owner per
+authorization-state table) and the audit-inventory gate (every `identity.`-namespaced
+literal is an inventoried event type or a declared non-event). **The FIFTH — the
+role-bindings effectiveness guard** (FBL-020-R3 §E3, hardened by §H1) — fails the build
 when SQL reads `role_bindings` without resolving the single exported effectiveness
 predicate `EFFECTIVE_ROLE_BINDING_SQL` into every read, hand-writes a filter on that
 table's `status`, `effective_from` or `effective_to`, ORs or negates the resolved
@@ -143,6 +149,25 @@ npm run schema:fingerprint
 Prints a deterministic SHA-256 of the public schema shape (used by CI to compare the
 fresh migration chain against the upgrade-from-fixture path).
 
+```bash
+npx tsx scripts/check-published-figures.ts          # the gate
+npx tsx scripts/check-published-figures.ts --list   # the derivation table
+npx tsx scripts/check-published-figures.ts --write  # regenerate the marked spans
+```
+
+**If you are editing a delivery document, do not retype a number.** Every figure the
+delivery report, the requirement map, the provenance record, the known-limitations
+register and the README publish that a run or a script produces — suite totals, floor
+constants, mutation totals, the `057` inventory totals, requirement and clause counts,
+battery sizes, digests — is read from the artifact or checked-in constant that produces
+it, and this gate fails when a document says anything else. It catches a figure inside a
+marked span AND a figure restated in ordinary prose, which is where every one of the
+figures that shipped at two values had been written. Run `--write` after a measured run to
+regenerate the spans, then correct whatever prose the gate still reports. A figure no
+source in this repository can derive must carry a `NOT GATE-CHECKED: …` label where it
+appears; the gate refuses it otherwise. In CI the step runs after the summary parser and
+the mutation runner, because it reads their artifacts.
+
 ## The safety model
 
 - `npm test` reads **`TEST_DATABASE_URL` only** — it never falls back to
@@ -153,4 +178,9 @@ fresh migration chain against the upgrade-from-fixture path).
 - Database-backed suites run **serially** (`--test-concurrency=1`); two truncating
   suites sharing a database in parallel would clobber each other.
 - The migration runner applies each migration in its own transaction and records it in
-  `schema_migrations`; re-running is always a no-op (`applied: 0`).
+  `schema_migrations` with a **canonical-LF** checksum. Re-running an UNCHANGED chain is a
+  no-op (`applied: 0`). Re-running a chain whose body has changed under an already-applied
+  row is **not**: since FBL-020-R4 §0 the runner REFUSES, naming the file and both digests,
+  rather than skipping the changed body — and it refuses equally on a NULL checksum, an
+  unsupported algorithm, or a ledger row whose migration body is no longer on disk. That is
+  why an environment that applied an earlier `057` must be recreated rather than re-migrated.

@@ -23,9 +23,14 @@ rewrites for fashion.
   and stop rule": _"Quality ceilings remain tsc-strict <=59, eslint <=136 and format
   <=23."_ This ADR does not DEFINE them, and where the two disagree the blueprint wins. It
   read `29` for the third value until FBL-020-R4; that was wrong, and
-  `docs/FBL-020-DELIVERY-REPORT.md` §7 records how the error was made and corrected. Note
-  also that no tool enforces a ceiling: `scripts/quality-ratchet.ts` has no ceiling concept
-  and only refuses growth against `quality-baselines.json`.
+  `docs/FBL-020-DELIVERY-REPORT.md` records how the error was made and corrected under its
+  "Verification evidence" heading. (This line cited "§7", which is the residual-risk section —
+  a stale pointer, corrected in FBL-020-R5.) Note also that no tool enforces a ceiling:
+  `scripts/quality-ratchet.ts` has no ceiling concept and only refuses growth against
+  `quality-baselines.json`. **These three numbers are readable only in the Version 2.0
+  blueprint**: the word "ceiling" appears nowhere in the Version 1.0 document a reviewer
+  holds, and nowhere in the checked-in order text `docs/orders/FBL-020-R5.md` (canonical-LF
+  SHA-256 `75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`) either.
 - Container: digest-pinned node:20-alpine, non-root, healthchecked.
 
 ## Deferred, deliberately (recorded, not implemented)

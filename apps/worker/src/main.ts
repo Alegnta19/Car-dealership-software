@@ -33,13 +33,55 @@
  * owns every write to the support tables.
  */
 import { closePool } from '@dealer/database';
-import { expireDueSupportSessions } from '@dealer/identity-access';
+import {
+  expireDueSupportSessions,
+  expireStaleLoginTransactions,
+  expireStaleReauthenticationTransactions,
+} from '@dealer/identity-access';
 import { getConfig, logger } from '@dealer/platform';
 
 /** The registered job names. `--list-jobs` prints exactly this. */
 export const SUPPORT_ACCESS_EXPIRY_JOB = 'identity.support_access.expiry';
 
-export const WORKER_JOBS: readonly string[] = [SUPPORT_ACCESS_EXPIRY_JOB];
+/**
+ * FBL-020-R5 §4.8 — THE OTHER TWO SWEEPS ARE REGISTERED HERE TOO.
+ *
+ * `expireStaleLoginTransactions` and `expireStaleReauthenticationTransactions` were
+ * written, audited and tested, and then reached by NOTHING that ships: the registry
+ * below held one name, so on a deployed system a login transaction abandoned at the
+ * provider and a step-up nobody completed stayed `pending`/`started` for ever, and the
+ * `identity.login.expired` / `identity.reauthentication.expired` rows their own audit
+ * inventory promises were written only when a test called the function. Their doc
+ * comments each say "for the scheduled aggregator" — this is the aggregator, and until
+ * now it did not schedule them.
+ *
+ * That is the same defect FBL-020-R3 was rejected for (an implemented-but-unreachable
+ * flow), so the correction is registration, not new behaviour: the transitions, their
+ * SQL and their audit rows are unchanged and still live in @dealer/identity-access.
+ */
+export const LOGIN_TRANSACTION_EXPIRY_JOB = 'identity.login_transaction.expiry';
+export const REAUTHENTICATION_EXPIRY_JOB = 'identity.reauthentication_transaction.expiry';
+
+/**
+ * THE ONE REGISTRY. A name and the pass that runs it are the SAME entry, so the list
+ * `--list-jobs` advertises and the work `--once` performs cannot drift apart: there is
+ * no second array to keep in step, and a job cannot be announced without being run or
+ * run without being announced. Two parallel lists were the obvious way to write this
+ * and would have re-created, one level up, exactly the defect this section is fixing.
+ */
+interface RegisteredJob {
+  readonly name: string;
+  readonly run: () => Promise<number>;
+}
+
+const REGISTRY: readonly RegisteredJob[] = [
+  { name: SUPPORT_ACCESS_EXPIRY_JOB, run: () => runSupportAccessExpiryOnce() },
+  { name: LOGIN_TRANSACTION_EXPIRY_JOB, run: () => runLoginTransactionExpiryOnce() },
+  { name: REAUTHENTICATION_EXPIRY_JOB, run: () => runReauthenticationExpiryOnce() },
+];
+
+/** The registered job names, derived from the registry above — never restated. */
+export const WORKER_JOBS: readonly string[] = REGISTRY.map((job) => job.name);
 
 /**
  * ONE pass of the support-expiry job.
@@ -79,15 +121,66 @@ export async function runSupportAccessExpiryOnce(): Promise<number> {
 }
 
 /**
- * Runs one pass of every registered job. A job that throws is logged and does NOT
- * stop the others or the loop: a transient database failure must not silently retire
- * the process that keeps the support trail complete.
+ * ONE pass of the login-transaction expiry job.
+ *
+ * The transition itself is `expireStaleLoginTransactions`, which moves every login
+ * transaction still `pending`/`consuming` past its `expires_at` to `failed` and writes
+ * one `identity.login.expired` audit row per transaction, inside the same database
+ * transaction. Only the COUNT is logged: a login transaction id is not sensitive but
+ * nothing here needs it, and the per-row trail is in `audit_events` already.
+ */
+export async function runLoginTransactionExpiryOnce(): Promise<number> {
+  const expired = await expireStaleLoginTransactions();
+  if (expired === 0) {
+    logger.debug({ job: LOGIN_TRANSACTION_EXPIRY_JOB, expired: 0 }, 'no login transactions to age');
+    return 0;
+  }
+  logger.info(
+    { job: LOGIN_TRANSACTION_EXPIRY_JOB, expired },
+    'login transaction expiry pass complete',
+  );
+  return expired;
+}
+
+/**
+ * ONE pass of the reauthentication-transaction expiry job.
+ *
+ * `expireStaleReauthenticationTransactions` moves every `started` step-up past its
+ * `expires_at` to `expired` with `terminal_reason = 'expired'`, writing one
+ * `identity.reauthentication.expired` audit row per transaction in the same database
+ * transaction. Grants are deliberately NOT swept — consumption and expiry are decided
+ * from their own columns at read time — so this job must not be read as retiring them.
+ */
+export async function runReauthenticationExpiryOnce(): Promise<number> {
+  const expired = await expireStaleReauthenticationTransactions();
+  if (expired === 0) {
+    logger.debug({ job: REAUTHENTICATION_EXPIRY_JOB, expired: 0 }, 'no step-ups to age');
+    return 0;
+  }
+  logger.info(
+    { job: REAUTHENTICATION_EXPIRY_JOB, expired },
+    'reauthentication expiry pass complete',
+  );
+  return expired;
+}
+
+/**
+ * Runs one pass of EVERY registered job. A job that throws is logged and does not stop
+ * the loop: a transient database failure must not silently retire the process that keeps
+ * the support trail complete.
+ *
+ * Each job is caught SEPARATELY rather than under one shared `try`, so a throw in the
+ * first sweep does not skip the remaining ones. That is a property of the structure
+ * below and is stated as such: this revision ships NO test that forces a sweep to throw,
+ * so it is a reading of the code, not a measured result.
  */
 export async function runAllJobsOnce(): Promise<void> {
-  try {
-    await runSupportAccessExpiryOnce();
-  } catch (err) {
-    logger.error({ err, job: SUPPORT_ACCESS_EXPIRY_JOB }, 'worker job pass failed');
+  for (const job of REGISTRY) {
+    try {
+      await job.run();
+    } catch (err) {
+      logger.error({ err, job: job.name }, 'worker job pass failed');
+    }
   }
 }
 

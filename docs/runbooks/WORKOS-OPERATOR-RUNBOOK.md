@@ -132,7 +132,7 @@ configuration that turns them on. Enabling them is a separate order.
 
 ---
 
-## R2 corrections (FBL-020-R2, Blueprint §14.3)
+## R2 corrections (FBL-020-R2 — Version 2.0 blueprint, `Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, §14.3; in the Version 1.0 document a reviewer holds, the same order is §14.5)
 
 ### Issuer binding is mandatory
 
@@ -424,8 +424,9 @@ request row and belongs in no report.
 
 **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Nothing below has been exercised
 against a live WorkOS tenant; these are the platform-side procedures, and the live
-gate needs credentials and an operator (see
-`docs/FBL-020-DELIVERY-REPORT.md` §15).
+gate needs credentials and an operator (see the "Gates NOT DISCHARGED" section of
+`docs/FBL-020-DELIVERY-REPORT.md`; this pointer read "§15", a section that document does
+not have).
 
 ### 1. An MFA-policy certification now EXPIRES, and can be REVOKED
 
@@ -469,6 +470,21 @@ authorization answer, so a processor that falls behind can never widen access.
 
 The worker is where this runs in production: `node apps/worker/dist/main.js`. CI
 runs that exact entry point against the real schema (`worker-expiry-pass.txt`).
+
+It is not the only sweep that process runs. `--list-jobs` prints the registry, and
+as of FBL-020-R5 it holds three names:
+
+```text
+identity.support_access.expiry                 support windows lapse  → identity.support.expired
+identity.login_transaction.expiry              abandoned logins age   → identity.login.expired
+identity.reauthentication_transaction.expiry   uncompleted step-ups   → identity.reauthentication.expired
+```
+
+The last two were implemented in R4 and registered nowhere, so until R5 they ran only
+when a test called them: on a deployed system an abandoned login stayed `pending` and an
+uncompleted step-up stayed `started`, with no audit row for either. A pass over an
+already-swept row is a no-op — it writes no second audit row. Reauthentication GRANTS are
+deliberately not swept: consumption and expiry are read from their own columns.
 
 ### 3. The migration ledger now records a CHECKSUM, and a changed body ABORTS
 

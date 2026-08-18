@@ -235,7 +235,7 @@ export const IDENTITY_AUDIT_INVENTORY: readonly IdentityAuditInventoryEntry[] = 
     family: 'session',
     eventType: 'identity.session.refresh_state_rotated',
     entityType: 'identity_session',
-    writtenBy: 'rotateSessionRefresh / refreshProviderSession',
+    writtenBy: 'refreshProviderSession (via the module-private rotateRefreshStateRow)',
     provenIn: LIFECYCLE,
     provenBy: LIFECYCLE_TEST,
   },
@@ -413,7 +413,7 @@ export const IDENTITY_AUDIT_INVENTORY: readonly IdentityAuditInventoryEntry[] = 
     entityType: 'support_access_request',
     writtenBy: 'migrations/057_identity_boundary_completion.sql §5 and §A2 reconciliation',
     provenIn: 'scripts/verify-upgrade-state.ts',
-    provenBy: 'audit_supersession_is_recorded',
+    provenBy: 'audit_grantless_supersession_is_recorded_with_its_reason',
   },
 
   // ── user links ───────────────────────────────────────────────────────────
@@ -677,6 +677,23 @@ export const IDENTITY_NON_AUDIT_NAMESPACE_LITERALS: readonly IdentityNonAuditNam
       'a scheduled job identifier, not a row in audit_events; the job RUNS the transition ' +
       'whose event type is identity.support.expired. Note the namespace is support_access, ' +
       'not support, so it is not in the support family either way',
+  },
+  {
+    literal: 'identity.login_transaction.expiry',
+    role: 'the WORKER JOB name (apps/worker/src/main.ts, LOGIN_TRANSACTION_EXPIRY_JOB)',
+    because:
+      'a scheduled job identifier, not a row in audit_events; the job RUNS ' +
+      'expireStaleLoginTransactions, whose event type is identity.login.expired. The ' +
+      'namespace is login_transaction, not login, so it is not in the login family either way',
+  },
+  {
+    literal: 'identity.reauthentication_transaction.expiry',
+    role: 'the WORKER JOB name (apps/worker/src/main.ts, REAUTHENTICATION_EXPIRY_JOB)',
+    because:
+      'a scheduled job identifier, not a row in audit_events; the job RUNS ' +
+      'expireStaleReauthenticationTransactions, whose event type is ' +
+      'identity.reauthentication.expired. The namespace is reauthentication_transaction, not ' +
+      'reauthentication, so it is not in the reauthentication family either way',
   },
 ];
 

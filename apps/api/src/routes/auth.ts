@@ -27,7 +27,7 @@ import {
 import {
   SUPPORT_ACCESS_HEADER,
   TokenVerificationError,
-  admitLoginIdentity,
+  admitLoginAndEstablishSession,
   claimLoginTransactionAtomically,
   claimReauthentication,
   completeReauthentication,
@@ -35,7 +35,6 @@ import {
   failLoginTransaction,
   failReauthentication,
   createAccessTokenVerifier,
-  createSession,
   csrfTokenForSession,
   describeAuthenticatedSession,
   findActiveConnectionById,
@@ -271,10 +270,28 @@ router.get(
     const sealed = readCookie(req, AUTH_TXN_COOKIE);
     const txn = sealed === undefined ? null : openTxnCookie(sealed, s);
     const code = req.query.code;
+    // ── FBL-020-R5 §1.5: WHAT COUNTS AS A REAL TRANSACTION ────────────────
+    //
+    // The guard below is now exactly the set of callbacks that name NO claimable
+    // transaction: no sealed cookie, a cookie that does not open, the wrong
+    // purpose, no state, or a state that disagrees with the sealed one. There is
+    // no server row this request can be shown to own, so there is nothing to
+    // terminalize and nothing to attribute an audit event to — inventing one
+    // would be fabricating evidence.
+    //
+    // WHAT MOVED OUT OF IT, and why: `typeof code !== 'string'` used to be here.
+    // A provider `error` callback (`access_denied`, `login_required`, a
+    // misconfigured client) redirects to this route with the ORIGINAL state and
+    // NO code, and so it was refused right here — before the claim — which left
+    // its transaction sitting at `pending` until the expiry sweep eventually aged
+    // it. The order requires every real transaction to finish with ONE explained
+    // terminal state and ONE terminal audit event, and "expired, hours later, for
+    // the wrong reason" is neither. Such a callback carries a valid sealed handle
+    // and the matching state, so it IS a real transaction: it is claimed below
+    // and terminalized with its own reason.
     if (
       txn === null ||
       txn.purpose !== 'login' ||
-      typeof code !== 'string' ||
       typeof req.query.state !== 'string' ||
       req.query.state !== txn.state
     ) {
@@ -313,6 +330,23 @@ router.get(
       return new UnauthorizedError('Authentication failed');
     };
 
+    // FBL-020-R5 §1.5 — the two terminal ends that need no provider call.
+    //
+    // Order matters: a provider `error` callback carries no `code` either, so
+    // testing `error` first is what keeps the recorded reason the TRUE one rather
+    // than collapsing an authorization-server refusal into "malformed callback".
+    //
+    // The provider's `error` and `error_description` values are read only to
+    // decide THAT this is an error callback. Neither is stored, logged or
+    // returned: the vocabulary on the row is the server's own, and the answer
+    // outward is the same neutral 401 as every other refusal on this leg.
+    if (typeof req.query.error === 'string' && req.query.error.length > 0) {
+      throw await refusal('provider_error_callback');
+    }
+    if (typeof code !== 'string' || code.length === 0) {
+      throw await refusal('authorization_code_missing');
+    }
+
     let exchanged;
     try {
       exchanged = await provider().exchangeCode({
@@ -341,31 +375,46 @@ router.get(
       throw err;
     }
 
-    // ── FBL-020-R4 §1: ADMISSION, IN ONE CALL, BEFORE ANY CUSTODY ─────────
+    // ── FBL-020-R5 §1.3: ADMISSION AND CUSTODY, ONE ATOMIC DECISION ───────
     //
     // Everything that must hold before a session can exist is decided by the
-    // identity package in a single transaction: the exchange response bound
-    // EXACTLY to the verified token (provider user, organization, provider
-    // session id and impersonation state), the connection active and effective
-    // with its issuer EQUAL to the configured trusted issuer, the tenant and its
-    // organization hierarchy active and effective, and the UserLink activated AND
-    // inside its effective window.
+    // identity package — the exchange response bound EXACTLY to the verified token
+    // (provider user, organization, provider session id and impersonation state),
+    // the connection active and effective with its issuer EQUAL to the configured
+    // trusted issuer, the tenant and its organization hierarchy active and
+    // effective, and the UserLink activated AND inside its effective window — and
+    // the session is established, with the provider refresh credential sealed into
+    // it, in THE SAME TRANSACTION under the same row locks.
     //
-    // R3 asked a subset of these questions here, one call at a time, and never
-    // asked several of them at all — no configured-issuer comparison on the login
-    // path, no tenant check, no hierarchy check, no link effective window, and no
-    // comparison between the two carriers of the identity. It is one function now
-    // because a route cannot forget half of one call.
+    // R4 called two functions here: an admission that committed, then a
+    // `createSession` that inserted unconditionally. A suspension, disablement,
+    // deactivation, relink or window closure landing between those two commits
+    // still produced a session AND stored the provider credential. The route
+    // cannot fix that by asking again — that is the same defect one step later —
+    // so there is one call, and it does not offer an admission without a session.
     //
-    // NOTE WHAT HAS NOT HAPPENED YET: `createSession` is below. On refusal there
-    // is no session, no cookie, and — the part that matters most — the provider
-    // refresh credential in `exchanged.refreshToken` has never been written
-    // anywhere. It reaches the database only on the admitted path.
-    const admission = await admitLoginIdentity({
-      trustedIssuer: s.issuer,
-      exchanged,
-      verified,
-    });
+    // THE PROVIDER CALLS ARE ABOVE, AND STAY THERE. Both carriers were obtained
+    // before this line; nothing below opens a network call, and no transaction is
+    // held across one.
+    let admission;
+    try {
+      admission = await admitLoginAndEstablishSession({
+        trustedIssuer: s.issuer,
+        exchanged,
+        verified,
+        session: {
+          ttlSeconds: SESSION_TTL_SECONDS,
+          // R3: the refresh token is stored as SEALED ciphertext (plus its replay
+          // digest) so a later refresh can actually present it to the provider.
+          cookiePassword: s.cookiePassword,
+        },
+      });
+    } catch (err) {
+      // A login that produced no local session did not succeed, whatever the
+      // provider said. Terminate the transaction before rethrowing.
+      await failLoginTransaction(claimed.loginTxnId, 'session_establishment_failed');
+      throw err;
+    }
     if (!admission.admitted) {
       // ONE neutral answer for every condition. The internal reason is recorded
       // on the transaction row and in the audit trail; nothing distinguishes an
@@ -379,43 +428,24 @@ router.get(
             : 'identity_not_admitted',
       );
     }
-    const identity = admission.identity;
-
-    let created;
-    try {
-      created = await createSession({
-        tenantId: identity.tenantId,
-        userLinkId: identity.userLinkId,
-        providerSessionId: identity.providerSessionId,
-        authTime: verified.authTime,
-        ttlSeconds: SESSION_TTL_SECONDS,
-        connectionId: identity.connectionId,
-        issuer: identity.issuer,
-        providerSubject: identity.providerSubject,
-        providerOrganizationId: identity.providerOrganizationId,
-        refreshToken: exchanged.refreshToken,
-        // R3: the refresh token is stored as SEALED ciphertext (plus its replay
-        // digest) so a later refresh can actually present it to the provider.
-        cookiePassword: s.cookiePassword,
-        // R3 correction C1: and WHEN that provider credential expires, taken
-        // from the token this login already verified. It is the fact the request
-        // path reads to decide a refresh is due — without it the sealed state
-        // above would be a credential in custody that nothing could ever spend.
-        providerAccessTokenExpiresAt: verified.expiresAt,
-      });
-    } catch (err) {
-      // A login that produced no local session did not succeed, whatever the
-      // provider said. Terminate the transaction before rethrowing.
-      await failLoginTransaction(claimed.loginTxnId, 'session_establishment_failed');
-      throw err;
-    }
+    const created = admission.created;
 
     // ONLY NOW. Identity validation and local-session establishment have both
     // finished, so `succeeded` is a fact rather than an intention. If the
     // transaction is no longer `consuming` — an expiry sweep terminated it
     // underneath us — the login FAILS CLOSED and the session just created is
     // revoked rather than handed out.
-    if (!(await succeedLoginTransaction(claimed.loginTxnId))) {
+    // FBL-020-R5 §1.11: the success is recorded AS THE ADMITTED IDENTITY. These
+    // three facts come from the session the admission just established, which is
+    // the first moment in the round trip at which they are known at all.
+    if (
+      !(await succeedLoginTransaction({
+        loginTxnId: claimed.loginTxnId,
+        tenantId: created.session.tenantId,
+        userLinkId: created.session.userLinkId,
+        connectionId: created.session.connectionId,
+      }))
+    ) {
       await revokeSessionById(created.session.sessionId, 'login_transaction_not_consuming');
       throw new UnauthorizedError('Authentication failed');
     }
@@ -694,10 +724,14 @@ router.get(
     const sealed = readCookie(req, REAUTH_TXN_COOKIE);
     const txn = sealed === undefined ? null : openTxnCookie(sealed, s);
     const code = req.query.code;
+    // FBL-020-R5 §1.5, the step-up leg — same rule, same reason as the login
+    // callback above: only a callback naming NO claimable transaction is refused
+    // before the claim. A provider `error` callback and a callback with no
+    // authorization code both present a valid sealed handle, so both are claimed
+    // and terminalized below rather than left at `started` for the sweep.
     if (
       txn === null ||
       txn.purpose !== 'reauth' ||
-      typeof code !== 'string' ||
       typeof req.query.state !== 'string' ||
       req.query.state !== txn.state
     ) {
@@ -733,6 +767,16 @@ router.get(
       await failReauthentication({ nonce: handle, reason });
       return new UnauthorizedError('Reauthentication failed');
     };
+
+    // FBL-020-R5 §1.5 — terminal, before any provider call. `error` is tested
+    // first so an authorization-server refusal is recorded as one; neither the
+    // provider's error code nor its description is stored, logged or returned.
+    if (typeof req.query.error === 'string' && req.query.error.length > 0) {
+      throw await refusal('provider_error_callback');
+    }
+    if (typeof code !== 'string' || code.length === 0) {
+      throw await refusal('authorization_code_missing');
+    }
 
     let exchanged;
     try {

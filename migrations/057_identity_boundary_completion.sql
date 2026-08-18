@@ -4,13 +4,24 @@
 --
 -- Governing document: Master Blueprint v2.0 §14.3. That citation belongs to
 -- this file's ORIGIN and is unchanged: v2.0 §14.3 is genuinely the FBL-020-R2
--- order. What follows it is the file's revision history, because no persistent
--- environment has ever applied `057` — the architect's §0 census — so each
--- revision corrects this file IN PLACE rather than adding an `058`. The
--- consequence is stated rather than left to be discovered: THE CHECKSUM OF
--- THIS FILE HAS MOVED WITH EVERY REVISION, and
--- `docs/FBL-020-DELIVERY-REPORT.md` §6 publishes the current value beside this
--- file's git blob OID.
+-- order. What follows it is the file's revision history.
+--
+-- WHY THIS FILE IS CORRECTED IN PLACE RATHER THAN SUPERSEDED BY AN `058`, AND
+-- WHO SAYS SO. Editing an applied migration is only safe where no environment
+-- has applied it. `scripts/migration-census.ts` enumerates every persistent
+-- environment reachable from the implementer's machine and reports, with its
+-- evidence and the limits of each probe, that none has applied any form of
+-- `057`; the single environment that has is the disposable local cluster the
+-- drills run against. THAT FINDING IS THE IMPLEMENTER'S REPORT, NOT AN
+-- ACCEPTANCE BY THE ARCHITECT. An earlier revision of this header cited it as
+-- "the architect's §0 census", which asserted a ratification that had not been
+-- given; the review said so, and the claim is withdrawn here.
+--
+-- The consequence is stated rather than left to be discovered: THE CHECKSUM OF
+-- THIS FILE HAS MOVED WITH EVERY REVISION. That is not a loose end —
+-- `scripts/migrate.ts` REFUSES to migrate any database whose ledger records a
+-- different digest for this file, so a stale environment fails loudly instead
+-- of silently skipping the revision it has not got.
 --
 --   * R2 wrote sections 1–13: exact external-identity binding, provable
 --     session provenance, the server-side login transaction, delegated
@@ -26,6 +37,12 @@
 --     tenant refusal, the support-session tenant check and the grant-backed
 --     approval check. Those five, plus the R3 corrections above, are why line
 --     2 no longer names R2 alone.
+--   * R5 added section 11, marked `FBL-020-R5 §2`: the policy evidence ledger
+--     becomes RELATIONAL. R4's completeness rules were measured against the
+--     shipped schema and found to admit eighteen of twenty fabricated or
+--     cross-wired "complete" version-2 allows; section 11 refuses all of them,
+--     and normalizes the matched-binding array so it can carry a foreign key
+--     at all.
 --
 -- Forward-only. Migrations 000 and 049–056 remain byte-identical; nothing
 -- here edits, renames, reorders or recomputes them.
@@ -1494,11 +1511,360 @@ ALTER TABLE support_access_sessions
 CREATE INDEX idx_sas_expiry_due ON support_access_sessions (expires_at)
   WHERE revoked_at IS NULL AND expired_at IS NULL;
 
+-- ──────────────────────────────────────────────────────────────
+-- Section 11 — POLICY EVIDENCE BECOMES RELATIONAL
+--   FBL-020-R5 §2.1, §2.2, §2.3
+--
+-- WHAT WAS STILL WRONG AFTER SECTION 6. Section 6 made a version-2 decision
+-- COMPLETE — every required column non-null — and stopped there. Completeness
+-- is a statement about NULLs, and R5 §2.1 says in terms that it is not enough:
+-- "Version-2 PolicyDecision evidence must be relationally coherent, not merely
+-- non-null."
+--
+-- Measured against the shipped schema rather than argued about, twenty direct
+-- SQL inserts of a "complete" version-2 ALLOW were attempted before this
+-- section was written. EIGHTEEN WERE ACCEPTED. Only two were refused, both by
+-- the single-column foreign keys section 6 added on `connection_id` and
+-- `session_id`. PostgreSQL accepted, among others:
+--
+--   * a decision naming a tenant that does not exist, and an actor that does
+--     not exist;
+--   * an ALLOW into tenant A attributed to a real actor belonging to tenant B;
+--   * a real session belonging to actor A recorded beside a real connection
+--     belonging to tenant B, or beside a different real actor's provider
+--     subject — every id resolving, no two of them describing one credential;
+--   * matched role-binding authority that is a random UUID, or a real binding
+--     belonging to somebody else in another tenant, at any version number;
+--   * a support ALLOW naming a real support session together with a different
+--     real request, another tenant's session, or a window the session never
+--     had.
+--
+-- A PLAIN FOREIGN KEY IS WHY. It answers "does this id resolve", which is the
+-- easy half. The half that matters is "do these ids resolve TOGETHER" — the
+-- cross-wired case, where every column passes on its own and the row as a
+-- whole describes a credential that never existed. That is precisely the shape
+-- section 7 closed for `user_links`, `identity_sessions` and the step-up
+-- tables with COMPOSITE foreign keys, and it is closed here the same way, for
+-- the same reason: an operator reading this ledger after an incident must be
+-- able to follow it back to real objects, and a ledger that can be written
+-- self-consistently out of fabricated parts is not evidence.
+--
+-- THE ARRAY (R5 §2.3). `matched_role_binding_ids UUID[]` cannot carry a
+-- foreign key at all — PostgreSQL has no element-wise referential integrity —
+-- so no constraint on `policy_decisions` can make its contents mean anything.
+-- The array is therefore NORMALIZED: a child row per matched binding, written
+-- by the database itself from the array in the same statement, carrying the
+-- foreign keys and the version rule the array could not. The array column
+-- stays, unchanged, as the read surface every existing reader already uses;
+-- it is no longer the only record of what it claims, and the two cannot drift
+-- because `policy_decisions` is append-only and the child rows have exactly
+-- one writer, which is this trigger.
+--
+-- WHAT IS DELIBERATELY NOT CONSTRAINED, stated so its absence is a decision
+-- rather than an oversight:
+--
+--   * `scope_id` is polymorphic — it names a tenant, dealer group, legal
+--     entity, rooftop or department depending on `scope_level` — so no single
+--     foreign key can address it. It is left as recorded, and this file does
+--     not pretend otherwise.
+--   * A DENY may name an actor from a different tenant, and that is the whole
+--     content of a `CROSS_TENANT` denial: the person really was outside. The
+--     cross-tenant rule therefore binds ALLOWs, which are the rows that
+--     granted something. `tests/fixtures/legacy-identity-seed-pre-057.sql`
+--     carries exactly such a deny (D2, actor `10000003…` in tenant `bbbb0002…`
+--     recorded against tenant `aaaa0001…`), and it must survive this upgrade
+--     unchanged — a constraint that made a truthful denial unrepresentable
+--     would be a worse defect than the one it fixed.
+--
+-- RECONCILIATION IS IMPOSSIBLE HERE, AND THAT IS THE POINT. `policy_decisions`
+-- is append-only under `trg_policy_decisions_append_only`: this migration
+-- CANNOT rewrite a historic evidence row, and must not — rewriting the audit
+-- trail to fit a new constraint is the falsification every other section of
+-- this file refuses. So the pre-check below FAILS LOUDLY instead, exactly as
+-- section 7d does, naming what it found. On a database that migrates in order
+-- it counts zero rows, and on the retained pre-057 fixture it counts zero rows.
+-- ──────────────────────────────────────────────────────────────
+
+-- ── 11a. the loud pre-check ───────────────────────────────────────────────
+DO $$
+DECLARE bad INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO bad
+    FROM policy_decisions d
+   WHERE (d.tenant_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM tenants t WHERE t.tenant_id = d.tenant_id))
+      OR (d.actor_user_link_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM user_links u
+                           WHERE u.user_link_id = d.actor_user_link_id));
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R5 §2 refused: % retained policy decision(s) name a tenant or an '
+                    'actor that does not exist. This ledger is append-only, so there is no '
+                    'honest repair — the rows must be adjudicated before this migration runs', bad;
+  END IF;
+
+  SELECT COUNT(*) INTO bad
+    FROM policy_decisions d
+   WHERE d.decision = 'allow' AND d.actor_type = 'user' AND d.tenant_id IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM user_links u
+                      WHERE u.user_link_id = d.actor_user_link_id
+                        AND u.tenant_id = d.tenant_id);
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R5 §2 refused: % retained ALLOW decision(s) attribute access in one '
+                    'tenant to an actor belonging to another', bad;
+  END IF;
+
+  SELECT COUNT(*) INTO bad
+    FROM policy_decisions d
+   WHERE d.session_id IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM identity_sessions s
+                      WHERE s.session_id = d.session_id
+                        AND s.user_link_id = d.actor_user_link_id
+                        AND s.connection_id = d.connection_id
+                        AND s.provider_subject = d.actor_provider_subject);
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R5 §2 refused: % retained decision(s) record a credential whose '
+                    'session, actor, connection and provider subject do not belong together', bad;
+  END IF;
+
+  SELECT COUNT(*) INTO bad
+    FROM policy_decisions d
+   WHERE d.support_session_id IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM support_access_sessions s
+                      WHERE s.support_session_id = d.support_session_id
+                        AND s.request_id = d.support_request_id
+                        AND s.tenant_id = d.tenant_id
+                        AND s.actor_user_link_id = d.actor_user_link_id);
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R5 §2 refused: % retained decision(s) cite a support session that '
+                    'does not match the request, tenant and actor recorded beside it', bad;
+  END IF;
+
+  SELECT COUNT(*) INTO bad
+    FROM policy_decisions d
+    CROSS JOIN LATERAL unnest(d.matched_role_binding_ids) AS m(id)
+   WHERE NOT EXISTS (SELECT 1 FROM role_bindings rb
+                      WHERE rb.role_binding_id = m.id
+                        AND rb.user_link_id = d.actor_user_link_id);
+  IF bad > 0 THEN
+    RAISE EXCEPTION 'FBL-020-R5 §2 refused: % retained matched-binding claim(s) name a binding '
+                    'that does not exist or does not belong to the decision''s actor', bad;
+  END IF;
+END $$;
+
+-- ── 11b. the two facts MATCH SIMPLE needs ─────────────────────────────────
+--
+-- A composite foreign key is MATCH SIMPLE: if ANY referencing column is NULL
+-- it is satisfied without a lookup. Section 7 solved that for the identity
+-- tables by making the nullable column always present (`tenant_key`); here the
+-- honest answer is different, because a decision that names NO credential and
+-- NO support session is a legitimate row. What must not happen is a row that
+-- names one of them and then goes quiet about the actor or tenant the foreign
+-- key would have checked it against — that is how a NULL turns a constraint
+-- off. These two CHECKs make that shape unrepresentable, so both composite
+-- keys below BITE on every row that reaches them.
+ALTER TABLE policy_decisions
+  ADD CONSTRAINT pd_credential_names_its_actor CHECK (
+    session_id IS NULL OR actor_user_link_id IS NOT NULL
+  ),
+  ADD CONSTRAINT pd_support_evidence_is_attributable CHECK (
+    support_session_id IS NULL
+    OR (tenant_id IS NOT NULL AND actor_user_link_id IS NOT NULL)
+  );
+
+-- The ALLOW-only cross-tenant key, derived by the database so no writer can
+-- choose whether it applies. NULL on every deny and on every non-`user` actor
+-- — the two cases where naming a foreign actor is the recorded fact — and the
+-- decision's own tenant on every `user` ALLOW, which is the row that granted
+-- somebody access to a tenant's data.
+ALTER TABLE policy_decisions
+  ADD COLUMN allowed_actor_tenant_id UUID GENERATED ALWAYS AS (
+    CASE WHEN decision = 'allow' AND actor_type = 'user' THEN tenant_id END
+  ) STORED;
+
+-- ── 11c. FK targets ───────────────────────────────────────────────────────
+--
+-- Plain unique indexes over columns that are already unique by construction
+-- (each begins with the table's primary key). They constrain nothing new; they
+-- exist so the composite foreign keys below have something to point at.
+CREATE UNIQUE INDEX uq_is_credential_tuple
+  ON identity_sessions (session_id, user_link_id, connection_id, provider_subject);
+CREATE UNIQUE INDEX uq_sas_evidence_tuple
+  ON support_access_sessions (support_session_id, request_id, tenant_id, actor_user_link_id);
+CREATE UNIQUE INDEX uq_rb_actor_scoped
+  ON role_bindings (role_binding_id, user_link_id);
+CREATE UNIQUE INDEX uq_pd_actor_scoped
+  ON policy_decisions (decision_id, actor_user_link_id);
+
+-- ── 11d. the four relational rules ────────────────────────────────────────
+ALTER TABLE policy_decisions
+  -- (a) NONEXISTENT IDENTIFIERS. `connection_id` and `session_id` already had
+  -- this from section 6; the tenant and the actor did not, so a decision could
+  -- name a tenant nobody has ever created and a person who does not exist.
+  ADD CONSTRAINT pd_tenant_exists
+    FOREIGN KEY (tenant_id) REFERENCES tenants (tenant_id),
+  ADD CONSTRAINT pd_actor_exists
+    FOREIGN KEY (actor_user_link_id) REFERENCES user_links (user_link_id),
+  -- (b) CROSS-TENANT ACTORS. An ALLOW into a tenant's data must be attributed
+  -- to somebody who belongs to that tenant. `user_links` is keyed
+  -- NULLS NOT DISTINCT on (tenant_id, user_link_id), so this resolves for a
+  -- platform link too — but `allowed_actor_tenant_id` is NULL for those, and
+  -- for every deny, so the key is silent exactly where a foreign actor is the
+  -- truth being recorded.
+  ADD CONSTRAINT pd_allow_actor_is_in_its_tenant
+    FOREIGN KEY (allowed_actor_tenant_id, actor_user_link_id)
+    REFERENCES user_links (tenant_id, user_link_id),
+  -- (c) THE CROSS-WIRED CREDENTIAL — the class a plain foreign key misses
+  -- entirely, and the reason this section exists. The session named, the actor
+  -- it is attributed to, the connection it came through and the provider
+  -- subject it carried are ONE fact about ONE credential. Section 6 forced all
+  -- four to be present together (`pd_credential_group_is_atomic`); this forces
+  -- them to be present together ABOUT THE SAME SESSION. `readPresentedCredential`
+  -- in `packages/identity-access/src/policy.ts` already reads all four from the
+  -- one session row it selected `WHERE s.user_link_id = $1`, so no production
+  -- write changes — what changes is that the guarantee no longer depends on
+  -- that function remaining correct.
+  ADD CONSTRAINT pd_credential_identity_tuple
+    FOREIGN KEY (session_id, actor_user_link_id, connection_id, actor_provider_subject)
+    REFERENCES identity_sessions
+      (session_id, user_link_id, connection_id, provider_subject),
+  -- (e) SUPPORT EVIDENCE IS ONE TUPLE. The session, the approved request it
+  -- derives from, the tenant it reached into and the platform person who held
+  -- it must all be the support session's own facts. Section 6 required all
+  -- four to be PRESENT; this requires them to agree.
+  ADD CONSTRAINT pd_support_evidence_tuple
+    FOREIGN KEY (support_session_id, support_request_id, tenant_id, actor_user_link_id)
+    REFERENCES support_access_sessions
+      (support_session_id, request_id, tenant_id, actor_user_link_id);
+
+-- The recorded WINDOW is the fifth support fact, and it cannot join the key
+-- above: `expires_at` has microsecond precision in PostgreSQL and millisecond
+-- precision in JavaScript, so a foreign key over it would refuse every genuine
+-- support allow that had round-tripped through the application. It is enforced
+-- as an exact comparison instead, against the session the row itself names —
+-- and `record()` now takes the value from that row inside the INSERT rather
+-- than sending one back, so the comparison is between the column and itself.
+CREATE OR REPLACE FUNCTION policy_decisions_support_window_is_the_sessions() RETURNS TRIGGER AS $$
+DECLARE actual TIMESTAMPTZ;
+BEGIN
+  IF NEW.support_session_id IS NULL THEN RETURN NEW; END IF;
+  SELECT s.expires_at INTO actual
+    FROM support_access_sessions s
+   WHERE s.support_session_id = NEW.support_session_id;
+  IF NEW.support_session_expires_at IS DISTINCT FROM actual THEN
+    RAISE EXCEPTION
+      'policy_decisions INSERT refused: the recorded support window % is not the window of '
+      'support session % (%)',
+      NEW.support_session_expires_at, NEW.support_session_id, actual;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_policy_decisions_support_window ON policy_decisions;
+CREATE TRIGGER trg_policy_decisions_support_window
+  BEFORE INSERT ON policy_decisions
+  FOR EACH ROW EXECUTE FUNCTION policy_decisions_support_window_is_the_sessions();
+
+-- ── 11e. (d) THE MATCHED-BINDING ARRAY, NORMALIZED ────────────────────────
+--
+-- One row per binding a decision claims matched. Two composite foreign keys,
+-- and between them they say the whole rule: the binding EXISTS, it belongs to
+-- the DECISION'S OWN ACTOR, and the decision it is attached to names that same
+-- actor. A decision therefore cannot claim authority from a binding held by
+-- anybody else — which, because `role_bindings` is itself keyed
+-- (tenant_id, user_link_id) into `user_links`, makes a cross-tenant authority
+-- claim unrepresentable without naming a cross-tenant actor first.
+--
+-- The primary key is (decision_id, role_binding_id), so a decision also cannot
+-- claim the same binding twice and inflate what matched.
+CREATE TABLE policy_decision_matched_bindings (
+  decision_id           UUID    NOT NULL,
+  role_binding_id       UUID    NOT NULL,
+  actor_user_link_id    UUID    NOT NULL,
+  authorization_version BIGINT  NOT NULL,
+  match_ordinality      INTEGER NOT NULL,
+  PRIMARY KEY (decision_id, role_binding_id),
+  CONSTRAINT pdmb_version_positive CHECK (authorization_version >= 1),
+  CONSTRAINT pdmb_ordinality_positive CHECK (match_ordinality >= 1),
+  CONSTRAINT pdmb_decision_names_this_actor
+    FOREIGN KEY (decision_id, actor_user_link_id)
+    REFERENCES policy_decisions (decision_id, actor_user_link_id),
+  CONSTRAINT pdmb_binding_belongs_to_the_actor
+    FOREIGN KEY (role_binding_id, actor_user_link_id)
+    REFERENCES role_bindings (role_binding_id, user_link_id)
+);
+
+CREATE INDEX idx_pdmb_binding ON policy_decision_matched_bindings (role_binding_id);
+
+-- THE AUTHORIZATION-VERSION RELATIONSHIP (R5 §2.3). `role_bindings` keeps one
+-- CURRENT `authorization_version` and no history table, so "the version this
+-- decision saw" cannot be a foreign key — the binding legitimately moves on
+-- afterwards, and a key over it would retroactively invalidate true evidence
+-- the next time the binding changed. What IS enforceable, and is enforced, is
+-- the direction: a decision may record a version the binding has already
+-- reached, never one from the future. A fabricated version number is refused
+-- for the same reason a fabricated id is.
+CREATE OR REPLACE FUNCTION policy_decision_binding_version_is_reachable() RETURNS TRIGGER AS $$
+DECLARE reached BIGINT;
+BEGIN
+  SELECT rb.authorization_version INTO reached
+    FROM role_bindings rb WHERE rb.role_binding_id = NEW.role_binding_id;
+  -- EXISTENCE IS THE FOREIGN KEY'S JOB, not this trigger's. When the binding is
+  -- absent `reached` is NULL and this returns quietly, so the refusal is
+  -- attributed to `pdmb_binding_belongs_to_the_actor` and an operator reading
+  -- the error learns which rule the row actually broke.
+  IF reached IS NOT NULL AND NEW.authorization_version > reached THEN
+    RAISE EXCEPTION
+      'policy evidence refused: matched binding % is recorded at authorization version %, '
+      'which that binding has never reached (it is at %)',
+      NEW.role_binding_id, NEW.authorization_version, reached;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_pdmb_version_reachable ON policy_decision_matched_bindings;
+CREATE TRIGGER trg_pdmb_version_reachable
+  BEFORE INSERT ON policy_decision_matched_bindings
+  FOR EACH ROW EXECUTE FUNCTION policy_decision_binding_version_is_reachable();
+
+-- Normalized evidence is still evidence: append-only, by the same function
+-- migration 055 installed for every other identity ledger.
+DROP TRIGGER IF EXISTS trg_pdmb_append_only ON policy_decision_matched_bindings;
+CREATE TRIGGER trg_pdmb_append_only
+  BEFORE UPDATE OR DELETE ON policy_decision_matched_bindings
+  FOR EACH ROW EXECUTE FUNCTION identity_append_only();
+
+-- THE ONE WRITER. The child rows are derived by the database from the array in
+-- the same statement that writes the decision, so there is no code path — not
+-- the policy engine, not a fixture, not a repair script, not psql — that can
+-- write the array without also submitting it to the keys above. The INSERT
+-- runs inside the caller's transaction, so a rejected element takes the whole
+-- decision with it and no half-recorded evidence survives.
+CREATE OR REPLACE FUNCTION policy_decisions_normalize_matched_bindings() RETURNS TRIGGER AS $$
+BEGIN
+  IF cardinality(NEW.matched_role_binding_ids) = 0 THEN RETURN NULL; END IF;
+  INSERT INTO policy_decision_matched_bindings
+    (decision_id, role_binding_id, actor_user_link_id, authorization_version, match_ordinality)
+  SELECT NEW.decision_id, m.id, NEW.actor_user_link_id,
+         NEW.matched_authorization_versions[m.ord], m.ord
+    FROM unnest(NEW.matched_role_binding_ids) WITH ORDINALITY AS m(id, ord);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_policy_decisions_normalize_matches ON policy_decisions;
+CREATE TRIGGER trg_policy_decisions_normalize_matches
+  AFTER INSERT ON policy_decisions
+  FOR EACH ROW EXECUTE FUNCTION policy_decisions_normalize_matched_bindings();
+
 -- ============================================================
--- Total: 1 table created (login_transactions), 0 rows deleted.
+-- Total: 2 tables created (login_transactions,
+-- policy_decision_matched_bindings), 0 rows deleted.
 -- Unprovable sessions revoked; ambiguous links disabled; the identity
 -- tuple enforced by composite foreign keys rather than by convention;
--- policy evidence versioned so a new decision cannot be incomplete;
+-- policy evidence versioned so a new decision cannot be incomplete,
+-- and RELATIONAL so a complete one cannot be fabricated or cross-wired;
 -- MFA certification bounded and revocable; the step-up callback made
 -- server-authoritative and every terminal state explained; a support
 -- window's expiry made a recorded, once-only transition;

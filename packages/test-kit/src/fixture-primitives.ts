@@ -40,7 +40,7 @@
  * It is deliberately NOT a convenience. If a fixture can be written through an
  * attributed service, it must be.
  */
-import { query } from '@dealer/database';
+import { query, type Executor } from '@dealer/database';
 import { INTEGRATION_DATABASE_URL } from './db';
 
 /**
@@ -100,13 +100,30 @@ assertFixtureEnvironment();
  * actually doing, and a test that lies about the state it built is worse than no
  * test. What this adds is the name, the typed reason, the counter and the
  * environment refusal.
+ *
+ * ── `options.executor` (FBL-020-R5 §1.4) ───────────────────────────────────
+ *
+ * By default the statement runs on the shared pool, which is an implicit
+ * single-statement transaction — it commits the instant it returns. A CONCURRENCY
+ * fixture cannot use that: proving that an administrative change cannot race a
+ * login requires the change to be issued and left UNCOMMITTED, so the login queues
+ * behind the row lock it holds, and that needs a dedicated client the fixture keeps
+ * across several statements.
+ *
+ * Passing an executor is therefore not a convenience either. It is still ONE NAME
+ * TO GREP, one typed reason and one counter; the only thing that changes is which
+ * connection the statement runs on, and the caller owns that connection's
+ * transaction. `check-owned-mutations.ts` is unchanged and still sees every such
+ * write as an argument to this function.
  */
 export async function fixtureAuthorizationStateWrite(
   reason: FixtureWriteReason,
   sql: string,
   params?: readonly unknown[],
+  options?: { executor?: Executor },
 ): ReturnType<typeof query> {
   assertFixtureEnvironment();
   counters[reason] += 1;
-  return query(sql, params === undefined ? undefined : [...params]);
+  const run = options?.executor ?? { query };
+  return run.query(sql, params === undefined ? undefined : [...params]);
 }

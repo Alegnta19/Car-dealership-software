@@ -1,0 +1,2029 @@
+{
+  "order": "FBL-020-R5",
+  "purpose": "Machine-readable mapping from every attested FBL-020-R5 clause to the named tests and CI gates that prove it, plus the FBL-020-R4 requirements retained on this tree. scripts/check-requirement-map.ts verifies that every named test EXISTS verbatim in the named file, that every named script, fixture, CI step and artifact exists, that every requirement id is well formed and unique, and that EVERY clause in clause_inventory is covered by at least one R5 requirement — so an omitted requirement is a failure rather than a silent gap. tests/ci-gates.test.ts runs that check inside the suite and drives its refusals.",
+  "authority": {
+    "order_text": "docs/orders/FBL-020-R5.md",
+    "order_text_sha256_canonical_lf": "75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783",
+    "clause_inventory_scope": "complete-order-text",
+    "note": "The full R5 order text is checked in at docs/orders/FBL-020-R5.md and every clause of it is held verbatim there; the digest above is that file's canonical-LF SHA-256, so a map built against a different authority is detectable. An earlier revision recorded the implementation prompt as the order and said sections 0, 1, 2, 4 and 5 were not supplied; that was an artefact of routing the order to the waves one section at a time, not a fact about the order, and it is withdrawn — NO clause of this inventory rests on text the repository does not hold. This inventory is the complete clause set and is held to the order file's Part 3 register in both directions by scripts/check-requirement-map.ts. EVERY R5 CLAUSE IS UNVERIFIED UNTIL THE FINAL PACKAGE PROVES IT (Appendix A): no verdict in this map is a closure claim, and \"seven of nine blockers closed\" is withdrawn as a governing status throughout this repository. SEPARATELY, CLAUSE 3.1 IS OPEN: the Version 2.0 blueprint (95,325 bytes, the governing_document.governing.file_sha256 recorded below) has NOT reached the reviewed project record and BOTH designated project copies remain the Version 1.0 file (88,931 bytes, the governing_document.superseded.file_sha256 recorded below). The digests are deliberately not repeated in this note: each appears exactly once in this file, and scripts/mutation-kill.ts anchors a mutation on that single occurrence. The operator supplied the Version 2.0 bytes separately; this repository cannot verify another party's record. Checking this order text in discharges 3.2, NOT 3.1, and closing 3.1 depends on the reviewer replacing both copies — see docs/orders/BLUEPRINT-PROVENANCE.md.",
+    "verdict_vocabulary": "Every row states what its evidence actually reaches. PROVEN = the named tests exercise the clause's own property. PARTIAL = some named sub-requirement of the clause is exercised and a named one is not. NOT COVERED = no test in this tree exercises the clause; the row says what was searched for rather than citing an adjacent test. Per docs/orders/FBL-020-R5.md Appendix A, EVERY clause is UNVERIFIED until the final package proves it, so no verdict here is a closure claim."
+  },
+  "governing_document": {
+    "citation_rule": "Never cite a bare section number. §14.3 names FBL-000 in the document the reviewer holds and FBL-020-R2 in the governing document, so every citation must carry the version label, the file name or the digest. tests/delivery-documentation.test.ts enforces this over every markdown document in the repository.",
+    "provenance_record": "docs/orders/BLUEPRINT-PROVENANCE.md",
+    "reviewer_project_copies": "Both of the architect's project copies are the Version 1.0 document. That is why they read §14.3 as FBL-000, and it is why this repository must not depend on the Version 2.0 document.",
+    "consequence": "The active order text is checked in (§3.2) so the delivery does not depend on an absent document; the Version 1.0 document is checked in as the verification anchor; and requirements readable only in Version 2.0 are marked as such below.",
+    "requirement_not_readable_in_reviewer_copy": {
+      "quality_ceilings": "tsc-strict <=59, eslint <=136, format <=23. The sentence occurs once, in Version 2.0 §14.3 under \"R2 gate and stop rule\"; the word \"ceiling\" appears NOWHERE in the Version 1.0 document, which tests/delivery-documentation.test.ts asserts from its bytes. A reviewer holding only Version 1.0 CANNOT verify these numbers from anything in this repository: the checked-in R5 order text does not restate them, because FBL-020-R5 sets no ceiling. They are recorded as an attestation to the Version 2.0 document, not as a reproducible measurement. An earlier revision of this entry said the numbers could be verified from the checked-in order text; that was false and is withdrawn."
+    },
+    "bare_blueprint_citation_residue": [
+      "packages/identity-access/src/audit-inventory.ts",
+      "packages/identity-access/src/login-transaction.ts",
+      "tests/identity-boundary.test.ts"
+    ],
+    "governing": {
+      "role": "GOVERNING",
+      "file": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "present_in_repository": false,
+      "verification": "attested-not-in-repository",
+      "attested_by": "docs/orders/FBL-020-R5.md §3.1 — facts the operator states as already established, corroborated against the operator copy on the implementation machine. NOT reproducible from this repository.",
+      "bytes": 95325,
+      "file_sha256": "556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+      "title_line_1": "Dealership Management & Sales Cloud",
+      "title_line_2": "Master Architecture Blueprint and Forward-Only Roadmap",
+      "version_line": "Version 2.0  |  August 4, 2026  |  Governing management-first baseline",
+      "version_label": "Version 2.0",
+      "section_governing_fbl_020": "14.3",
+      "section_14_headings": {
+        "14.1": "14.1 Execution contract",
+        "14.2": "14.2 Ordered backlog",
+        "14.3": "14.3 First active instruction — FBL-020-R2",
+        "14.4": "14.4 Accepted historical order FBL-000 — Reproducible Baseline",
+        "14.5": "14.5 Accepted historical order FBL-010 — Architecture Shell",
+        "14.6": "14.6 Original FBL-020 scope — retained context only",
+        "14.7": "14.7 Definition of done for every later order"
+      }
+    },
+    "superseded": {
+      "role": "SUPERSEDED",
+      "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
+      "repository_path": "docs/orders/Car_Dealership_SaaS_Architecture_Blueprint.docx",
+      "present_in_repository": true,
+      "verification": "verified-from-repository-bytes",
+      "bytes": 88931,
+      "file_sha256": "d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9",
+      "title_line_1": "Car Dealership SaaS",
+      "title_line_2": "Repository Assessment and Industrial Platform Blueprint",
+      "version_line": "Version 1.0  |  July 30, 2026  |  Architecture baseline",
+      "version_label": "Version 1.0",
+      "section_governing_fbl_020": "14.5",
+      "section_14_headings": {
+        "14.1": "14.1 Execution contract",
+        "14.2": "14.2 Ordered backlog",
+        "14.3": "14.3 Work Order FBL-000 — Reproducible Baseline",
+        "14.4": "14.4 Work Order FBL-010 — Architecture Shell",
+        "14.5": "14.5 Work Order FBL-020 — Identity and Organization",
+        "14.6": "14.6 Definition of done for every later order"
+      }
+    }
+  },
+  "clause_inventory": [
+    {
+      "clause": "§0.1",
+      "title": "The persistent-environment census for migration 057",
+      "text_held_verbatim": true,
+      "evidence": "scripts/migration-census.ts declares \"FBL-020-R5 §0.1\" in its own output; tests/migration-census.test.ts"
+    },
+    {
+      "clause": "§0.2",
+      "title": "The branch the census result puts the order on: correct 057 in place, or add 058",
+      "text_held_verbatim": true,
+      "evidence": "no 058 exists in migrations/; the ledger refuses a drifted body (tests/migration-ledger.test.ts)"
+    },
+    {
+      "clause": "§0.3",
+      "title": "The migration ledger REFUSES an untrustworthy applied row rather than warning",
+      "text_held_verbatim": true,
+      "evidence": "scripts/migrate.ts and tests/migration-ledger.test.ts, whose suite is named for this clause"
+    },
+    {
+      "clause": "§0.4",
+      "title": "A non-canonical migrations directory is an opt-in, allowlisted, digest-pinned mode",
+      "text_held_verbatim": true,
+      "evidence": "scripts/migration-fixture-chains.ts; tests/migration-ledger.test.ts suite named for this clause"
+    },
+    {
+      "clause": "§0.5",
+      "title": "The retained historical fixture is COMPARED against fixed committed digests",
+      "text_held_verbatim": true,
+      "evidence": "scripts/migration-manifest.ts; tests/ci-gates.test.ts suite named for this clause"
+    },
+    {
+      "clause": "§0.6",
+      "title": "Every reconciliation in 057 is accounted for, with nothing unaccounted",
+      "text_held_verbatim": true,
+      "evidence": "scripts/reconciliation-inventory.ts; tests/ci-gates.test.ts suite named for this clause"
+    },
+    {
+      "clause": "§1.1",
+      "title": "Revocation destroys the provider refresh credential on every path",
+      "text_held_verbatim": true,
+      "evidence": "tests/identity-revocation.test.ts, whose header cites FBL-020-R5 §1.1/§1.2"
+    },
+    {
+      "clause": "§1.2",
+      "title": "The refreshable-cookie logout path, proven over full HTTP",
+      "text_held_verbatim": true,
+      "evidence": "tests/identity-revocation.test.ts, whose header cites FBL-020-R5 §1.1/§1.2"
+    },
+    {
+      "clause": "§1.3",
+      "title": "Login admission and session/credential custody happen in ONE call",
+      "text_held_verbatim": true,
+      "evidence": "packages/identity-access/src/login-admission.ts and apps/api/src/routes/auth.ts cite FBL-020-R5 §1.3"
+    },
+    {
+      "clause": "§1.4",
+      "title": "Admission cannot be raced, proven deterministically",
+      "text_held_verbatim": true,
+      "evidence": "tests/login-admission-concurrency.test.ts, whose header cites FBL-020-R5 §1.4"
+    },
+    {
+      "clause": "§1.5",
+      "title": "Every callback with a valid sealed handle routes through the server-authoritative claim path",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. apps/api/src/routes/auth.ts claims first and terminalizes provider `error` callbacks and missing authorization codes with their own reasons; expiry during a slow exchange is driven over HTTP with a deterministic interleaving. See R5-§1.5-callback-terminalization."
+    },
+    {
+      "clause": "§1.6",
+      "title": "Login-transaction and reauthentication expiry registered in the deployed worker",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. Both sweeps are bounded and claim under FOR UPDATE SKIP LOCKED; tests/worker-entrypoint.test.ts spawns apps/worker/dist/main.js --once against seeded expired rows. See R5-§1.6-worker-expiry-registration."
+    },
+    {
+      "clause": "§1.7",
+      "title": "Definitive refresh revocation and its audit are one transaction",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. Atomicity is measured under an injected audit failure in tests/identity-revocation.test.ts. See R5-§1.7-breach-revocation-atomic."
+    },
+    {
+      "clause": "§1.8",
+      "title": "Access-token verification at every exported refresh/rotation boundary, or make it private",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. The unsafe rotation primitive is module-private and RefreshProviderSessionInput.verifyAccessToken is required; pinned structurally in tests/identity-boundary.test.ts. See R5-§1.8-refresh-boundary-verification."
+    },
+    {
+      "clause": "§1.9",
+      "title": "Tenant-scoped MFA certification requires a currently active and effective tenant",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. requireCertificationAuthority interpolates the engine's own ACTIVE_EFFECTIVE_TENANT_SQL. See R5-§1.9-mfa-certification-tenant-effectiveness."
+    },
+    {
+      "clause": "§1.10",
+      "title": "A lapsed support session receives the expiry transition; revocation must not relabel it",
+      "text_held_verbatim": true,
+      "evidence": "COVERED IN BOTH ORDERINGS. revokeSupportSession requires a still-running window. See R5-§1.10-support-expiry-precedence."
+    },
+    {
+      "clause": "§1.11",
+      "title": "Successful-login audit evidence attributed to the admitted tenant and user",
+      "text_held_verbatim": true,
+      "evidence": "COVERED. succeedLoginTransaction records the admitted tenant and user. See R5-§1.11-login-audit-attribution."
+    },
+    {
+      "clause": "§2.1",
+      "title": "Version-2 PolicyDecision evidence is relationally coherent, not merely non-null",
+      "text_held_verbatim": true,
+      "evidence": "migrations/057_identity_boundary_completion.sql sections 6 and 11 — completeness, atomicity and the version floor, then the composite keys that make a complete row COHERENT; proven by direct SQL in tests/identity-evidence.test.ts. See R5-§2.1-policy-evidence-coherence."
+    },
+    {
+      "clause": "§2.2",
+      "title": "PostgreSQL rejects cross-tenant actors, broken identity tuples, bad authority and support evidence",
+      "text_held_verbatim": true,
+      "evidence": "All five rejection classes are refused ON a policy_decisions row by migrations/057 section 11 and proven class by class in tests/identity-evidence.test.ts; each control was dropped from a freshly migrated database with a named test required to die. See R5-§2.2-policy-evidence-rejections."
+    },
+    {
+      "clause": "§2.3",
+      "title": "Normalize array evidence so foreign keys and authorization-version relationships are enforceable",
+      "text_held_verbatim": true,
+      "evidence": "migrations/057_identity_boundary_completion.sql section 11e normalizes matched_role_binding_ids into policy_decision_matched_bindings, which carries the foreign keys the array could not and a trigger for the version relationship a key cannot express. See R5-§2.3-array-evidence-normalization."
+    },
+    {
+      "clause": "§2.4",
+      "title": "Direct SQL negative tests with random nonexistent identifiers and cross-wired real rows",
+      "text_held_verbatim": true,
+      "evidence": "tests/identity-evidence.test.ts issues direct SQL negatives against policy_decisions with random nonexistent identifiers AND cross-wired real rows from a second seeded identity chain, asserting SQLSTATE and constraint name. See R5-§2.4-direct-sql-negatives."
+    },
+    {
+      "clause": "§3.1",
+      "title": "The governing document and the superseded one, stated so a Version 1.0 reader is not misled",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim in docs/orders/FBL-020-R5.md; delivered as docs/orders/BLUEPRINT-PROVENANCE.md"
+    },
+    {
+      "clause": "§3.2",
+      "title": "The current R5 authority is checked into the repository verbatim",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim; delivered as docs/orders/FBL-020-R5.md itself"
+    },
+    {
+      "clause": "§3.3",
+      "title": "ONE current state: no stale CI, commit, migration, worker, refresh or phase prose",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim; delivered in docs/FBL-020-DELIVERY-REPORT.md"
+    },
+    {
+      "clause": "§3.4",
+      "title": "Document tests check the ACTUAL supplied document, not another file we wrote",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim; delivered in tests/delivery-documentation.test.ts and scripts/docx-text.ts"
+    },
+    {
+      "clause": "§3.5",
+      "title": "An authoritative clause inventory, unique required ids, and failing completeness checks",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim; delivered in this file and scripts/check-requirement-map.ts"
+    },
+    {
+      "clause": "§3.6",
+      "title": "Reconcile README, ADR-001, AUTH-FLOWS, KNOWN-LIMITATIONS, DATA-DICTIONARY, the threat model, MODULE-OWNERSHIP, the delivery report and the project copies",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim; delivered across those nine documents"
+    },
+    {
+      "clause": "§4",
+      "title": "Verification gates: floors, added coverage, mutation-kill, and every standing gate green",
+      "text_held_verbatim": true,
+      "evidence": "scripts/parse-test-summary.ts (declared floors read from MINIMUM_TESTS/MINIMUM_SUITES, zero failed/cancelled/skipped/todo), scripts/mutation-kill.ts, and the ci.yml steps and artifacts named in R5-§4-verification-gates; proven by tests/ci-gates.test.ts."
+    },
+    {
+      "clause": "§5",
+      "title": "ONE code-bearing commit plus an OPTIONAL documentation-only closeout; any test, script, workflow, requirement-map or source change belongs in the code-bearing commit",
+      "text_held_verbatim": true,
+      "evidence": "order text held verbatim in docs/orders/FBL-020-R5.md Part 1 §5, which this repository holds in full; recorded in docs/FBL-020-DELIVERY-REPORT.md and proven by tests/delivery-documentation.test.ts. An earlier revision of this entry said \"the clause's own wording is not held\", which was an artefact of the order being routed one section at a time; it is withdrawn."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "R5-§0.1-census",
+      "revision": "FBL-020-R5",
+      "clause": "§0.1",
+      "requirement": "Establish whether any persistent environment has applied migration 057, and therefore whether 057 may be corrected in place.",
+      "verdict": "REPORTED, NOT DISCHARGED. R5 §0.1 repeats the census as a committed script and publishes machine-readable evidence per environment, with the limits of each probe. The artifact's conclusion.position is EDIT_057_IN_PLACE and its branch_sentence reads, verbatim: \"NO PERSISTENT ENVIRONMENT HAS APPLIED ANY FORM OF 057, on the evidence above. Every environment reachable from this machine was inspected and reported `no`, except the disposable and ephemeral ones listed separately. Under §0.2 that leaves migration 057 editable in place and requires no 058.\" That is the implementer's reading, offered for review. THE PREVIOUS CENSUS SAID THE OPPOSITE AND WAS WRONG: it decided disposability by path prefix, so this project's own scratch cluster at C:/Users/alegn/pgdata-fbl020r5 — created outside %TEMP% because the usual drill cluster was damaged — was classified persistent and froze 057, while this row and the delivery report asserted the opposite branch and nothing compared them. Disposability is now decided by provenance and content and is fail-closed; an unclassifiable cluster is counted WITH the persistent ones. A second defect in the same code, not previously reported, matched the local cluster by a stale postmaster.opts and thereby dropped a stopped cluster holding 057 out of the artifact altogether; it is located by a running postmaster's postmaster.pid now, and that cluster is censused. See the delivery report §4.1. R4's entry here read \"DISCHARGED by the architect\", asserting a ratification that had not been given; the review said so, and the claim is withdrawn.",
+      "proof_kind": "script + machine-readable artifact (implementer finding, NOT reviewed)",
+      "tests": [
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "the census REPORTS a finding and does not claim it was accepted"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "a service container with a volume, or a bind mount hidden in options, is DETECTED"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "a deploy step anywhere in a workflow withholds the ephemerality verdict"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "an uninspectable environment is `indeterminate`, never `no`"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "the compose volume names Compose would create are derived, not guessed"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "the marker scan finds a needle that straddles a chunk boundary"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "every environment the order names is covered by a probe"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "disposability is decided by PROVENANCE AND CONTENT, never by a path prefix"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "a cluster whose provenance cannot be established is INDETERMINATE, and counts as persistent"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "the local cluster is the one a RUNNING postmaster claims, not one that merely recorded the port"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "every declared disposable-database pattern is one this repository really uses"
+        }
+      ],
+      "code": [
+        "scripts/migration-census.ts",
+        "scripts/check-census-prose.ts",
+        "architecture/disposable-cluster-policy.json"
+      ],
+      "census_position": "EDIT_057_IN_PLACE",
+      "artifacts": ["migration-census.json", "migration-census.txt"]
+    },
+    {
+      "id": "R5-§0.3-ledger-refuses",
+      "revision": "FBL-020-R5",
+      "clause": "§0.3",
+      "requirement": "The migration ledger must record WHAT was applied, not merely that something was — and an untrustworthy ledger must REFUSE further migration (non-zero exit, nothing applied), not warn and continue.",
+      "code": ["scripts/migrate.ts", "scripts/migrate-refusal-probe.ts"],
+      "proof_kind": "suite + CI",
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the recorded checksum is the CANONICAL-LF digest, identical on Windows and in CI"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a CHANGED body of an applied migration REFUSES the run, names the file and both digests"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a row with NO recorded checksum REFUSES the run, and no checksum is invented for it"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a ledger row whose migration BODY is nowhere available REFUSES the run"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "an unsupported checksum ALGORITHM refuses, because it cannot be recomputed"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the ledger refuses a malformed digest and a digest with no algorithm"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "every migration in this repository is recorded under its committed canonical digest"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a verifiable ledger produces NO refusals"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "each of the four untrustworthy shapes produces its OWN refusal kind"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "EVERY offending row is reported, not just the first"
+        }
+      ],
+      "ci_steps": ["Ledger and fixture-mode refusals (probed on copies of the upgraded database)"],
+      "artifacts": ["refusal-probes.json", "refusal-probes.txt"]
+    },
+    {
+      "id": "R4-§1-login-admission",
+      "revision": "FBL-020-R4",
+      "clause": "§1",
+      "requirement": "Login admission happens in one call at the wire: the transaction claim requires the opaque handle and the exact redirect, refusals are indistinguishable, absence is never agreement, and a pending link creates no privilege.",
+      "code": [
+        "packages/identity-access/src/login-admission.ts",
+        "packages/identity-access/src/login-transaction.ts",
+        "apps/api/src/routes/auth.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a successful callback establishes a session that authenticates the next request"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the login transaction claim requires the OPAQUE HANDLE and the exact redirect"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the refusals are INDISTINGUISHABLE from one another at the wire — every one of them"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "exchangeMatchesVerifiedToken treats ABSENCE as disagreement, never as agreement"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "admitLoginAndEstablishSession refuses a PENDING link and creates no privilege"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a BOUND but PENDING link is refused — binding is provenance, not authority",
+          "added_by": "R4 §7, after scripts/mutation-kill.ts reported the pending_link_admitted mutation as SURVIVING against the test above"
+        }
+      ]
+    },
+    {
+      "id": "R4-§2-identity-tuple",
+      "revision": "FBL-020-R4",
+      "clause": "§2",
+      "requirement": "The identity tuple is enforced by the database as composite foreign keys, so a partial or cross-tenant tuple is refused by Postgres rather than by convention.",
+      "code": ["migrations/057_identity_boundary_completion.sql"],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED user link cannot be bound to another tenant’s connection"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a PLATFORM-scope link cannot bind to a dealership connection"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED link cannot claim an issuer or organization its connection lacks"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED link cannot be PARTIALLY bound"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a LIVE session cannot claim a provider subject its link does not have"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a LIVE session cannot claim a tenant, issuer or organization off its link"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a STARTED reauthentication cannot name a session that is not its own identity"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a GRANT cannot claim a different tenant, person or action than its transaction"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the nil UUID can never be a tenant id, so it can stand for platform scope"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support access cannot cross a tenant: the session, and the approving grant"
+        }
+      ]
+    },
+    {
+      "id": "R4-§2-policy-evidence-version",
+      "revision": "FBL-020-R4",
+      "clause": "§2",
+      "requirement": "A new policy decision cannot be written incomplete: evidence_version 2 requires the presented credential group, the identified actor group and the authority the allow relied on, and a BEFORE INSERT floor refuses a new row at the historic version.",
+      "code": [
+        "migrations/057_identity_boundary_completion.sql",
+        "packages/identity-access/src/policy.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the COMPLETE version-2 allow is accepted, and lands at the current version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a NEW decision missing ANY required evidence is refused"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ALLOW cannot omit the credential group ENTIRELY"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a DENY may record that no credential was presented — and still not half of one"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a new decision cannot opt back into the WEAKER historic version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a HISTORIC version-1 row stays legal, readable, and append-only"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support-access evidence is all three facts or none"
+        }
+      ]
+    },
+    {
+      "id": "R4-§3-reauthentication-authority",
+      "revision": "FBL-020-R4",
+      "clause": "§3",
+      "requirement": "The reauthentication row is the authority on its own callback; every provider-side failure reaches exactly one explained terminal state with one audit event; MFA-policy certification fails closed when false, missing, expired or revoked, and only an authorized administrative actor may certify it.",
+      "code": [
+        "packages/identity-access/src/reauthentication.ts",
+        "packages/identity-access/src/audit-inventory.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the login claim requires the OPAQUE HANDLE and the EXACT redirect"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the reauthentication ROW is authoritative for handle, callback, correlation, digests and binding"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "an UNCLAIMED transaction cannot be completed — the claim is not optional"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "every provider-side failure reaches exactly ONE terminal state and ONE audit event"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the expiry sweep records WHY and WHEN, and audits each transaction once"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "MFA certification fails CLOSED when false, missing, expired or revoked"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "only an AUTHORIZED administrative actor may certify an MFA policy"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "a refresh reply naming a DIFFERENT provider session revokes instead of being adopted"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "a refresh PRESERVES the original local expiry and never slides it later"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the audit inventory is complete, and every transition in it writes its event"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the support-use inventory entry names the event the policy engine actually writes"
+        }
+      ]
+    },
+    {
+      "id": "R4-§3-audit-inventory",
+      "revision": "FBL-020-R4",
+      "clause": "§3",
+      "requirement": "The identity audit inventory is COMPLETE over the identity. namespace, as far as a static resolver can read the event type, rather than a subset that claims to be complete: every audit event type production code writes is either an inventory entry, mapped to its transition and to a proof file and proof name that exist, or a declared non-audit literal carrying the reason it is not an event; an audit write from an undeclared file is refused. An ASSEMBLED event type is refused only when the shared resolver (scripts/static-string-resolver.ts) can render it or name the unreadable piece. A value crossing a function boundary with an unreadable root, array mutation other than push, and a name formed from object KEYS are NOT seen and pass unlisted; that residue is stated in docs/identity/KNOWN-LIMITATIONS.md and demonstrated by architecture/fixtures/audit-inventory-residue, which the gate is asserted to ACCEPT. An earlier revision of this requirement asserted that run-time assembly was refused without qualification; that was false, and it shipped inside the very artifact meant to stop claims rotting.",
+      "code": [
+        "packages/identity-access/src/audit-inventory.ts",
+        "scripts/check-audit-inventory.ts",
+        "architecture/fixtures/audit-inventory-gap",
+        "architecture/fixtures/audit-inventory-declared",
+        "scripts/static-string-resolver.ts",
+        "architecture/fixtures/audit-inventory-assembly",
+        "architecture/fixtures/audit-inventory-residue",
+        "tests/audit-inventory-rules.test.ts"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Architecture check (dependency rules, ownership manifest, env confinement)"],
+      "tests": [
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the real repository passes the audit-inventory gate"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "EVERY way of writing an uninventoried audit event is REJECTED, each by its own rule"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "a file naming only DECLARED event types is ACCEPTED — the gate is not simply always red"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the gate is part of npm run architecture:check"
+        },
+        {
+          "file": "tests/identity-core.test.ts",
+          "name": "a REFUSED login is audited, in both branches that refuse one"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "EVERY assembly spelling the shared resolver reads is REJECTED, and none passes silently"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the residue the gate cannot see is ACCEPTED, and named in the documents"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "both gates import ONE static string resolver, and neither keeps a private copy"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the BASELINE declaration is clean, so every perturbation below is the cause"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the REAL declaration is clean — the same rules, on the shipped inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: inventory-proof-citation-is-not-verifiable — the NAME must be in that file"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: required-transition-missing-from-inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: audit-event-type-missing-from-inventory"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: inventory-entry-has-no-production-writer"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: audit-writer-declaration-is-stale"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "rule: migration-audit-write-has-no-static-event-type"
+        },
+        {
+          "file": "tests/audit-inventory-rules.test.ts",
+          "name": "the patterns are DERIVED from the declaration, not typed twice"
+        }
+      ]
+    },
+    {
+      "id": "R4-§4-support-context",
+      "revision": "FBL-020-R4",
+      "clause": "§4",
+      "requirement": "Active support access is declared non-suppressibly through headers, request context, logs, policy evidence, audit and /auth/session — and the free-text reason lives in exactly one place.",
+      "code": [
+        "packages/identity-access/src/support-access.ts",
+        "packages/platform/src/request-context.ts",
+        "apps/api/src/middleware/request-context.ts"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "EVERY supported response header carries the session AND the expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the request context and every log line carry the whole fact set"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the bound context is NOT suppressible and refuses a second session"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the evidence row and the transactional audit row carry scope, actions and expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "/auth/session declares the grant to the tenant AND to the platform actor"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "/auth/session stays BOUNDED: support facts add no email, profile or token field"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the support REASON lives in exactly one place: its own row"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the header format has ONE writer, and it cannot omit the expiry"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "a request NOT under support access declares nothing"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "a revoked grant disappears from both views immediately"
+        },
+        {
+          "file": "tests/support-context.test.ts",
+          "name": "the logger cannot be talked out of the support facts"
+        }
+      ]
+    },
+    {
+      "id": "R4-§4-support-expiry",
+      "revision": "FBL-020-R4",
+      "clause": "§4",
+      "requirement": "A support window closing is a recorded, once-only, idempotent transition that the production worker actually performs, and the database refuses an expiry recorded early or a window claiming both endings.",
+      "code": [
+        "packages/identity-access/src/support-access.ts",
+        "apps/worker/src/index.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Worker support-expiry pass (compiled, against the real schema)"],
+      "tests": [
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a lapsed window is transitioned ONCE, with its version and one audit row"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "repeated processing is idempotent: no second audit row, no second version bump"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "CONCURRENT processors transition each window exactly once"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a LIVE window is not transitioned, and stays visible as an active grant"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "a REVOKED window is not re-ended by the processor"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the DATABASE refuses an expiry recorded EARLY"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the DATABASE refuses a window that claims BOTH endings"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the WORKER is where this runs in production"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the batch limit is bounded and validated"
+        }
+      ]
+    },
+    {
+      "id": "R4-§5-owned-mutations",
+      "revision": "FBL-020-R4",
+      "clause": "§5",
+      "requirement": "Every organization mutation is attributed, versioned and audited, the repository exports no bare write, and the owned-mutation boundary is enforced by a checker that rejects each reintroduced bypass.",
+      "code": [
+        "packages/organization/src/repository.ts",
+        "packages/identity-access/src/actions.ts",
+        "scripts/check-owned-mutations.ts"
+      ],
+      "proof_kind": "suite + architecture check",
+      "tests": [
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the organization package exports NO write any more"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "creating a unit is attributed, versioned and audited"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "an unattributable create is REFUSED rather than landing unowned"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "archiving a rooftop is a versioned, audited MASS REVOCATION — and it revokes"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a status transition that changes nothing is recorded as nothing"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a department needs its code, and nothing else may carry one"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "fixture bypasses are counted, so the suite can see how many it has"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the real repository passes the owned-mutation guard"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "EVERY reintroduced bypass is REJECTED, each by its own rule"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "the sanctioned paths are ACCEPTED — the guard is not simply always red"
+        },
+        {
+          "file": "tests/owned-mutations.test.ts",
+          "name": "a test-side write outside the declared primitive FAILS the guard"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-populated-upgrade",
+      "revision": "FBL-020-R4",
+      "clause": "§6",
+      "requirement": "The CI upgrade job applies the retained schema through the last pre-057 migration, seeds NONEMPTY legacy identity data alongside the retained Fixed Ops fixture, applies 057, and verifies deterministic reconciled row states with nonzero before/after counts.",
+      "code": [
+        "tests/fixtures/legacy-identity-seed-pre-057.sql",
+        "scripts/verify-upgrade-state.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "proof_kind": "CI + suite",
+      "ci_steps": [
+        "Stage the pre-057 chain",
+        "Migrate through the last PRE-057 migration (050..056)",
+        "Verify the organization backfill invented no identities (phase=backfill)",
+        "Seed NONEMPTY legacy identity data (pre-057 schema)",
+        "Verify the identity fixture is present and NONEMPTY (phase=pre-057)",
+        "Apply 057 on top of the populated legacy data",
+        "Verify the reconciled state and before/after counts (phase=post-057)"
+      ],
+      "artifacts": [
+        "upgrade-backfill.json",
+        "identity-pre-057.json",
+        "identity-post-057.json",
+        "pre-057-chain.txt"
+      ],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the populated identity fixture exists, is NONEMPTY, and is seeded by CI before 057"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade verifier has three phases and REFUSES to run without one"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade job runs every phase, the negative controls, and gates on their JSON"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-negative-controls",
+      "revision": "FBL-020-R4",
+      "clause": "§6",
+      "requirement": "Reconciliation is proved LOAD-BEARING in CI: each reconciliation the fixture can reach is removed on an isolated copy and the intended, DISTINCT constraint or data failure is observed. The three statements of the grantless-approval reconciliation are separated.",
+      "code": ["scripts/upgrade-negative-controls.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI + suite",
+      "ci_steps": ["Reconciliation negative controls (isolated copies of the pre-057 database)"],
+      "artifacts": ["negative-controls.json", "negative-controls.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every negative control names a statement that EXISTS exactly once in migration 057"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "removing a control statement really changes migration 057, and the runner refuses a bad anchor"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "control coverage is COMPUTED from the anchors, so it cannot be overstated"
+        }
+      ]
+    },
+    {
+      "id": "R4-§6-fingerprint-parity",
+      "revision": "FBL-020-R4",
+      "clause": "§6",
+      "requirement": "The fresh chain and the upgrade path must produce identical schema fingerprints.",
+      "code": ["scripts/schema-fingerprint.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI",
+      "ci_steps": ["Fingerprints must be identical (fresh chain vs upgrade path)"],
+      "artifacts": [
+        "fresh-schema-fingerprint.json",
+        "upgraded-schema-fingerprint.json",
+        "fingerprint-equality.txt"
+      ],
+      "tests": []
+    },
+    {
+      "id": "R4-§7-test-summary-gate",
+      "revision": "FBL-020-R4",
+      "clause": "§7",
+      "requirement": "The test summary parser requires tests, suites, pass, fail, cancelled, skipped, todo AND duration, enforces floors of at least 315 tests and 29 suites, and requires zero failed, cancelled, skipped and todo.",
+      "code": ["scripts/parse-test-summary.ts"],
+      "proof_kind": "suite + CI",
+      "ci_steps": [
+        "Enforce test summary (all eight fields, floors, zero failed/cancelled/skipped/todo)"
+      ],
+      "artifacts": ["test-summary.json"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "all eight summary fields are REQUIRED, todo among them"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a run that SHRANK below the declared floor is refused"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "todo, skipped, cancelled and failed are each independently fatal"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the declared floors never fall below the floors the order fixed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "each floor is bounded by the declarations that actually exist"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-requirement-map",
+      "revision": "FBL-020-R4",
+      "clause": "§7",
+      "requirement": "A machine-readable mapping from every requirement to its named tests, checked so it cannot name a test that does not exist. R5 §3.5 extends it with clause coverage, id shape and uniqueness (see R5-§3.5-clause-inventory).",
+      "code": ["docs/FBL-020-R5-REQUIREMENT-MAP.json", "scripts/check-requirement-map.ts"],
+      "proof_kind": "suite + CI",
+      "ci_steps": [
+        "Requirement map (every R5 clause is covered and every requirement resolves to tests that exist)"
+      ],
+      "artifacts": ["requirement-map-check.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every requirement names tests that exist, and every mapped battery is claimed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a renamed or deleted test BREAKS the map"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-mutation-kill",
+      "revision": "FBL-020-R4",
+      "clause": "§7",
+      "requirement": "Targeted mutation-kill checks run in an isolated CI copy and their output is published as an artifact.",
+      "code": ["scripts/mutation-kill.ts", ".github/workflows/ci.yml"],
+      "proof_kind": "CI + suite",
+      "ci_steps": ["Mutation-kill checks (isolated copy of the tree)"],
+      "artifacts": ["mutation-kill.json", "mutation-kill.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every mutation names code that EXISTS exactly once, in the file it claims"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the mutation-kill job is wired into CI and gates on zero survivors"
+        }
+      ]
+    },
+    {
+      "id": "R4-§7-documentation",
+      "revision": "FBL-020-R4",
+      "clause": "§7",
+      "requirement": "Documentation tests inspect the ACTUAL delivery report, the runbooks, the README and known-limitations: stale claims are removed, figures are pinned to CI artifacts, and no failed mandatory gate is described as residual risk. R5 §3.4 replaced this battery's CITATION check, which compared the report against a fact set in this same map; the rows below are the R4 checks that survive on this tree.",
+      "code": [
+        "docs/FBL-020-DELIVERY-REPORT.md",
+        "docs/identity/KNOWN-LIMITATIONS.md",
+        "docs/runbooks/WORKOS-OPERATOR-RUNBOOK.md",
+        "docs/runbooks/TENANT-BOOTSTRAP-RUNBOOK.md",
+        "README.md"
+      ],
+      "proof_kind": "suite",
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "a NOT DISCHARGED gate is never filed as residual risk"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the adapter claim is precise: mocked invocation exists, LIVE WorkOS behaviour does not"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every figure the report pins is pinned to a named CI artifact"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "known-limitations, the runbooks and the README agree that live certification is BLOCKED"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report names every migration on disk and every mapped battery"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the runbooks document the operator steps this delivery changed"
+        }
+      ]
+    },
+    {
+      "id": "R5-§0.4-fixture-chain",
+      "revision": "FBL-020-R5",
+      "clause": "§0.4",
+      "requirement": "A migrations directory that is not the canonical one is an OPT-IN mode: the caller names a chain declared in architecture/migration-fixture-chains.json, the directory must match that declaration by exact filenames and canonical-LF digests, and no ledger refusal is weakened — a body the fixture withholds is still resolved from migrations/ and still verified there.",
+      "code": [
+        "scripts/migration-fixture-chains.ts",
+        "scripts/migrate.ts",
+        "architecture/migration-fixture-chains.json",
+        "Dockerfile"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": [
+        "Apply the earliest retained schema (f76a27a; migrations 000 + 049)",
+        "Migrate through the last PRE-057 migration (050..056)",
+        "Ledger and fixture-mode refusals (probed on copies of the upgraded database)"
+      ],
+      "artifacts": ["refusal-probes.json", "refusal-probes.txt"],
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the runner REFUSES a migrations directory that no declared chain admits"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a non-canonical directory with no chain named is REFUSED"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the canonical directory with a chain named is REFUSED, not silently obeyed"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the canonical directory with no chain is production mode, with nothing to complain about"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "every declared PINNED chain matches its committed digests exactly, today"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the negative-control chain admits a ONE-STATEMENT deletion and nothing else"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "the negative-control chain pins the canonical digest of the file it mutates"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "production mode NEVER READS the chain allowlist, so the container can migrate without it"
+        }
+      ]
+    },
+    {
+      "id": "R5-§0.5-retained-fixture-pin",
+      "revision": "FBL-020-R5",
+      "clause": "§0.5",
+      "requirement": "The retained historical fixture is COMPARED against fixed committed digests, not recorded into an output-only manifest: a changed, extra or missing fixture file fails the job.",
+      "code": ["scripts/migration-manifest.ts", "architecture/migration-fixture-chains.json"],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Retained fixture must match its committed digests (f76a27a)"],
+      "artifacts": ["fixture-checksums.json"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the retained fixture matches its FIXED committed digests"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a CHANGED, EXTRA or MISSING fixture file is refused, not re-recorded"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the manifest pins the CANONICAL-LF digest, not the bytes on disk"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "CI compares the retained fixture instead of merely recording it"
+        }
+      ]
+    },
+    {
+      "id": "R5-§0.6-reconciliation-inventory",
+      "revision": "FBL-020-R5",
+      "clause": "§0.6",
+      "requirement": "An authoritative inventory of EVERY reconciliation in 057: each statement that changes retained rows or refuses to proceed is either covered by a negative control (computed from that control’s anchors) or declared with the reason it cannot be exercised. An unaccounted reconciliation, or a declaration matching nothing, fails.",
+      "code": [
+        "scripts/reconciliation-inventory.ts",
+        "architecture/reconciliation-inventory-057.json"
+      ],
+      "proof_kind": "suite + CI",
+      "ci_steps": ["Reconciliation inventory of 057 (every reconciliation accounted for)"],
+      "artifacts": ["reconciliation-inventory-057.json", "reconciliation-inventory-057.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every reconciliation in 057 is accounted for, and nothing is declared that is not there"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a reconciliation with NO control and NO declaration is REPORTED, not tolerated"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a declaration that matches no statement is REPORTED, so the file cannot go stale"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "control coverage is COMPUTED from the anchors, so it cannot be overstated"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the statement splitter respects dollar-quoting, strings and comments"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the inventory is wired into CI and gates on zero unaccounted reconciliations"
+        }
+      ],
+      "verdict": "COVERED IN BOTH LIMBS, AND STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT. LIMB ONE, THE INVENTORY: scripts/reconciliation-inventory.ts parses 057 with a scanner that respects dollar-quoting, string literals and comments, classifies every statement that changes retained rows or refuses to proceed, and COMPUTES control coverage from each control's anchors rather than accepting a declaration. It reports 0 unaccounted reconciliations, and it fails in the other direction too: a declaration matching no statement is reported, so architecture/reconciliation-inventory-057.json cannot go stale against the migration. LIMB TWO, THE THREE GRANTLESS-APPROVAL CONTROLS: the clause names three — session revocation, supersession audit insertion, and request supersession — because the grantless-approval reconciliation in 057 is three statements and R4 had a control for only one of them. All three now exist and each is independent: sas_grantless_approval_session_revoked (deleting it leaves the live support SESSION of a grantless approval alive through the upgrade, which only an exact-state assertion catches because the migration still succeeds), aud_grantless_approval_supersession_recorded (deleting it supersedes the approval with no audit row explaining it), and sar_approval_without_grant_superseded (deleting it leaves the REQUEST approved with no grant behind it — this is the one R4 shipped). Each is declared in architecture/negative-control-anchors-057.json, each anchor must resolve to exactly one statement in 057 or tests/ci-gates.test.ts fails, and each is executed against a real copy of the populated pre-057 database by scripts/upgrade-negative-controls.ts in the migration-upgrade job. WHAT IS NOT SHOWN, stated rather than omitted: 24 reconciliations cannot be shown load-bearing by a pre-057 fixture at all, because each operates on a column 057 itself creates and therefore matches zero rows on any pre-057 database. They are enumerated with their reasons rather than passed over, and 3 further statements are refusal guards that reconcile nothing by design."
+    },
+    {
+      "id": "R5-§0.2-in-place-branch",
+      "revision": "FBL-020-R5",
+      "clause": "§0.2",
+      "requirement": "On the census evidence the implementer takes the branch that leaves migration 057 editable in place, and adds no 058. What makes that defensible is not an assumption: an environment that applied an earlier 057 REFUSES the run and names both digests, and the census markers are derived from migrations/ so a future 058 is covered without editing the census.",
+      "verdict": "REPORTED, NOT ACCEPTED. The branch rests on the §0.1 census, which is the implementer's finding and carries \"acceptance\": \"NOT_REVIEWED\" in its own body. The artifact's conclusion.position is EDIT_057_IN_PLACE, persistent_environments_with_057 is empty and persistent_environments_indeterminate is empty; the two clusters that do hold 057 are this project's own drill clusters and are listed under disposable_or_ephemeral_with_057. scripts/check-census-prose.ts fails this delivery if this row, or the report, asserts a position the artifact does not carry — the gate that was missing when the artifact said FREEZE and both documents said otherwise. A reviewer who reads the evidence differently reaches the 058 branch instead, and nothing in this delivery presumes the outcome.",
+      "proof_kind": "suite + machine-readable artifact (implementer finding, NOT reviewed)",
+      "code": [
+        "scripts/migration-census.ts",
+        "scripts/check-census-prose.ts",
+        "scripts/migrate.ts"
+      ],
+      "artifacts": ["migration-census.json", "migration-census.txt"],
+      "tests": [
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "a persistent environment holding 057 forces the 058 branch, and is reported separately from a disposable one"
+        },
+        {
+          "file": "tests/migration-census.test.ts",
+          "name": "the markers are derived from migrations/, so a future 058 is covered without editing this file"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a CHANGED body of an applied migration REFUSES the run, names the file and both digests"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the delivery documents assert the census position the ARTIFACT carries, and no other"
+        }
+      ],
+      "census_position": "EDIT_057_IN_PLACE"
+    },
+    {
+      "id": "R5-§1.1-revocation-destroys-credential",
+      "revision": "FBL-020-R5",
+      "clause": "§1.1",
+      "requirement": "Revoking a local session destroys the provider refresh credential with it, on every path that revokes — and the revocation statement cannot be written without destroying that state, so a future path cannot forget it.",
+      "proof_kind": "suite (real HTTP + database)",
+      "code": ["packages/identity-access/src/session.ts"],
+      "tests": [
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "cookie LOGOUT of a callback-created REFRESHABLE session revokes it and destroys every trace of the provider credential"
+        },
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "the revocation statement is written ONCE, and it cannot be written without destroying refresh state"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.2-logout-over-http",
+      "revision": "FBL-020-R5",
+      "clause": "§1.2",
+      "requirement": "The logout path is proven over full HTTP on a session created by the real callback with a refreshable provider credential — not on a hand-built row — and the audit event is written exactly once.",
+      "proof_kind": "suite (real HTTP + database)",
+      "code": ["apps/api/src/routes/auth.ts", "packages/identity-access/src/session.ts"],
+      "tests": [
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "cookie LOGOUT of a callback-created REFRESHABLE session revokes it and destroys every trace of the provider credential"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.3-atomic-admission",
+      "revision": "FBL-020-R5",
+      "clause": "§1.3",
+      "requirement": "Admission and custody are ONE call: no route may establish a session on its own, a pending link creates no privilege, and the session the callback establishes is the one that authenticates the next request.",
+      "proof_kind": "suite (real HTTP + database) + structural check",
+      "code": ["packages/identity-access/src/login-admission.ts", "apps/api/src/routes/auth.ts"],
+      "tests": [
+        {
+          "file": "tests/login-admission-concurrency.test.ts",
+          "name": "no route may establish a session on its own — admission and custody are ONE call"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a successful callback establishes a session that authenticates the next request"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "admitLoginAndEstablishSession refuses a PENDING link and creates no privilege"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a BOUND but PENDING link is refused — binding is provenance, not authority"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.4-admission-not-raceable",
+      "revision": "FBL-020-R5",
+      "clause": "§1.4",
+      "requirement": "Admission cannot be raced: a concurrent administrative change is either seen or serialized behind, proven deterministically rather than by timing, with a CONTROL leg that admits the login so the race legs cannot pass by failing for the wrong reason.",
+      "proof_kind": "suite (real HTTP + database, deterministic interleaving) + mutation-kill",
+      "code": ["packages/identity-access/src/login-admission.ts"],
+      "tests": [
+        {
+          "file": "tests/login-admission-concurrency.test.ts",
+          "name": "CONTROL — with no concurrent administrator, the same leg admits the login and takes custody"
+        },
+        {
+          "file": "tests/login-admission-concurrency.test.ts",
+          "name": "two sequential logins through the SAME connection each get their own session"
+        },
+        {
+          "file": "tests/login-admission-concurrency.test.ts",
+          "name": "the admission claims its rows in a SHARED mode: a login is not queued behind another share lock on its connection"
+        }
+      ],
+      "verdict": "COVERED, AND THE ENFORCEMENT IS NOW SPLIT WHERE MEASUREMENT PUT IT (FBL-020-R5 Appendix A item 4). The seven race scenarios are generated from the races table in tests/login-admission-concurrency.test.ts — TENANT SUSPENSION, TENANT EFFECTIVE-WINDOW CLOSURE, CONNECTION DISABLEMENT, ORGANIZATION HIERARCHY ARCHIVAL, LINK DEACTIVATION, LINK EFFECTIVE-WINDOW CLOSURE and LINK RELINKING ONTO ANOTHER CONNECTION, each written out verbatim in that table as its title so scripts/mutation-kill.ts can name it — and are therefore cited through the mutations below rather than in tests[], which this checker resolves only against literal test('…') declarations. The four CONNECTION/TENANT/HIERARCHY scenarios are the ones the FOR SHARE claims carry: removing the locks (admission_holds_no_locks, tenant_admission_holds_no_lock, hierarchy_admission_holds_no_lock) admits a login into a suspended tenant with a 302 and a session, and all four die. The three LINK scenarios SURVIVE lock removal; what refuses them is admitUserLink's re-read, pinned separately by link_readmission_ignores_status, link_readmission_ignores_the_effective_window and link_readmission_ignores_the_binding, each of which kills exactly its own scenario. Substituting FOR UPDATE for FOR SHARE is a STRENGTHENING edit and cannot enable a race, so it is not a security mutation; the availability reason the module gives for choosing FOR SHARE is pinned by its own barrier instead (admission_takes_an_exclusive_lock kills only the SHARED-mode test cited above)."
+    },
+    {
+      "id": "R5-§3.1-blueprint-provenance",
+      "revision": "FBL-020-R5",
+      "clause": "§3.1",
+      "requirement": "Both blueprint documents are stated by filename, byte size, sha256, title, version line and §14 headings; the record says which document the reviewer's project copies are (both are Version 1.0) and what follows; and the governing Version 2.0 document is NOT claimed to be in the project record.",
+      "proof_kind": "suite (reads the document bytes)",
+      "code": [
+        "docs/orders/BLUEPRINT-PROVENANCE.md",
+        "docs/orders/Car_Dealership_SaaS_Architecture_Blueprint.docx",
+        "scripts/docx-text.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the SUPPLIED blueprint in this repository is the document the record describes"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the GOVERNING blueprint is recorded as ABSENT, and is verified the moment it is attached"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every blueprint citation in the delivery documents names its version, file or digest"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the ambiguous citations left in source are DECLARED, in both directions"
+        }
+      ],
+      "verdict": "OPEN AND EXTERNALLY BLOCKED. NOT CLOSED, NOT CLOSEABLE FROM THIS REPOSITORY, AND NOT SOFTENED. The clause requires the management-first Version 2.0 blueprint's bytes and exact checksum to be supplied IN BOTH PROJECT COPIES, or every claim that the document is \"in hand and verified\" to be withdrawn. THE WITHDRAWAL IS COMPLETE: no document in this repository claims the Version 2.0 file is in hand, verified, or part of the project record, and tests/delivery-documentation.test.ts carries R4's exact wording in BANNED_CLAIMS and fails if any delivery document reintroduces it. THE SUPPLY HAS NOT BEEN MADE IN THE REVIEWED PROJECT RECORD: both designated project copies remain the Version 1.0 file, 88,931 bytes, with the digest recorded once in governing_document.superseded.file_sha256 (short form d38ad00a...) and nowhere else in this map, so the mutation that corrupts that one field has nothing to hide behind. The operator has supplied the Version 2.0 bytes to the reviewer separately, twice. A repository cannot write into another party's record and this one does not claim to — nothing here can observe what the reviewer's copies contain, and a green suite here is not evidence about them. WHO MUST ACT: the REVIEWER must replace both designated project copies with the Version 2.0 file. WHAT THEY MUST VERIFY ON ARRIVAL, on the copy that lands in the project record: title line 1 \"Dealership Management & Sales Cloud\"; title line 2 \"Master Architecture Blueprint and Forward-Only Roadmap\"; version line \"Version 2.0  |  August 4, 2026  |  Governing management-first baseline\"; the governing section 14.3, reading \"14.3 First active instruction — FBL-020-R2\"; byte size 95,325; and sha256 as recorded in governing_document.governing.file_sha256 (short form 556d4e10...). Of those six facts, only the SHA-256 resolves to anything in this repository — the order text states it at Appendix A item 8, and scripts/check-published-figures.ts reads it from there. The other five are the operator's attestation from a copy this project record does not contain, and they are labelled as such wherever they appear. CHECKING THE R5 ORDER TEXT IN DOES NOT CLOSE THIS CLAUSE: that discharges §3.2, which is a different clause, and the conflation an earlier revision made between them is withdrawn. If the Version 2.0 file is also attached at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, the documentation battery verifies those recorded facts against its bytes and fails on the wrong file — which is a check on THIS repository's copy, not on the reviewer's."
+    },
+    {
+      "id": "R5-§3.2-order-text-checked-in",
+      "revision": "FBL-020-R5",
+      "clause": "§3.2",
+      "requirement": "The current R5 authority is checked in verbatim at docs/orders/FBL-020-R5.md — the disposition and §0 through §5 in Part 1, and a Part 3 register that marks all twenty-nine clauses as text HELD, none as unheld — and the delivery report, the README and known-limitations point at it. An earlier revision of this row described the register as one of \"the clauses this repository does NOT hold\"; that was true only while the order was being routed to the waves one section at a time, and it is withdrawn. The map records the file’s canonical-LF SHA-256 and scripts/check-requirement-map.ts recomputes it, so the authority cannot move under the map.",
+      "proof_kind": "suite",
+      "code": ["docs/orders/FBL-020-R5.md"],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the R5 order text is checked in, and the report and the map point at it"
+        }
+      ]
+    },
+    {
+      "id": "R5-§3.3-one-current-state",
+      "revision": "FBL-020-R5",
+      "clause": "§3.3",
+      "requirement": "The delivery report states the CI position, the commit position and the census position exactly once each and never twice differently; a superseded revision's run evidence appears only under a heading labelled HISTORICAL; no claim R4 was rejected for survives in any delivery document; and NO FIGURE PRODUCED BY A RUN OR A SCRIPT IS RETYPED — every suite total, floor constant, mutation total, inventory total, requirement/clause/test count, battery size, digest and checksum published by the delivery report or the requirement map is read from the artifact or constant that produces it by scripts/check-published-figures.ts, which fails when a published figure disagrees, whether it is published in a marked span or restated in prose. A figure no gate can derive must carry the declared NOT GATE-CHECKED label where it appears.",
+      "proof_kind": "suite + CI",
+      "code": [
+        "docs/FBL-020-DELIVERY-REPORT.md",
+        "scripts/check-published-figures.ts",
+        "scripts/parse-test-summary.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report declares ONE state for CI, for the commit, and for the census"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "CI evidence for a superseded revision is labelled HISTORICAL, in its own heading"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "no withdrawn R4 claim survives anywhere in the delivery documents"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "a NOT DISCHARGED gate is never filed as residual risk"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every published figure agrees with the artifact or constant that produces it"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "a published figure that disagrees with its source is REPORTED, in both directions"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the exemptions the gate allows are declared, bounded and named"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the stale-figure gate is wired into CI, after the runs that produce its artifacts"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the mutation registry is published as the runner recorded it, not as prose remembers"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "two documents cannot publish one figure at two values, artifact or no artifact"
+        }
+      ],
+      "verdict": "COVERED, AND THE STALE-FIGURE CLASS IS CLOSED RATHER THAN ITS INSTANCES. Four figures were published at two values each in the package this correction answers: the suite total (report and map disagreeing), the mutation registry (artifact recording a complete run while both documents said the last complete run covered 34 of 44), MINIMUM_TESTS (the map stating 554 three times against a source holding 567), and this repository's own documentation battery size (18 published, 20 declared). Correcting four figures would have left the class alive, so the figures now DERIVE: scripts/check-published-figures.ts holds a registry naming, per figure, the artifact or checked-in constant that produces it; reads that source; and compares it with the delivery report, this map, docs/orders/BLUEPRINT-PROVENANCE.md and docs/identity/KNOWN-LIMITATIONS.md. THREE MECHANISMS, because two were not enough: marked spans bind each published occurrence and are regenerable with --write; restatement rules bind the sentence SHAPES these documents use, so a stale figure written into a brand-new sentence fails too — all four of the figures that actually shipped wrong were in prose, outside any marker; and a mutual-consistency limb requires every publication of one figure to agree with EVERY OTHER publication of it even when no source is readable. THE THIRD LIMB EXISTS BECAUSE THE FIRST TWO HAD A HOLE THE SHAPE OF THE DEFECT THEY WERE BUILT FOR: artifacts/ is gitignored, so on a tree where the battery has not just been run the five suite figures are unreadable and BOTH earlier limbs SKIP a figure they cannot read. While that was true the gate printed \"Every published figure agrees with its source\" over a delivery report publishing the battery total as 572 in its section 5 gate table and 599 in its section 5.4 derivation table, the passing count as 572 and 599, and the parser observed-ok count as 631 and 655 — three more figures at two values each, inside the gate built to stop exactly that. All three were corrected to the values artifacts/test-summary.json recorded AT THAT POINT (572 / 572 / 631); the battery has grown since and the artifact now records 573 / 573 / 632, which every publication is held to. The qualification is the point: an unqualified past measurement reads as a present claim about the artifact, and that is how this sentence itself became a figure published at two values. TWO ESCAPE HATCHES, both declared and counted: the one historical region around the report's §9, whose figures belong to R3's and R4's trees on purpose, and the inline quoted markers carrying a superseded value in the withdrawal table. The gate reports both counts and the suite pins them. PROVED BY BREAKING IT: the report's mutation figures were decremented by one and the battery went red on exactly one named test, then restored; AND THE THIRD LIMB PROVED SEPARATELY, because a proof of one limb is not a proof of another: the suite_tests span was retyped from 572 to 571 — one figure, one character — the gate exited non-zero, and TWO named tests went red rather than one, the source comparison and the mutual-consistency limb; the report was restored from a byte copy and diff confirmed the restoration byte-identical. the reverse direction, and a wrong span, an unregistered span and each stripped NOT GATE-CHECKED label, are driven inside the suite. THREE FIGURES REMAIN UNDERIVABLE and are labelled where they appear: the Version 2.0 blueprint's byte length, the three quality ceilings, and the working-tree changed-path counts.",
+      "ci_steps": ["Published figures vs their artifacts (no figure is retyped)"],
+      "artifacts": ["published-figures.txt", "published-figures.tsv"]
+    },
+    {
+      "id": "R5-§3.4-document-anchored-tests",
+      "revision": "FBL-020-R5",
+      "clause": "§3.4",
+      "requirement": "The documentation tests are anchored on the supplied document itself — its digest, byte length, title, version line and §14 headings, read from its bytes — instead of comparing the report against a fact set in another file this implementation wrote.",
+      "proof_kind": "suite (reads the document bytes)",
+      "code": ["scripts/docx-text.ts", "tests/delivery-documentation.test.ts"],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the SUPPLIED blueprint in this repository is the document the record describes"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the GOVERNING blueprint is recorded as ABSENT, and is verified the moment it is attached"
+        }
+      ]
+    },
+    {
+      "id": "R5-§3.5-clause-inventory",
+      "revision": "FBL-020-R5",
+      "clause": "§3.5",
+      "requirement": "The requirement map carries an authoritative R5 clause inventory checked against the checked-in order text, requirement ids of a declared shape that are unique and agree with their own revision and clause, and a completeness check that FAILS when a clause has no requirement.",
+      "proof_kind": "suite + CI",
+      "code": ["docs/FBL-020-R5-REQUIREMENT-MAP.json", "scripts/check-requirement-map.ts"],
+      "ci_steps": [
+        "Requirement map (every R5 clause is covered and every requirement resolves to tests that exist)"
+      ],
+      "artifacts": ["requirement-map-check.txt"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every requirement names tests that exist, and every mapped battery is claimed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a renamed or deleted test BREAKS the map"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "an OMITTED requirement fails the clause-coverage check"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a duplicate id, a malformed id and an undeclared clause are each REPORTED"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the inventory cannot invent a clause the order text does not declare"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report accounts for every clause the requirement map declares"
+        }
+      ]
+    },
+    {
+      "id": "R5-§3.6-document-reconciliation",
+      "revision": "FBL-020-R5",
+      "clause": "§3.6",
+      "requirement": "The nine documents §3.6 names exist, speak of this revision, agree on the live-certification gate in one wording, and carry no withdrawn claim; the runbooks describe the shipped operator steps and the README points a newcomer at the order text, the provenance record, the map and the drill.",
+      "proof_kind": "suite",
+      "code": [
+        "README.md",
+        "docs/adr/ADR-001-modular-monolith.md",
+        "docs/identity/AUTH-FLOWS.md",
+        "docs/identity/KNOWN-LIMITATIONS.md",
+        "docs/identity/DATA-DICTIONARY.md",
+        "docs/architecture/THREAT-MODEL-DELTA-FBL-020.md",
+        "docs/architecture/MODULE-OWNERSHIP.md",
+        "docs/FBL-020-DELIVERY-REPORT.md",
+        "docs/orders/BLUEPRINT-PROVENANCE.md"
+      ],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the nine documents §3.6 names exist and all speak of this revision"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "known-limitations, the runbooks and the README agree that live certification is BLOCKED"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the adapter claim is precise: mocked invocation exists, LIVE WorkOS behaviour does not"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the runbooks document the operator steps this delivery changed"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the README points a newcomer at the order, the map and the upgrade drill"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report names every migration on disk and every mapped battery"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every figure the report pins is pinned to a named CI artifact"
+        }
+      ],
+      "verdict": "COVERED. All nine documents exist, name FBL-020-R5 as the active order, cite the checked-in order text by its canonical-LF digest, carry the single live-certification wording \"LIVE WORKOS CERTIFICATION IS NOT DISCHARGED\", and carry no claim R4 was rejected for — each asserted by a named test over the documents' own bytes rather than against a fact set in another file this implementation wrote. THE REMAINING DISAGREEMENTS AMONG THEM WERE NUMERIC, AND THAT IS NOW A GATE RATHER THAN A PROOFREAD: the report and this map published the suite total, the mutation registry, MINIMUM_TESTS and the documentation battery's size at two values each, and every one of those figures is now read from its source and compared with both documents by scripts/check-published-figures.ts (see R5-§3.3-one-current-state). Two documents cannot silently disagree about a number any more, because neither of them holds the number. THAT SENTENCE WAS NOT YET TRUE WHEN IT WAS FIRST WRITTEN, AND THE CORRECTION IS RECORDED RATHER THAN THE SENTENCE QUIETLY KEPT: the gate compared each publication against its SOURCE, and artifacts/ is gitignored, so on any tree where the battery had not just been run the five suite figures were unreadable and the comparison was SKIPPED. Under that skip the delivery report published the battery total at 572 in its section 5 gate table and 599 in its section 5.4 derivation table, the passing count at 572 and 599, and the observed-ok count at 631 and 655, while the gate reported everything in agreement. A third limb now requires every publication of one figure to agree with every OTHER publication of it whether or not any source can be read, which needs no artifact and is what makes the sentence true; it is driven by the named test \"two documents cannot publish one figure at two values, artifact or no artifact\" and was proved by retyping one span digit and watching two named tests die. The three stale values were corrected to what artifacts/test-summary.json recorded AT THAT POINT: 572 / 572 / 631. The artifact now records 573 / 573 / 632; this sentence describes the correction, not the current figure, and says so because leaving it unqualified made it a stale numeral inside the row claiming the class was closed. The runbooks describe the shipped operator steps and the README points a newcomer at the order text, the provenance record, this map and the upgrade drill. STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT."
+    },
+    {
+      "id": "R5-§5-commit-discipline",
+      "revision": "FBL-020-R5",
+      "clause": "§5",
+      "requirement": "The delivery report records the commit discipline — ONE code-bearing commit carrying every test, script, workflow, requirement-map and source change, plus an OPTIONAL documentation-only closeout — and states that the evidence it may quote is the FINAL HEAD, not an earlier commit.",
+      "verdict": "RECORDED, NOT EXERCISED. The order forbids committing, so no commit exists to measure; what a test can hold is that the report states the discipline and does not claim a commit or a CI run this tree does not have. The commit itself is the operator's action after review.",
+      "proof_kind": "suite",
+      "code": ["docs/FBL-020-DELIVERY-REPORT.md"],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the commit discipline is recorded, and the report states what evidence it may quote"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report declares ONE state for CI, for the commit, and for the census"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.5-callback-terminalization",
+      "revision": "FBL-020-R5",
+      "clause": "§1.5",
+      "requirement": "Every callback carrying a valid sealed transaction handle is routed through the server-authoritative claim/lifecycle path, and every real transaction finishes in ONE explained terminal state with ONE terminal audit event. apps/api/src/routes/auth.ts claims the server row atomically (claimLoginTransactionAtomically, naming the opaque handle, purpose, state, nonce, PKCE verifier and the exact registered redirect) and then makes every exit terminal through the local `refusal` helper: provider_exchange_failed, token_verification_failed, impersonation_detected, exchange_token_mismatch, identity_not_admitted and session_establishment_failed. The reauth leg does the same through claimReauthentication / failReauthentication.",
+      "verdict": "COVERED. The two sub-requirements previously reported as NOT evidenced are closed in this revision, and the third named in Appendix A item 5 is now driven end to end.\n\n(a) PROVIDER `error` CALLBACKS and (b) MISSING AUTHORIZATION CODE. apps/api/src/routes/auth.ts previously refused both before the claim (`typeof code !== 'string'` sat in the pre-claim guard), so an authorization server that redirected with `error` and no `code` left its transaction at `pending` until a sweep aged it hours later under the wrong reason. `code` has moved OUT of that guard: the pre-claim guard is now exactly the set of callbacks naming no claimable transaction (no cookie, unopenable cookie, wrong purpose, absent or disagreeing state), and both shapes are claimed and then terminalized through the leg's own `refusal` helper with the new closed-vocabulary reasons `provider_error_callback` and `authorization_code_missing`. `error` is tested first, so a provider refusal is not collapsed into \"malformed callback\". The provider's `error` and `error_description` strings are read only to classify and are asserted absent from the row, the audit details and the response body. The same correction is applied to the step-up leg.\n\n(c) EXPIRY DURING A SLOW PROVIDER EXCHANGE is proven over real HTTP with a DETERMINISTIC interleaving rather than a sleep: the expiry sweep is run INSIDE the fake `exchangeCode`, so the transaction is aged while the exchange is genuinely in flight. The leg answers the same neutral 401, sets no session cookie, the transaction is `failed`/`expired`, the audit trail holds exactly `started`+`claimed`+`expired` with no `succeeded`, and the session the admission had ALREADY established is revoked with `login_transaction_not_consuming` and its provider credential destroyed.\n\nMUTATIONS (scripts/mutation-kill.ts): `provider_error_callback_left_in_flight` and `missing_authorization_code_not_terminal`, each naming the test above that dies.",
+      "proof_kind": "suite (real HTTP + database) + direct state-machine tests",
+      "code": [
+        "apps/api/src/routes/auth.ts",
+        "packages/identity-access/src/login-transaction.ts",
+        "packages/identity-access/src/reauthentication.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/auth-surface.test.ts",
+          "name": "GET /auth/callback refuses every state and cookie mismatch"
+        },
+        {
+          "file": "tests/auth-surface.test.ts",
+          "name": "GET /auth/reauth/callback refuses mismatches and never accepts a LOGIN cookie"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the login transaction claim requires the OPAQUE HANDLE and the exact redirect"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the refusals are INDISTINGUISHABLE from one another at the wire — every one of them"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "a login transaction is consumed exactly once; the replay loses"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "an expired login transaction cannot be claimed"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "the login transaction walks pending -> consuming -> succeeded, and the replay loses at EVERY stage"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "a claimed transaction that fails is terminal WITH A REASON and can never become succeeded"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "an UNCLAIMED transaction expires into the failed terminal state, never into success"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "the schema itself refuses the states the machine forbids"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "an UNCLAIMED transaction cannot be completed — the claim is not optional"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "every provider-side failure reaches exactly ONE terminal state and ONE audit event"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a provider ERROR callback reaches its own terminal state, and the provider message never lands"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a callback carrying NO authorization code is terminal, and distinct from a provider error"
+        },
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a transaction that EXPIRES during a slow provider exchange ends terminally and hands out nothing"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.6-worker-expiry-registration",
+      "revision": "FBL-020-R5",
+      "clause": "§1.6",
+      "requirement": "Login-transaction and reauthentication expiry are registered in the DEPLOYED worker alongside support expiry, and the processing is bounded, idempotent, concurrency-safe, and tested through the compiled worker entry point with seeded expired rows. apps/worker/src/main.ts holds ONE registry whose entries pair a job name with the pass that runs it, so a job cannot be advertised without being run; tests/worker-jobs.test.ts drives the exact function `main --once` calls, and tests/worker-entrypoint.test.ts spawns apps/worker/dist/main.js — the file the Dockerfile CMD runs — and holds its advertised list to the source registry.",
+      "verdict": "COVERED. The PARTIAL verdict is withdrawn: BOUNDED and CONCURRENCY-SAFE now hold for all three sweeps, not the support sweep alone, and the compiled entry point is exercised against seeded expired rows rather than only asked to list its jobs.\n\n`expireStaleLoginTransactions` (packages/identity-access/src/login-transaction.ts) and `expireStaleReauthenticationTransactions` (packages/identity-access/src/reauthentication.ts) were each ONE unbounded UPDATE over the whole backlog with the audit rows written in a loop inside the same transaction. Both now take a validated `limit` (1..1000, default 200) and claim ONE row per short transaction under `FOR UPDATE SKIP LOCKED`, mirroring `expireDueSupportSessions`. The claim predicate (`status IN ('pending','consuming')` / `state = 'started'`) is both what selects the work and what the write invalidates, which is what makes a repeat pass and a concurrent pass no-ops for the same reason; SKIP LOCKED is documented as a liveness choice, not the guarantee.\n\nTHROUGH THE COMPILED ENTRY POINT WITH SEEDED EXPIRED ROWS: tests/worker-entrypoint.test.ts now seeds an expired login transaction and an expired step-up, SPAWNS apps/worker/dist/main.js --once with DATABASE_URL pointed at the test database (the command the Dockerfile CMD runs), and reads the transitions and their single audit rows back; a second spawn writes nothing further. That battery stays separate from the mutation-tested one because scripts/mutation-kill.ts copies the tree without dist/.\n\nMUTATIONS: `login_expiry_sweep_unbounded`, `login_expiry_claim_predicate_dropped`, `reauth_expiry_claim_predicate_dropped`, alongside the three pre-existing registry mutations.",
+      "proof_kind": "suite (real database) + compiled-artifact spawn + CI",
+      "code": [
+        "apps/worker/src/main.ts",
+        "apps/worker/src/index.ts",
+        "packages/identity-access/src/login-transaction.ts",
+        "packages/identity-access/src/reauthentication.ts"
+      ],
+      "ci_steps": [
+        "Worker job registry smoke test",
+        "Worker support-expiry pass (compiled, against the real schema)"
+      ],
+      "artifacts": ["worker-smoke.txt", "worker-expiry-pass.txt"],
+      "tests": [
+        {
+          "file": "tests/worker-entrypoint.test.ts",
+          "name": "the compiled entry point advertises every registered job"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "the worker pass ages a stale LOGIN transaction, exactly once"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "the worker pass ages a stale STEP-UP, exactly once"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "the worker pass closes an expired SUPPORT window, exactly once"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "CONCURRENT processors transition each window exactly once"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the batch limit is bounded and validated"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "the WORKER is where this runs in production"
+        },
+        {
+          "file": "tests/support-expiry.test.ts",
+          "name": "repeated processing is idempotent: no second audit row, no second version bump"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the expiry sweep records WHY and WHEN, and audits each transaction once"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "an UNCLAIMED transaction expires into the failed terminal state, never into success"
+        },
+        {
+          "file": "tests/worker-entrypoint.test.ts",
+          "name": "the compiled entry point ages seeded expired rows, once, through a real --once pass"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "the login-transaction sweep is BOUNDED by its limit, and refuses one outside its range"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "CONCURRENT login-transaction sweeps age each stale transaction exactly once"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "the STEP-UP sweep is BOUNDED by its limit, and refuses one outside its range"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "CONCURRENT step-up sweeps expire each transaction exactly once"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.7-breach-revocation-atomic",
+      "revision": "FBL-020-R5",
+      "clause": "§1.7",
+      "requirement": "A definitive refresh revocation and its audit event are ONE transaction. packages/identity-access/src/session.ts: revokeForIdentityBreach wraps revokeWithin in withTransaction — under R3 it ran on the bare pool, so the revocation and the audit row it owed were two independent implicit transactions and a failure between them left a destroyed session with no trail — and the refresh paths that are already inside a transaction call revokeWithin on the CALLER's executor, so the revocation commits with whatever else that path decided.",
+      "verdict": "COVERED. The PARTIAL verdict is withdrawn: atomicity is now measured UNDER A REAL FAULT, which is the only observation that distinguishes \"one transaction\" from \"two that both happened to succeed\".\n\ntests/identity-revocation.test.ts installs a BEFORE INSERT trigger on `audit_events` that raises on `identity.session.revoked`, then calls `revokeForIdentityBreach` against a session created by the real callback and holding real refresh state. The call must reject, and the session row must be EXACTLY as it was: `revoked_at` null, `revoked_reason` null, the authorization version unmoved, both refresh-state columns intact, and no audit row surviving. The trigger is dropped in `finally` and a CONTROL leg then performs the same revocation successfully, so the test cannot pass because the revocation was impossible for an unrelated reason.\n\nThe note about the parametrised battery declaring its tests with a TEMPLATE-LITERAL name still stands and is unchanged by this revision: those four entry-point tests are cited through this row's prose rather than in tests[], which the checker resolves only against literal test('...') declarations.\n\nMUTATION: `revocation_and_audit_are_two_transactions` restores the R4 shape (the audit written in its own transaction, its failure swallowed) and kills the named test.",
+      "proof_kind": "suite (real HTTP + database) + structural check",
+      "code": ["packages/identity-access/src/session.ts"],
+      "tests": [
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "the revocation statement is written ONCE, and it cannot be written without destroying refresh state"
+        },
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "cookie LOGOUT of a callback-created REFRESHABLE session revokes it and destroys every trace of the provider credential"
+        },
+        {
+          "file": "tests/auth.test.ts",
+          "name": "C1: a DEFINITIVE provider refusal ends the session on the spot"
+        },
+        {
+          "file": "tests/auth.test.ts",
+          "name": "C1: an IMPERSONATED refresh reply revokes instead of being adopted"
+        },
+        {
+          "file": "tests/auth.test.ts",
+          "name": "C1: a TRANSIENT provider failure does not break a still-valid local session"
+        },
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "a refresh reply naming a DIFFERENT provider session revokes instead of being adopted"
+        },
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "refresh state rotates, and a replayed refresh token changes nothing"
+        },
+        {
+          "file": "tests/identity-revocation.test.ts",
+          "name": "a failing audit insert takes the revocation down with it — they are ONE transaction"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.8-refresh-boundary-verification",
+      "revision": "FBL-020-R5",
+      "clause": "§1.8",
+      "requirement": "Access-token verification must be REQUIRED at every exported refresh/rotation boundary, or the unsafe lower-level primitives must be made private.",
+      "verdict": "COVERED. The NOT MET verdict is withdrawn: BOTH limbs of the clause's disjunction are now taken, each where it belongs.\n\nPRIVATE PRIMITIVE. `rotateSessionRefresh` no longer exists as an export. It was an exported rotation boundary that, by its own doc comment, \"performs no provider call and makes no trust decision\": given a session id, the digest-matching refresh token and any replacement, it wrote that replacement into the session's refresh state. It is now the module-private `rotateRefreshStateRow`, reachable only from `persistRefreshedState`, which reaches it only after a verified access token has been judged.\n\nREQUIRED VERIFICATION. `RefreshProviderSessionInput.verifyAccessToken` is no longer optional, and the `!== undefined` branch that skipped the judgement is gone: `verified` is non-nullable through `persistRefreshedState` and `identityStillMatches`, so the three comparisons against the verified token (subject, organization, provider session) are made on every refresh instead of only when a caller supplied a verifier. `MaintainProviderSessionInput` already required it.\n\nThe named test is structural and pins both limbs against the source: the exported refresh/rotation/maintenance surface is exactly `isProviderRefreshDue`, `maintainProviderSession` and `refreshProviderSession`; the required-verifier declaration occurs exactly twice; `verifyAccessToken?:` and any `=== undefined` / `!== undefined` test of it occur zero times; and across apps/ and packages/ exactly ONE template literal both UPDATEs identity_sessions and assigns `refresh_token_hash` in its SET list, in packages/identity-access/src/session.ts, with no exported rotation function. Stated as what it is: a lexical guard over the SQL and the exports this codebase writes.\n\nMUTATION: `refresh_boundary_verification_optional` restores the `?` and kills the named test.",
+      "proof_kind": "suite (real database) + structural check + mutation-kill",
+      "code": ["packages/identity-access/src/session.ts", "packages/identity-access/src/index.ts"],
+      "tests": [
+        {
+          "file": "tests/identity-boundary.test.ts",
+          "name": "the exported refresh surface cannot be driven without access-token verification"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.9-mfa-certification-tenant-effectiveness",
+      "revision": "FBL-020-R5",
+      "clause": "§1.9",
+      "requirement": "Tenant-scoped MFA certification must require a currently active AND effective tenant, under the same authority rule as policy evaluation.",
+      "verdict": "COVERED. The NOT MET verdict is withdrawn.\n\nThe tenant-effectiveness predicate the policy engine applies to every non-platform decision is now written ONCE, as the exported `ACTIVE_EFFECTIVE_TENANT_SQL` in packages/identity-access/src/policy.ts (`t.status = 'active' AND t.effective_from <= NOW() AND (t.effective_to IS NULL OR t.effective_to > NOW())`), and interpolated both by `decide()` step 3 and by `requireCertificationAuthority` in packages/identity-access/src/mutations.ts. There is no second copy to drift.\n\nThe gate runs BEFORE either authority path, so a platform administrator cannot escape it: TENANT_INACTIVE is not a permission the platform holds more of, it is a statement that there is no live tenant to certify for. A PLATFORM-scope connection (tenantId null) is unaffected and still admits the platform authority only.\n\nThe named test has three legs, and the third is the one that distinguishes \"the same rule as policy evaluation\" from \"a status check\": CONTROL (live tenant, the same administrator certifies), SUSPENDED (status not active, refused), LAPSED (status IS active but the effective window has closed, refused). It also asserts that a refusal is not a withdrawal.\n\nMUTATION: `mfa_certification_ignores_tenant_effectiveness` removes the gate and kills it.",
+      "proof_kind": "suite (real database) + mutation-kill",
+      "code": [
+        "packages/identity-access/src/mutations.ts",
+        "packages/identity-access/src/policy.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "tenant-scoped MFA certification requires a currently ACTIVE and EFFECTIVE tenant"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.10-support-expiry-precedence",
+      "revision": "FBL-020-R5",
+      "clause": "§1.10",
+      "requirement": "A support session whose expiry instant has passed must receive the EXPIRY transition, and a later human revocation must not steal or relabel that ending.",
+      "verdict": "COVERED IN BOTH ORDERINGS. The NOT COVERED verdict is withdrawn.\n\nThe gap was the window between the expiry INSTANT passing and the sweep's next pass (operationally, the whole worker interval): `revokeSupportSession` tested only `revoked_at IS NULL`, so a human revocation landed there, migration 057's `sas_ends_once_and_one_way` then made the row unexpirable, and the trail recorded `identity.support.revoked` — naming a person as the author of an ending a clock had already made, and losing the `identity.support.expired` event the audit inventory promises.\n\n`revokeSupportSession` now requires the window to be STILL RUNNING: `revoked_at IS NULL AND expired_at IS NULL AND expires_at > NOW()`. The predicate is a single constant (`SUPPORT_SESSION_STILL_RUNNING_SQL`) interpolated into BOTH the authority read and the write, deliberately so — with two hand-written copies, dropping either one would leave the other refusing and no test could tell them apart, which is also what makes one mutation able to reach the control.\n\nORDERING A (lapsed, sweep not yet run): the revocation returns false and writes NOTHING, and the sweep then records the expiry — one ending, the true one. It carries a CONTROL leg in which the same administrator revokes a still-running window, so the refusal cannot be an absence of authority. ORDERING B (sweep first): the revocation returns false, `revoked_by_user_link_id` stays null, and there is still exactly one `identity.support.expired` and zero `identity.support.revoked`.\n\nMUTATION: `late_revocation_steals_the_expiry` reduces the predicate to `revoked_at IS NULL` and kills ORDERING A.",
+      "proof_kind": "suite (real database) + mutation-kill",
+      "code": [
+        "packages/identity-access/src/mutations.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "tests": [
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "ORDERING A — a window that has LAPSED but not yet been swept cannot be revoked"
+        },
+        {
+          "file": "tests/worker-jobs.test.ts",
+          "name": "ORDERING B — a window already EXPIRED by the sweep cannot be relabelled a revocation"
+        }
+      ]
+    },
+    {
+      "id": "R5-§1.11-login-audit-attribution",
+      "revision": "FBL-020-R5",
+      "clause": "§1.11",
+      "requirement": "Successful-login audit evidence must be attributed to the ADMITTED tenant and user.",
+      "verdict": "COVERED. The NOT MET verdict is withdrawn.\n\n`succeedLoginTransaction` took only a `loginTxnId` and RETURNed the row's `tenant_id` and `user_link_id` straight to the audit writer. For a browser login both are NULL — `GET /auth/login` opens the transaction with a purpose, a redirect, a return location and a TTL and nothing else — so every successful browser login was recorded against the NIL tenant with `actor_user_id = NULL`: the one lifecycle event that says who got in named nobody, and could not be found by filtering a tenant's own trail.\n\nIt now takes an `AdmittedLoginIdentity` (loginTxnId, tenantId, userLinkId, optional connectionId) and writes those columns onto the row in the success statement, then audits from the row it just wrote. `tenantId` is nullable because a PLATFORM-scope actor genuinely has no tenant; `userLinkId` is not, because a login that admitted nobody is not a success. A transaction OPENED against a known identity (the reauth purpose) may only succeed as that identity: the statement carries `(tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2)` and `(user_link_id IS NULL OR user_link_id = $3)`, so a disagreement is a refusal, never an overwrite — and the caller then fails closed exactly as it does for an expired transaction. apps/api/src/routes/auth.ts supplies the three facts from the session the admission just established, which is the first moment in the round trip at which they are known.\n\nMUTATION: `login_success_audit_unattributed` writes NULLs instead and kills the named test.",
+      "proof_kind": "suite (real HTTP + database) + mutation-kill",
+      "code": [
+        "packages/identity-access/src/login-transaction.ts",
+        "apps/api/src/routes/auth.ts",
+        "packages/identity-access/src/login-admission.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "the successful-login audit event names the ADMITTED tenant and user"
+        }
+      ]
+    },
+    {
+      "id": "R5-§2.1-policy-evidence-coherence",
+      "revision": "FBL-020-R5",
+      "clause": "§2.1",
+      "requirement": "Version-2 PolicyDecision evidence must be relationally coherent, not merely non-null. Section 6 of migrations/057_identity_boundary_completion.sql supplies the NON-NULLNESS half: the atomic presented-credential group, the identified-actor group, the ALLOW authority rules, the support triple and the BEFORE INSERT version floor. Section 11 supplies the COHERENCE half: composite foreign keys that require the named session, actor, connection and provider subject to be one credential; the ALLOW-only cross-tenant actor key over the generated allowed_actor_tenant_id; the four-column support tuple key; the exact support-window comparison; and the normalized matched-binding child table that carries the referential integrity a UUID[] cannot.",
+      "verdict": "PROVEN, and measured rather than argued. Before section 11 existed, twenty direct SQL inserts of a fabricated or cross-wired ‘complete’ version-2 ALLOW were attempted against the shipped schema and EIGHTEEN WERE ACCEPTED — only the single-column connection_id and session_id foreign keys refused anything. All twenty are refused now, and each control was dropped from a freshly migrated database in turn with a named test required to die; fourteen of fourteen were killed. WHAT IS DELIBERATELY NOT CONSTRAINED, stated so its absence is a decision rather than an oversight: scope_id and resource_id are polymorphic over scope_level, so no single foreign key can address them, and they are left exactly as recorded.",
+      "proof_kind": "suite (direct SQL against the real schema)",
+      "code": [
+        "migrations/057_identity_boundary_completion.sql",
+        "migrations/055_identity_organization.sql",
+        "packages/identity-access/src/policy.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the COMPLETE version-2 allow is accepted, and lands at the current version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a NEW decision missing ANY required evidence is refused"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ALLOW cannot omit the credential group ENTIRELY"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a DENY may record that no credential was presented — and still not half of one"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a new decision cannot opt back into the WEAKER historic version"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a HISTORIC version-1 row stays legal, readable, and append-only"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support-access evidence is all three facts or none"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot cross-wire a real session with another real credential fact"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision that names a session must name the actor the session belongs to"
+        }
+      ]
+    },
+    {
+      "id": "R5-§2.2-policy-evidence-rejections",
+      "revision": "FBL-020-R5",
+      "clause": "§2.2",
+      "requirement": "PostgreSQL must reject nonexistent or cross-tenant actors; sessions, connections, subjects or tenants that do not form the presented identity tuple; nonexistent or mismatched role-binding authority; and mismatched support session/request/actor evidence — as recorded ON a policy_decisions row, not only as stored on the identity tables.",
+      "verdict": "PROVEN, class by class, each by a named direct-SQL test in tests/identity-evidence.test.ts, and each constraint shown load-bearing by dropping it and watching a named test die. NOTE ON WORDING: an earlier verdict said \"each mutation-killed\", which reads as \"registered in scripts/mutation-kill.ts\" and is NOT true — that runner carries no mutation against migration 057 or any policy-evidence constraint. The drops are by-hand experiments of the kind the delivery report records in its own by-hand table, not entries in the mutation registry. (i) NONEXISTENT IDENTIFIERS — pd_tenant_exists and pd_actor_exists (section 11d) join the existing connection_id and session_id keys, so a random UUID in any of the four is refused with SQLSTATE 23503. (ii) CROSS-TENANT ACTOR — pd_allow_actor_is_in_its_tenant, over the generated allowed_actor_tenant_id, refuses an ALLOW into one tenant attributed to another tenant’s real person; it is silent on a DENY, because a CROSS_TENANT denial’s whole content is that the person was outside, and the retained pre-057 fixture carries exactly such a row (d0000002-…). (iii) THE PRESENTED TUPLE — pd_credential_identity_tuple over (session_id, actor_user_link_id, connection_id, actor_provider_subject) refuses every cross-wiring of real rows, and pd_credential_names_its_actor stops a NULL from turning that MATCH SIMPLE key off. (iv) ROLE-BINDING AUTHORITY — see §2.3: the array is normalized, and a child row must name a binding the decision’s own actor holds, at a version that binding has reached. (v) SUPPORT EVIDENCE — pd_support_evidence_tuple over (support_session_id, support_request_id, tenant_id, actor_user_link_id), plus the exact window comparison in trg_policy_decisions_support_window and pd_support_evidence_is_attributable to keep that key from going silent on a NULL.",
+      "proof_kind": "suite (direct SQL against the real schema)",
+      "code": [
+        "migrations/057_identity_boundary_completion.sql",
+        "migrations/055_identity_organization.sql",
+        "migrations/056_identity_contract_completion.sql"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot name a tenant, an actor, a connection or a session that does not exist"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim authority from a role binding that does not exist"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ALLOW cannot attribute access in one tenant to a real actor from another"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a cross-tenant DENY may still name the foreign actor — that is what it records"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot cross-wire a real session with another real credential fact"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision that names a session must name the actor the session belongs to"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim a real role binding that belongs to somebody else"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support evidence cannot cross-wire a real session with another real request, tenant or actor"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a support decision cannot record a window its session never had"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision that names a support session must name its tenant and its actor"
+        }
+      ]
+    },
+    {
+      "id": "R5-§2.3-array-evidence-normalization",
+      "revision": "FBL-020-R5",
+      "clause": "§2.3",
+      "requirement": "Array evidence must be normalized where necessary so foreign keys and authorization-version relationships are enforceable.",
+      "verdict": "PROVEN. matched_role_binding_ids stays a UUID[] as the read surface every existing reader already uses, and it is no longer the only record of what it claims: section 11e of migrations/057_identity_boundary_completion.sql adds policy_decision_matched_bindings, one row per claim, written by an AFTER INSERT trigger from the array inside the same statement that writes the decision. WHAT ENFORCES THE BINDINGS, since a UUID[] cannot carry a key: pdmb_binding_belongs_to_the_actor (role_binding_id, actor_user_link_id) → role_bindings, so the binding EXISTS and belongs to the decision’s own actor — and because role_bindings is itself keyed (tenant_id, user_link_id) into user_links, a cross-tenant authority claim is unrepresentable without naming a cross-tenant actor first; pdmb_decision_names_this_actor (decision_id, actor_user_link_id) → policy_decisions, which is the rule a writer bypassing the trigger meets; and the primary key (decision_id, role_binding_id), so the same binding cannot be counted twice. THE AUTHORIZATION-VERSION RELATIONSHIP is a trigger rather than a key, and the reason is stated rather than glossed: role_bindings keeps one CURRENT authorization_version and no history table, so a key over it would retroactively invalidate true evidence the next time the binding changed. What IS enforceable is the direction, and it is enforced — trg_pdmb_version_reachable refuses a version the binding has never reached. The child rows are append-only under the same identity_append_only trigger as every other identity ledger, and scripts/check-owned-mutations.ts derives the new table as authorization state, so an unattributed write to it fails the build.",
+      "proof_kind": "suite (direct SQL against the real schema)",
+      "code": [
+        "migrations/056_identity_contract_completion.sql",
+        "migrations/057_identity_boundary_completion.sql",
+        "scripts/check-owned-mutations.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the matched-binding array is NORMALIZED into rows a foreign key can reach"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim authority from a role binding that does not exist"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim a real role binding that belongs to somebody else"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot record a role-binding version the binding has never reached"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim the same role binding twice"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "the normalized evidence cannot be written DIRECTLY against another actor"
+        }
+      ]
+    },
+    {
+      "id": "R5-§2.4-direct-sql-negatives",
+      "revision": "FBL-020-R5",
+      "clause": "§2.4",
+      "requirement": "Direct SQL negative tests using BOTH random nonexistent identifiers and cross-wired real rows. tests/identity-evidence.test.ts is written entirely in raw SQL for exactly this reason — a control proved by calling the well-behaved writer proves only that the well-behaved writer behaves well — and every refusal is asserted by SQLSTATE and, where one exists, by the NAME of the constraint that fired, so an unrelated constraint cannot stand in for the one under test.",
+      "verdict": "PROVEN, in both shapes, against policy_decisions itself. RANDOM NONEXISTENT IDENTIFIERS: a tenant, an actor, a connection, a session, a role binding, a support session and a support request that nobody created. CROSS-WIRED REAL ROWS: the battery now seeds TWO complete identity chains — tenant, connection, activated link, live session and granted role binding, in each of two tenants — so a test can present the other person’s real connection, real provider subject, real session, real role binding, real support session and real approved request, every id resolving and no two of them describing the same fact. The accepting fixture was itself a finding: before this pass it inserted ARRAY[randomUUID()]::uuid[] as its matched authority and was ACCEPTED; it now uses the actor’s real granted binding at its real version, and a fabricated one is refused.",
+      "proof_kind": "suite (direct SQL against the real schema)",
+      "code": [
+        "tests/identity-evidence.test.ts",
+        "migrations/057_identity_boundary_completion.sql"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot name a tenant, an actor, a connection or a session that does not exist"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim authority from a role binding that does not exist"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ALLOW cannot attribute access in one tenant to a real actor from another"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot cross-wire a real session with another real credential fact"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a decision cannot claim a real role binding that belongs to somebody else"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support evidence cannot cross-wire a real session with another real request, tenant or actor"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a support decision cannot record a window its session never had"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "an ACTIVATED user link cannot be bound to another tenant’s connection"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "a LIVE session cannot claim a provider subject its link does not have"
+        },
+        {
+          "file": "tests/identity-evidence.test.ts",
+          "name": "support access cannot cross a tenant: the session, and the approving grant"
+        }
+      ]
+    },
+    {
+      "id": "R5-§4-verification-gates",
+      "revision": "FBL-020-R5",
+      "clause": "§4",
+      "requirement": "The verification gates: the test floor may not shrink and failures, cancellations, skips and todos stay zero; route-level, concurrency, database-integrity, worker-reachability, migration-negative-control and refreshable-logout coverage is added for every correction; each newly mandatory predicate or transition is mutation-killed; and the populated pre-057 upgrade, fresh installation, second migration run, schema fingerprints, architecture checks, full-history secret scan, container build, dependency audit and evidence-artifact completeness all remain green. scripts/parse-test-summary.ts declares MINIMUM_TESTS = 573 and MINIMUM_SUITES = 59 and treats failed, cancelled, skipped and todo as independently fatal; scripts/mutation-kill.ts runs the mutations on an isolated copy of the tree and CI gates on zero survivors. The six coverage kinds are present as named batteries: route-level tests/login-admission.test.ts and tests/auth-surface.test.ts; concurrency tests/login-admission-concurrency.test.ts and tests/support-expiry.test.ts; database-integrity tests/identity-evidence.test.ts; worker-reachability tests/worker-jobs.test.ts and tests/worker-entrypoint.test.ts; migration-negative-control tests/migration-ledger.test.ts and tests/migration-census.test.ts; refreshable-logout tests/identity-revocation.test.ts.",
+      "verdict": "COVERED ON THIS TREE, AND STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT. Three statements this row used to make are WITHDRAWN as false, and each is replaced by what the evidence beside it actually says. (1) THE FLOOR CONSTANT NO LONGER NAMES THE WRONG ORDER’S NUMBER. This row said scripts/parse-test-summary.ts held the FBL-020-R4 §7 figures, 315 tests and 29 suites, in ORDER_MINIMUM_TESTS and ORDER_MINIMUM_SUITES — the FBL-020-R4 §7 figures — under the name \"the order’s own floor\", and recorded that as a standing finding rather than correcting it. It is corrected: the constants now hold ORDER_MINIMUM_TESTS = 459 and ORDER_MINIMUM_SUITES = 47, which is §4 of THIS order’s own floor clause. Three floor figures are in play and they are not the same number — §4’s 459/47, Appendix A item 9’s 525/57, and the declared floor — and the delivery report §5 tabulates all three with the kind of statement each one is. The tree measures above all three, so no reading of the order is disadvantaged. (2) THE REGISTRY HAS BEEN RUN COMPLETE. This row said \"44 mutations are declared and the last full run covered 34, so ten have never been exercised in a batch run\". That was false when written: artifacts/mutation-kill.json recorded a complete run of the whole registry, and a fresh complete run at this head records the same thing — 44 declared / 44 killed / 0 survived, every baseline green before its mutation, every working tree intact after it. A map UNDERSTATING a mandatory §4 gate is as much an evidence defect as one overstating it. (3) EVERY FIGURE THIS ROW PUBLISHES NOW DERIVES FROM ITS SOURCE. scripts/check-published-figures.ts reads the floors out of the constants, the suite totals out of artifacts/test-summary.json and the mutation totals out of artifacts/mutation-kill.json, and fails when this map or the delivery report states anything else — by span or in prose. WHAT MUTATION-KILL COVERS, unchanged: mutations for §1.1/§1.2 (revocation_keeps_refresh_state, cookie_logout_forgets_refresh_state), §1.3/§1.4 (admission_holds_no_locks, tenant_admission_holds_no_lock, hierarchy_admission_holds_no_lock, route_establishes_its_own_session, admission_takes_an_exclusive_lock, link_readmission_ignores_status, link_readmission_ignores_the_effective_window, link_readmission_ignores_the_binding), §1.5 (provider_error_callback_left_in_flight, missing_authorization_code_not_terminal), §1.6 (worker_forgets_login_transaction_expiry, worker_forgets_reauthentication_expiry, worker_forgets_support_access_expiry), §1.7 (revocation_and_audit_are_two_transactions), §1.8 (refresh_boundary_verification_optional), §1.9 (mfa_certification_ignores_tenant_effectiveness), §1.10 (late_revocation_steals_the_expiry), §1.11 (login_success_audit_unattributed) and §3.5 (requirement_map_ignores_uncovered_clause, requirement_map_tolerates_duplicate_ids, inventory_not_anchored_to_the_order_text, inventory_may_omit_an_order_clause, requirement_map_ignores_order_text_digest). The registry carries NO mutation for §2.1-§2.4: the relational policy-evidence rules live in migration 057 and are proven by direct SQL plus by-hand constraint drops, not by the mutation runner, and that is stated rather than papered over. Every CI leg named below is asserted from the workflow text by tests/ci-gates.test.ts; a green run at the final head is what discharges them, and no such run exists while nothing is committed.",
+      "proof_kind": "suite + CI",
+      "code": [
+        "scripts/parse-test-summary.ts",
+        "scripts/mutation-kill.ts",
+        "scripts/check-requirement-map.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "ci_steps": [
+        "All declared tests (zero skipped required suites)",
+        "Enforce test summary (all eight fields, floors, zero failed/cancelled/skipped/todo)",
+        "Mutation-kill checks (isolated copy of the tree)",
+        "Architecture check (dependency rules, ownership manifest, env confinement)",
+        "Quality ratchet (strictness + lint + format, no new debt)",
+        "Migrations apply from an empty database",
+        "Migration idempotency (second run applies nothing)",
+        "Reconciliation negative controls (isolated copies of the pre-057 database)",
+        "Ledger and fixture-mode refusals (probed on copies of the upgraded database)",
+        "Apply 057 on top of the populated legacy data",
+        "Verify the reconciled state and before/after counts (phase=post-057)",
+        "Fingerprints must be identical (fresh chain vs upgrade path)",
+        "Dependency audit (gate on high/critical)",
+        "Full-history gitleaks scan (pinned image, --log-opts=--all)",
+        "Build image and record digest, runtime user, healthcheck",
+        "Evidence completeness (every required artifact exists and is non-empty)"
+      ],
+      "artifacts": [
+        "test-summary.json",
+        "mutation-kill.json",
+        "mutation-kill.txt",
+        "requirement-map-check.txt",
+        "negative-controls.json",
+        "refusal-probes.json",
+        "identity-post-057.json",
+        "fingerprint-equality.txt",
+        "npm-audit.json",
+        "scan-evidence.txt",
+        "image-digest.txt"
+      ],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "all eight summary fields are REQUIRED, todo among them"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "a run that SHRANK below the declared floor is refused"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "todo, skipped, cancelled and failed are each independently fatal"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the declared floors never fall below the floors the order fixed"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "each floor is bounded by the declarations that actually exist"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every mutation names code that EXISTS exactly once, in the file it claims"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the mutation-kill job is wired into CI and gates on zero survivors"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade job runs every phase, the negative controls, and gates on their JSON"
+        },
+        {
+          "file": "tests/architecture.test.ts",
+          "name": "the gate is part of npm run architecture:check"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "every figure the report pins is pinned to a named CI artifact"
+        }
+      ]
+    }
+  ]
+}

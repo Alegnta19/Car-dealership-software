@@ -7,15 +7,22 @@ import {
   MINIMUM_TESTS,
   ORDER_MINIMUM_SUITES,
   ORDER_MINIMUM_TESTS,
+  counterContradictions,
   gateFailures,
+  logGateFailures,
+  observeTapLines,
   parseSummaryLines,
   type TestSummary,
 } from '../scripts/parse-test-summary';
 import {
+  MAP_ORDER,
   checkRequirementMap,
   declaredTestNames,
   loadRequirementMap,
+  orderTextClauses,
   workflowStepNames,
+  type ClauseEntry,
+  type MappedRequirement,
 } from '../scripts/check-requirement-map';
 import { MUTATIONS, anchorProblems } from '../scripts/mutation-kill';
 import {
@@ -26,6 +33,16 @@ import {
   removeStatement,
   type ControlAnchor,
 } from '../scripts/upgrade-negative-controls';
+import {
+  buildInventory,
+  isReconciliation,
+  loadDeclarations,
+  normalizeStatement,
+  parseStatements,
+  splitStatements,
+} from '../scripts/reconciliation-inventory';
+import { compareToChain, manifest } from '../scripts/migration-manifest';
+import { loadFixtureChains } from '../scripts/migration-fixture-chains';
 
 /**
  * FBL-020-R4 §7 — THE GATES ARE TESTED, NOT TRUSTED.
@@ -166,6 +183,80 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
     );
   });
 
+  /*
+   * ── FBL-020-R5 gate finding G2 ─────────────────────────────────────────
+   *
+   * A run printed `not ok 38 - migration ledger…` and the gate said OK, because every
+   * field the gate read was a COUNTER and the counters read `fail 0`. These three tests
+   * pin the correction: a printed failure is fatal whatever the counters say, a nested
+   * one is not hidden by its indentation, and a counter that contradicts the lines is
+   * itself reported. Each drives `logGateFailures`, which is what `main` now calls, so
+   * deleting the check from the CLI path breaks them.
+   */
+  test('a printed `not ok` is FATAL even when the counters read fail=0', () => {
+    const clean = ['TAP version 13'];
+    for (let i = 1; i <= goodSummary().tests; i += 1) clean.push(`ok ${i} - assertion ${i}`);
+    const cleanLog = clean.join('\n');
+
+    // The baseline passes, or nothing below proves anything.
+    assert.deepEqual(logGateFailures(cleanLog, goodSummary()), []);
+
+    const withFailure = `${cleanLog}\nnot ok 38 - migration ledger integrity (FBL-020-R4 §0)`;
+    const problems = logGateFailures(withFailure, goodSummary());
+    assert.ok(
+      problems.some((line) => line.includes('FAILING assertion line(s)')),
+      `a printed failure must be refused, got: ${problems.join('; ')}`,
+    );
+    assert.ok(
+      problems.some((line) => line.includes('not ok 38 - migration ledger integrity')),
+      'the gate must NAME the failing line it found',
+    );
+  });
+
+  test('an indented subtest failure is not hidden by its indentation', () => {
+    const lines = ['TAP version 13'];
+    for (let i = 1; i <= goodSummary().tests; i += 1) lines.push(`ok ${i} - assertion ${i}`);
+    lines.push('    not ok 1 - a subtest whose parent reported ok');
+    const observed = observeTapLines(lines.join('\n'));
+    assert.equal(observed.not_ok, 1, 'a nested `not ok` must be counted');
+    assert.ok(
+      logGateFailures(lines.join('\n'), goodSummary()).some((line) =>
+        line.includes('FAILING assertion line(s)'),
+      ),
+    );
+  });
+
+  test('counters that contradict the observed lines are reported as a defect', () => {
+    const base = goodSummary();
+    const observed = { ok: base.tests, not_ok: 0, not_ok_lines: [] };
+    assert.deepEqual(counterContradictions(base, observed), []);
+
+    assert.ok(
+      counterContradictions(base, {
+        ok: base.tests,
+        not_ok: 2,
+        not_ok_lines: ['not ok 1', 'not ok 2'],
+      }).some((line) => line.includes('claims failed=0')),
+      'failed=0 beside printed failures is a contradiction',
+    );
+    assert.ok(
+      counterContradictions({ ...base, failed: 3, passed: base.tests - 3 }, observed).some((line) =>
+        line.includes('but no'),
+      ),
+      'a failure count nobody printed is a contradiction',
+    );
+    assert.ok(
+      counterContradictions(base, { ok: 0, not_ok: 0, not_ok_lines: [] }).some((line) =>
+        line.includes('no'),
+      ),
+      'a summary describing a log with no assertions is a contradiction',
+    );
+    // A log with no assertion line at all is refused outright.
+    assert.ok(
+      logGateFailures('# tests 1\n', base).some((line) => line.includes('no assertions in it')),
+    );
+  });
+
   test('the declared floors never fall below the floors the order fixed', () => {
     const script = readFileSync(join(ROOT, 'scripts', 'parse-test-summary.ts'), 'utf8');
     const tests = Number(/const MINIMUM_TESTS = (\d+);/.exec(script)?.[1]);
@@ -215,7 +306,7 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
     /*
      * THE SUITE FLOOR IS EXACTLY BOUNDABLE. Node reports one suite per `describe(`
      * declaration, and this tree's anchored count matches the reported total exactly
-     * (47 declarations, 47 suites), so a floor above the count would make CI red
+     * (59 declarations, 59 suites at this revision), so a floor above the count would make CI red
      * forever. This direction was checked NOWHERE before — the asymmetry is how the
      * suite floor reached 41 while the baseline fixture above still called a 40-suite
      * run acceptable.
@@ -228,8 +319,8 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
     /*
      * THE TEST FLOOR IS NOT UPPER-BOUNDABLE FROM SOURCE, and this test does not pretend
      * otherwise. A declaration inside a loop yields several tests from one site, so the
-     * declaration count is a LOWER bound on what runs — 444 declarations against 459
-     * tests reported — and it therefore CANNOT confirm that a floor pinned to the
+     * declaration count is a LOWER bound on what runs — 548 declarations against 572
+     * tests reported at this revision — and it therefore CANNOT confirm that a floor pinned to the
      * measured total is reachable. Only a measured run can, which is why the floor is
      * pinned to `artifacts/test-summary.json` and the delivery report cites that
      * artifact rather than resting on this assertion.
@@ -245,10 +336,137 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
   });
 });
 
-describe('the requirement map (FBL-020-R4 §7)', () => {
-  test('every requirement names tests that exist, and every R4 test file is claimed', () => {
+describe('the requirement map (FBL-020-R5 §3.5)', () => {
+  test('every requirement names tests that exist, and every mapped battery is claimed', () => {
     const problems = checkRequirementMap();
     assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  test('an OMITTED requirement fails the clause-coverage check', () => {
+    /*
+     * §3.5's point. R4's map validated the rows it happened to contain and could not
+     * notice a clause with no row at all — the failure mode is silence, so the check is
+     * only worth having if it has been shown to break. One clause's requirements are
+     * dropped and the clause must come back as UNCOVERED, by name.
+     */
+    const map = loadRequirementMap();
+    const clause = '§3.4';
+    assert.ok(
+      map.requirements.some((r) => r.revision === MAP_ORDER && r.clause === clause),
+      `sanity: ${clause} is covered in the real map`,
+    );
+    const problems = checkRequirementMap({
+      ...map,
+      requirements: map.requirements.filter(
+        (r) => !(r.revision === MAP_ORDER && r.clause === clause),
+      ),
+    });
+    assert.ok(
+      problems.some((p) => p.includes(`clause ${clause}`) && p.includes('NO FBL-020-R5')),
+      `dropping ${clause} must be REPORTED as uncovered: ${problems.join('; ')}`,
+    );
+    // …and the real map must be clean, or the assertion above proves nothing.
+    assert.deepEqual(checkRequirementMap(map), []);
+  });
+
+  test('a duplicate id, a malformed id and an undeclared clause are each REPORTED', () => {
+    const map = loadRequirementMap();
+    const first = map.requirements[0] as MappedRequirement;
+
+    const duplicated = checkRequirementMap({ ...map, requirements: [...map.requirements, first] });
+    assert.ok(
+      duplicated.some((p) => p.includes(`${first.id}: duplicate requirement id`)),
+      `a repeated id must be reported: ${duplicated.join('; ')}`,
+    );
+
+    const malformed = checkRequirementMap({
+      ...map,
+      requirements: [...map.requirements, { ...first, id: 'R5_3.5_requirement_map' }],
+    });
+    assert.ok(
+      malformed.some((p) => p.includes('the id must read')),
+      `an id of the wrong shape must be reported: ${malformed.join('; ')}`,
+    );
+
+    // An id whose clause and revision contradict their own declaration: both are caught,
+    // because a row can otherwise claim to prove a clause it is not filed under.
+    const contradictory = checkRequirementMap({
+      ...map,
+      requirements: [
+        ...map.requirements,
+        { ...first, id: 'R5-§0.1-mislabelled', revision: 'FBL-020-R4', clause: '§9.9' },
+      ],
+    });
+    assert.ok(
+      contradictory.some((p) => p.includes('declares revision FBL-020-R4, which its id')),
+      `a revision that contradicts its id must be reported: ${contradictory.join('; ')}`,
+    );
+    assert.ok(
+      contradictory.some((p) => p.includes('declares clause §9.9, which its id')),
+      `a clause that contradicts its id must be reported: ${contradictory.join('; ')}`,
+    );
+  });
+
+  test('the inventory cannot invent a clause the order text does not declare', () => {
+    /*
+     * The inventory's anchor is the checked-in order text (§3.2), not this repository's
+     * own opinion: `docs/orders/FBL-020-R5.md` carries a clause register, and the two must
+     * list the same clauses in both directions. A clause invented here is reported, and so
+     * is a clause the order declares that the map forgot.
+     */
+    const map = loadRequirementMap();
+    const declared = orderTextClauses();
+    assert.ok(declared.size >= 10, `sanity: the order text registers ${declared.size} clauses`);
+
+    const ghost: ClauseEntry = {
+      clause: '§9.9',
+      title: 'a clause no order ever issued',
+      text_held_verbatim: false,
+      evidence: 'none, which is the point',
+    };
+    const invented = checkRequirementMap({
+      ...map,
+      clause_inventory: [...map.clause_inventory, ghost],
+    });
+    assert.ok(
+      invented.some((p) => p.includes('clause §9.9 is in the inventory but not in the order text')),
+      `an invented clause must be reported: ${invented.join('; ')}`,
+    );
+
+    const dropped = checkRequirementMap({
+      ...map,
+      clause_inventory: map.clause_inventory.slice(1),
+    });
+    const missing = map.clause_inventory[0] as ClauseEntry;
+    assert.ok(
+      dropped.some(
+        (p) => p.includes(`clause ${missing.clause}`) && p.includes('not in the inventory'),
+      ),
+      `a clause the order declares but the map omits must be reported: ${dropped.join('; ')}`,
+    );
+
+    /*
+     * And a clause claimed as held verbatim must really be a heading in the order text.
+     *
+     * THE PERTURBATION HAS TO SUPPLY THE CLAUSE, and that is a fact about the tree rather
+     * than a convenience. An earlier version of this assertion flipped the real §0.1
+     * entry's `text_held_verbatim` to `true` — which was a genuine overclaim while the
+     * order file still recorded some clauses as "text not held". `docs/orders/FBL-020-R5.md`
+     * now carries EVERY clause of the order verbatim, with its own heading, so there is no
+     * longer a real clause the flip could overclaim: the perturbation became inert and the
+     * assertion stopped proving anything. A clause the order text does not carry at all is
+     * therefore introduced, which is the only shape that still reaches this branch.
+     */
+    const overclaimed = checkRequirementMap({
+      ...map,
+      clause_inventory: [...map.clause_inventory, { ...ghost, text_held_verbatim: true }],
+    });
+    assert.ok(
+      overclaimed.some((p) => p.includes('§9.9 is declared as held verbatim')),
+      `claiming text the order file does not carry must be reported: ${overclaimed.join('; ')}`,
+    );
+    // …and the real inventory claims nothing the order file does not carry.
+    assert.deepEqual(checkRequirementMap(map), []);
   });
 
   test('a renamed or deleted test BREAKS the map', () => {
@@ -468,5 +686,199 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       assert.ok(entry.statement.includes('§'), 'each must name the section it is in');
       assert.ok(entry.reason.length > 20, 'each must say WHY it cannot be load-bearing');
     }
+  });
+});
+
+describe('the reconciliation inventory of migration 057 (FBL-020-R5 §0.6)', () => {
+  test('every reconciliation in 057 is accounted for, and nothing is declared that is not there', () => {
+    const result = buildInventory();
+    assert.deepEqual(result.problems, [], result.problems.join('\n'));
+    // The numbers the delivery report is allowed to quote, asserted here so a claim about
+    // coverage cannot drift away from what the inventory actually found.
+    assert.equal(result.totals.reconciliations_unaccounted, 0);
+    assert.equal(
+      result.totals.reconciliations,
+      result.totals.reconciliations_covered_by_a_negative_control +
+        result.totals.reconciliations_declared_not_load_bearing +
+        result.totals.reconciliations_that_are_refusal_guards,
+      'the three buckets must partition the reconciliations exactly',
+    );
+    assert.ok(result.totals.reconciliations >= 30, `only ${result.totals.reconciliations} found`);
+  });
+
+  test('a reconciliation with NO control and NO declaration is REPORTED, not tolerated', () => {
+    /*
+     * The check is worth nothing if it cannot fail. One declaration is dropped and the
+     * statement it covered must come back as UNACCOUNTED — which is exactly the state R4 was
+     * in for two of the three statements of the grantless-approval reconciliation, with
+     * nothing anywhere to say so.
+     */
+    const declarations = loadDeclarations();
+    assert.ok(declarations.length > 0, 'the inventory must declare something');
+    const dropped = declarations[0]!;
+    const result = buildInventory(canonical057(), declarations.slice(1));
+    assert.ok(
+      result.problems.some((p) => p.includes('nothing accounts') && p.includes(dropped.key)),
+      `dropping ${dropped.statement} must produce an UNACCOUNTED problem: ${result.problems.join('; ')}`,
+    );
+    assert.equal(result.totals.reconciliations_unaccounted, 1);
+  });
+
+  test('a declaration that matches no statement is REPORTED, so the file cannot go stale', () => {
+    const declarations = loadDeclarations();
+    const result = buildInventory(canonical057(), [
+      ...declarations,
+      {
+        key: 'f'.repeat(64),
+        classification: 'not-load-bearing' as const,
+        section: '§0 — nowhere',
+        statement: 'a statement that no longer exists',
+        reason: 'it was deleted, and this declaration was not',
+      },
+    ]);
+    assert.ok(
+      result.problems.some((p) => p.includes('no statement in 057 has that key any more')),
+      result.problems.join('; '),
+    );
+  });
+
+  test('control coverage is COMPUTED from the anchors, so it cannot be overstated', () => {
+    // Every control must resolve to a statement in 057, and each of the three statements of
+    // the grantless-approval reconciliation must be covered by a DIFFERENT control. That last
+    // part is the R4 defect, stated as an assertion.
+    const result = buildInventory();
+    const covered = result.rows.filter((r) => r.classification === 'control');
+    assert.equal(
+      covered.length,
+      CONTROLS.length,
+      'every declared control must resolve to exactly one statement in 057',
+    );
+    const grantless = [
+      'sas_grantless_approval_session_revoked',
+      'aud_grantless_approval_supersession_recorded',
+      'sar_approval_without_grant_superseded',
+    ];
+    for (const id of grantless)
+      assert.ok(
+        covered.some((r) => r.control_id === id),
+        `${id} must cover a statement of its own`,
+      );
+    const keys = new Set(
+      covered.filter((r) => grantless.includes(r.control_id ?? '')).map((r) => r.key),
+    );
+    assert.equal(keys.size, 3, 'the three controls must remove three DIFFERENT statements');
+  });
+
+  test('the statement splitter respects dollar-quoting, strings and comments', () => {
+    /*
+     * A `split(';')` would cut every DO block and function body in 057 into fragments, and
+     * the inventory built from those fragments would classify nothing correctly while
+     * appearing to work. These are the four constructs that make the naive version wrong.
+     */
+    const sql = [
+      "SELECT 'a;b';",
+      'DO $$ BEGIN RAISE EXCEPTION $x$no;pe$x$; END $$;',
+      '-- a comment with a ; in it',
+      '/* block ; comment */',
+      'UPDATE t SET x = 1;',
+    ].join('\n');
+    const statements = splitStatements(sql);
+    assert.equal(statements.length, 3, statements.map((x) => x.text.trim()).join(' || '));
+
+    const parsed = parseStatements(sql);
+    assert.deepEqual(
+      parsed.map((x) => x.verb),
+      ['SELECT', 'DO', 'UPDATE'],
+    );
+    assert.equal(parsed[1]?.raises, true, 'a DO block that RAISEs is a refusal guard');
+    assert.equal(parsed[2]?.target, 't');
+    assert.deepEqual(parsed.map(isReconciliation), [false, true, true]);
+
+    // The key ignores whitespace and comments, and nothing else.
+    assert.equal(
+      normalizeStatement('UPDATE  t\n   SET x = 1; -- why\n'),
+      normalizeStatement('UPDATE t SET x = 1;'),
+    );
+    assert.notEqual(
+      normalizeStatement('UPDATE t SET x = 1;'),
+      normalizeStatement('UPDATE t SET x = 2;'),
+    );
+  });
+
+  test('the inventory is wired into CI and gates on zero unaccounted reconciliations', () => {
+    assert.ok(WORKFLOW.includes('scripts/reconciliation-inventory.ts'));
+    assert.ok(
+      WORKFLOW.includes('"reconciliations_unaccounted": 0'),
+      'CI must FAIL on an unaccounted reconciliation, not merely record it',
+    );
+  });
+});
+
+describe('the retained-fixture digest pin (FBL-020-R5 §0.5)', () => {
+  const FIXTURE = join(ROOT, 'tests', 'fixtures', 'schema-f76a27a');
+
+  test('the retained fixture matches its FIXED committed digests', () => {
+    const problems = compareToChain(manifest(FIXTURE), 'schema-f76a27a');
+    assert.deepEqual(problems, [], problems.join('\n'));
+  });
+
+  test('a CHANGED, EXTRA or MISSING fixture file is refused, not re-recorded', () => {
+    /*
+     * The step this replaces was named "must stay byte-identical to f76a27a" and could not
+     * detect that it had not: it wrote down whatever it found. So the comparison is driven
+     * against a perturbed manifest here, in all three directions.
+     */
+    const good = manifest(FIXTURE);
+    assert.ok(good.length >= 2);
+
+    const changed = good.map((e, i) =>
+      i === 0 ? { ...e, sha256_canonical_lf: 'a'.repeat(64) } : e,
+    );
+    assert.ok(
+      compareToChain(changed, 'schema-f76a27a').some((p) => p.includes('has CHANGED')),
+      'a changed body must be refused',
+    );
+
+    const extra = [
+      ...good,
+      { file: '999_smuggled.sql', sha256: 'b'.repeat(64), sha256_canonical_lf: 'b'.repeat(64) },
+    ];
+    assert.ok(
+      compareToChain(extra, 'schema-f76a27a').some((p) => p.includes('NOT DECLARED')),
+      'an undeclared extra file must be refused',
+    );
+
+    assert.ok(
+      compareToChain(good.slice(1), 'schema-f76a27a').some((p) => p.includes('NOT PRESENT')),
+      'a missing declared file must be refused',
+    );
+
+    // …and a chain whose bodies are deliberately NOT pinned cannot be compared this way,
+    // rather than silently reporting a pass.
+    assert.ok(
+      compareToChain(good, 'ledger-probe').some((p) => p.includes('not pinned to fixed digests')),
+    );
+  });
+
+  test('the manifest pins the CANONICAL-LF digest, not the bytes on disk', () => {
+    // On a Windows checkout the two differ for every file (core.autocrlf), so a pin against
+    // the raw bytes could only ever pass on one platform. The chain's declared value must be
+    // the canonical one.
+    const chains = loadFixtureChains();
+    const chain = chains['schema-f76a27a'];
+    assert.ok(chain !== undefined && chain.kind === 'pinned');
+    if (chain === undefined || chain.kind !== 'pinned') return;
+    for (const e of manifest(FIXTURE)) {
+      assert.equal(chain.files[e.file], e.sha256_canonical_lf);
+      assert.match(e.sha256, /^[0-9a-f]{64}$/, 'the raw digest is still recorded, as evidence');
+    }
+  });
+
+  test('CI compares the retained fixture instead of merely recording it', () => {
+    assert.ok(
+      WORKFLOW.includes('--expect-chain schema-f76a27a'),
+      'the upgrade job must COMPARE the retained fixture against the committed digests',
+    );
+    assert.ok(WORKFLOW.includes('MIGRATION_FIXTURE_CHAIN'), 'and declare each partial chain');
   });
 });

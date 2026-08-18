@@ -181,7 +181,7 @@ export interface CreatedSession {
   readonly sessionToken: string;
 }
 
-export async function createSession(input: {
+export interface CreateSessionInput {
   tenantId: string | null;
   userLinkId: string;
   providerSessionId: string | null;
@@ -196,16 +196,46 @@ export async function createSession(input: {
    * FBL-020-R3: supplying it SEALS the refresh token so a later refresh can
    * actually present it. Without it only the replay digest is stored and the
    * session is simply not refreshable — never a silent half-state.
+   *
+   * `| undefined` on this and the next property is explicit because the strict
+   * configuration sets `exactOptionalPropertyTypes`: the login path forwards both
+   * straight from its own optional custody settings, and under that rule "absent"
+   * and "present and undefined" are different types. Widening here keeps the
+   * forwarding honest instead of making the caller rebuild the object key by key.
    */
-  cookiePassword?: string;
-  refreshStateKeyVersion?: number;
+  cookiePassword?: string | undefined;
+  refreshStateKeyVersion?: number | undefined;
   /**
    * R3 correction C1: the `exp` of the provider access token this login just
    * proved. Recorded so the request path can tell when the provider credential
    * behind the session is at or near expiry; omitted, no refresh is scheduled.
    */
   providerAccessTokenExpiresAt?: Date | null;
-}): Promise<CreatedSession> {
+}
+
+/**
+ * Creates a session in its OWN transaction. Callers that must decide something
+ * else in the same breath — login admission does, and R5 §1.3 requires it to —
+ * use `createSessionWithin` on their executor instead.
+ */
+export async function createSession(input: CreateSessionInput): Promise<CreatedSession> {
+  return withTransaction((executor) => createSessionWithin(executor, input));
+}
+
+/**
+ * FBL-020-R5 §1.3 — SESSION ESTABLISHMENT AND CREDENTIAL CUSTODY ON THE CALLER'S
+ * EXECUTOR.
+ *
+ * Taking the provider refresh credential into custody IS this statement: the
+ * sealed state and its replay digest are columns of the row being inserted. So
+ * "admission and custody are one decision" is achievable only if the admission
+ * and this INSERT share a transaction — which is what `admitLoginAndEstablishSession`
+ * now does, and what R4's commit-then-insert shape could not.
+ */
+export async function createSessionWithin(
+  executor: Executor,
+  input: CreateSessionInput,
+): Promise<CreatedSession> {
   const sessionToken = randomBytes(32).toString('base64url');
   const refreshToken =
     input.refreshToken === undefined || input.refreshToken === null ? null : input.refreshToken;
@@ -213,9 +243,8 @@ export async function createSession(input: {
     refreshToken === null || input.cookiePassword === undefined
       ? null
       : sealRefreshState(refreshToken, input.cookiePassword);
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `INSERT INTO identity_sessions
+  const result = await executor.query(
+    `INSERT INTO identity_sessions
        (tenant_id, user_link_id, credential_kind, session_token_hash, provider_session_id,
         auth_time, expires_at, connection_id, issuer, provider_subject, provider_organization_id,
         refresh_token_hash, refresh_state_sealed, refresh_state_key_version,
@@ -223,40 +252,39 @@ export async function createSession(input: {
      VALUES ($1, $2, 'cookie', $3, $4, $5, NOW() + make_interval(secs => $6),
              $7, $8, $9, $10, $11, $12, $13, $14)
      RETURNING *`,
-      [
-        input.tenantId,
-        input.userLinkId,
-        hashSessionToken(sessionToken),
-        input.providerSessionId,
-        input.authTime,
-        input.ttlSeconds,
-        input.connectionId ?? null,
-        input.issuer ?? null,
-        input.providerSubject ?? null,
-        input.providerOrganizationId ?? null,
-        refreshToken === null ? null : hashSessionToken(refreshToken),
-        sealed,
-        sealed === null ? null : (input.refreshStateKeyVersion ?? REFRESH_STATE_KEY_VERSION),
-        input.providerAccessTokenExpiresAt ?? null,
-      ],
-    );
-    const session = mapSession(result.rows[0] as Row);
-    await auditSession(executor, {
-      sessionId: session.sessionId,
-      tenantId: session.tenantId,
-      userLinkId: session.userLinkId,
-      eventType: 'identity.session.established',
-      // A login establishes the person's OWN session, so the true actor is that
-      // person. Nothing else performed it.
-      actorUserLinkId: session.userLinkId,
-      details: {
-        credential_kind: session.credentialKind,
-        refreshable: session.refreshable,
-        expires_at: session.expiresAt.toISOString(),
-      },
-    });
-    return { session, sessionToken };
+    [
+      input.tenantId,
+      input.userLinkId,
+      hashSessionToken(sessionToken),
+      input.providerSessionId,
+      input.authTime,
+      input.ttlSeconds,
+      input.connectionId ?? null,
+      input.issuer ?? null,
+      input.providerSubject ?? null,
+      input.providerOrganizationId ?? null,
+      refreshToken === null ? null : hashSessionToken(refreshToken),
+      sealed,
+      sealed === null ? null : (input.refreshStateKeyVersion ?? REFRESH_STATE_KEY_VERSION),
+      input.providerAccessTokenExpiresAt ?? null,
+    ],
+  );
+  const session = mapSession(result.rows[0] as Row);
+  await auditSession(executor, {
+    sessionId: session.sessionId,
+    tenantId: session.tenantId,
+    userLinkId: session.userLinkId,
+    eventType: 'identity.session.established',
+    // A login establishes the person's OWN session, so the true actor is that
+    // person. Nothing else performed it.
+    actorUserLinkId: session.userLinkId,
+    details: {
+      credential_kind: session.credentialKind,
+      refreshable: session.refreshable,
+      expires_at: session.expiresAt.toISOString(),
+    },
   });
+  return { session, sessionToken };
 }
 
 /**
@@ -283,17 +311,117 @@ export async function validateSessionToken(sessionToken: string): Promise<Identi
 }
 
 /**
- * FBL-020-R3: revocation DESTROYS the provider credential, it does not merely
- * stop honouring it. Migration 057's `is_revoked_holds_no_refresh_state` makes
- * the alternative unrepresentable, so every revocation path clears the sealed
- * state and its replay digest in the SAME statement that sets revoked_at.
- * The audit fields (revoked_at, revoked_reason) are untouched.
+ * WHICH sessions a revocation is aimed at. A CLOSED set — there is no free-text
+ * predicate — so `revokeSessionsWithin` below can own the whole statement and a
+ * caller can choose only the target, never the shape of the write.
  */
-const CLEAR_REFRESH_STATE_ON_REVOKE = `refresh_token_hash = NULL,
+type RevocationTarget =
+  /** The cookie the browser presented, already digested. */
+  | { readonly by: 'session_token_hash'; readonly value: string }
+  /** One local session, whatever credential it belongs to. */
+  | { readonly by: 'session_id'; readonly value: string }
+  /** Every LIVE session of one user link (deactivation, security event). */
+  | { readonly by: 'user_link_id'; readonly value: string };
+
+const REVOCATION_TARGET_SQL: Record<RevocationTarget['by'], string> = {
+  session_token_hash: 'session_token_hash = $1',
+  session_id: 'session_id = $1::uuid',
+  // A sweep touches LIVE sessions only; an already-expired row has nothing left
+  // to take away and re-stamping it would rewrite history.
+  user_link_id: 'user_link_id = $1::uuid AND expires_at > NOW()',
+};
+
+/**
+ * FBL-020-R5 §1.1 — THE ONE STATEMENT THAT REVOKES A SESSION.
+ *
+ * ── the defect this replaces ────────────────────────────────────────────────
+ *
+ * R3 put the clearing clause in a shared constant and interpolated it into FOUR
+ * hand-written UPDATEs, and its own comment claimed "every revocation path clears
+ * the sealed state … in the SAME statement that sets revoked_at". Three did. The
+ * fourth — `revokeSessionByToken`, the COOKIE LOGOUT path — did not, and nothing
+ * could notice: the constant existed, so the omission looked like the absence of a
+ * line rather than the presence of a defect.
+ *
+ * The consequence was not a cosmetic inconsistency. `/auth/callback` always stores
+ * refresh state, so logging out of any callback-created cookie session tried to
+ * write a revoked row still holding `refresh_token_hash` and `refresh_state_sealed`
+ * — which migration 057's `is_revoked_holds_no_refresh_state` refuses. The CHECK
+ * aborted the statement, `withTransaction` rolled the whole thing back, and the
+ * session the person had just logged out of REMAINED LIVE AND USABLE.
+ *
+ * MEASURED, not inferred: with the R4 code restored, `POST /auth/logout` answered
+ * 500 `internal_error` (SQLSTATE 23514), the row kept `revoked_at IS NULL`, its
+ * sealed refresh state and its original `authorization_version`, and the same
+ * cookie still returned 200 from `/api/service/home` afterwards. So the caller was
+ * not told "logged out" — it was told nothing useful, and was still logged in.
+ *
+ * ── why this shape ─────────────────────────────────────────────────────────
+ *
+ * A shared clause that a caller must remember to interpolate is a convention. This
+ * is a single function that owns the entire statement: the SET list is written
+ * once, here, and callers supply only a target from the closed set above. Adding a
+ * fifth revocation entry point cannot produce a fifth SET list, because there is
+ * nowhere to put one — the only way to revoke is to call this. That is the
+ * difference between "kept in step by hand" and structurally unforgettable, and
+ * `tests/identity-revocation.test.ts` pins it from the other side: across every
+ * `.ts` source under `apps/` and `packages/`, exactly ONE template literal may both
+ * `UPDATE identity_sessions` and assign `revoked_at`, and that one must carry all
+ * five clearing assignments. A lexical guard over the SQL this codebase writes, not
+ * a proof about SQL it could conceivably write some other way.
+ *
+ * WHAT COMMITS TOGETHER, on the caller's executor: the revocation, the destruction
+ * of the provider refresh credential and its replay digest and lease, and the
+ * authorization-version advance are ONE statement; the audit row each revoked
+ * session owes is a second statement on the same executor. So a constraint that
+ * refuses any part of the revocation refuses all of it, and a revocation performed
+ * through this function cannot leave a revoked row holding a live refresh
+ * credential — whether the audit row and the revocation also commit together is the
+ * caller's transaction to own, and every entry point below opens one.
+ */
+async function revokeSessionsWithin(
+  executor: Executor,
+  target: RevocationTarget,
+  reason: string,
+  actingUserLinkId: string | null,
+): Promise<Row[]> {
+  const result = await executor.query(
+    `UPDATE identity_sessions
+        SET revoked_at = NOW(),
+            revoked_reason = $2,
+            revoked_by_user_link_id = COALESCE($3::uuid, revoked_by_user_link_id),
+            -- R4 section 3: a revocation CHANGES what this credential authorizes,
+            -- so the version advances. A revocation invisible to the version would
+            -- leave cached authorization believing it is current.
+            authorization_version = authorization_version + 1,
+            updated_at = NOW(),
+            -- REVOCATION DESTROYS THE PROVIDER CREDENTIAL, it does not merely stop
+            -- honouring it. Migration 057's is_revoked_holds_no_refresh_state makes
+            -- the alternative unrepresentable, and the lease CHECKs make a claim on
+            -- destroyed state unrepresentable with it. The audit fields (revoked_at,
+            -- revoked_reason, revoked_by_user_link_id) are what survives.
+            refresh_token_hash = NULL,
             refresh_state_sealed = NULL,
             refresh_state_key_version = NULL,
             refresh_lease_id = NULL,
-            refresh_lease_expires_at = NULL`;
+            refresh_lease_expires_at = NULL
+      WHERE ${REVOCATION_TARGET_SQL[target.by]} AND revoked_at IS NULL
+      RETURNING session_id, tenant_id, user_link_id, credential_kind, authorization_version`,
+    [target.value, reason, actingUserLinkId],
+  );
+  const rows = result.rows as Row[];
+  // A LOGOUT is the session owner's own act, so when no acting link was named the
+  // actor falls back to the link the revoked rows name rather than to nobody. Every
+  // target above revokes rows of a single user link, so `rows[0]` names it for all
+  // of them. A platform-initiated revocation keeps `null`: attributing a machine
+  // decision to the person it was taken against would put a claim in the trail that
+  // nobody made.
+  const actor =
+    actingUserLinkId ??
+    (reason === 'logout' && rows.length > 0 ? String(rows[0]!.user_link_id) : null);
+  await auditRevocations(executor, rows, reason, actor);
+  return rows;
+}
 
 export async function revokeSessionByToken(
   sessionToken: string,
@@ -301,30 +429,17 @@ export async function revokeSessionByToken(
   /** The person performing it, when a person did. Logout is their own act. */
   actingUserLinkId?: string | null,
 ): Promise<boolean> {
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `UPDATE identity_sessions
-          SET revoked_at = NOW(), revoked_reason = $2,
-              revoked_by_user_link_id = COALESCE($3::uuid, revoked_by_user_link_id),
-              -- R4 section 3: a revocation CHANGES what this credential
-              -- authorizes, so the version advances. A revocation invisible to
-              -- the version would leave cached authorization believing it is
-              -- current.
-              authorization_version = authorization_version + 1,
-              updated_at = NOW()
-        WHERE session_token_hash = $1 AND revoked_at IS NULL
-        RETURNING session_id, tenant_id, user_link_id, credential_kind, authorization_version`,
-      [hashSessionToken(sessionToken), reason, actingUserLinkId ?? null],
-    );
-    // On the cookie path the person revoking is the session's own owner, so the
-    // actor falls back to the link the row names rather than to nobody.
-    const rows = result.rows as Row[];
-    const actor =
-      actingUserLinkId ??
-      (reason === 'logout' && rows.length > 0 ? String(rows[0]!.user_link_id) : null);
-    await auditRevocations(executor, rows, reason, actor);
-    return rows.length > 0;
-  });
+  return withTransaction(
+    async (executor) =>
+      (
+        await revokeSessionsWithin(
+          executor,
+          { by: 'session_token_hash', value: hashSessionToken(sessionToken) },
+          reason,
+          actingUserLinkId ?? null,
+        )
+      ).length > 0,
+  );
 }
 
 /** Revokes every live session of a user link (deactivation, security event). */
@@ -334,21 +449,17 @@ export async function revokeSessionsForUserLink(
   /** The administrator performing the sweep, when one did. */
   actingUserLinkId?: string | null,
 ): Promise<number> {
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `UPDATE identity_sessions
-          SET revoked_at = NOW(), revoked_reason = $2,
-              revoked_by_user_link_id = COALESCE($3::uuid, revoked_by_user_link_id),
-              authorization_version = authorization_version + 1,
-              updated_at = NOW(),
-              ${CLEAR_REFRESH_STATE_ON_REVOKE}
-        WHERE user_link_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
-        RETURNING session_id, tenant_id, user_link_id, credential_kind, authorization_version`,
-      [userLinkId, reason, actingUserLinkId ?? null],
-    );
-    await auditRevocations(executor, result.rows as Row[], reason, actingUserLinkId ?? null);
-    return result.rowCount ?? 0;
-  });
+  return withTransaction(
+    async (executor) =>
+      (
+        await revokeSessionsWithin(
+          executor,
+          { by: 'user_link_id', value: userLinkId },
+          reason,
+          actingUserLinkId ?? null,
+        )
+      ).length,
+  );
 }
 
 /**
@@ -360,25 +471,17 @@ export async function revokeSessionById(
   reason: string,
   actingUserLinkId?: string | null,
 ): Promise<boolean> {
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `UPDATE identity_sessions
-          SET revoked_at = NOW(), revoked_reason = $2,
-              revoked_by_user_link_id = COALESCE($3::uuid, revoked_by_user_link_id),
-              authorization_version = authorization_version + 1,
-              updated_at = NOW(),
-              ${CLEAR_REFRESH_STATE_ON_REVOKE}
-        WHERE session_id = $1 AND revoked_at IS NULL
-        RETURNING session_id, tenant_id, user_link_id, credential_kind, authorization_version`,
-      [sessionId, reason, actingUserLinkId ?? null],
-    );
-    const rows = result.rows as Row[];
-    const actor =
-      actingUserLinkId ??
-      (reason === 'logout' && rows.length > 0 ? String(rows[0]!.user_link_id) : null);
-    await auditRevocations(executor, rows, reason, actor);
-    return rows.length > 0;
-  });
+  return withTransaction(
+    async (executor) =>
+      (
+        await revokeSessionsWithin(
+          executor,
+          { by: 'session_id', value: sessionId },
+          reason,
+          actingUserLinkId ?? null,
+        )
+      ).length > 0,
+  );
 }
 
 // ── FBL-020-R3: the SIX identity facts, revalidated on every request ───────
@@ -739,50 +842,29 @@ function openRefreshState(
   return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
-export interface RefreshOutcome {
-  readonly session: IdentitySession;
-  /** The NEW opaque refresh token. Returned once; stored sealed, never raw. */
-  readonly refreshToken: string;
-  readonly rotationCount: number;
-}
-
 /**
- * The PERSISTENCE primitive: rotates a session's refresh state after a
- * successful provider refresh.
+ * FBL-020-R5 §1.8 — WHY THERE IS NO EXPORTED `rotateSessionRefresh` ANY MORE.
  *
- * The rotation is a conditional UPDATE keyed on the CURRENT digest, so a
- * replayed old refresh token loses the race and changes nothing. It performs
- * no provider call and makes no trust decision — `refreshProviderSession`
- * below is the operation; this is the write it commits.
+ * The clause is a disjunction: access-token verification is REQUIRED at every
+ * exported refresh/rotation boundary, or the unsafe lower-level primitives are
+ * PRIVATE. Both limbs are taken here, each where it belongs.
+ *
+ * `rotateSessionRefresh` was the second limb's subject. It was an EXPORTED
+ * rotation boundary that, by its own doc comment, "performs no provider call and
+ * makes no trust decision": hand it a session id, the digest-matching refresh
+ * token and any replacement, and it wrote that replacement into the session's
+ * refresh state — no provider exchange, no token verification, no identity
+ * re-check. Its safety rested entirely on nothing outside this package ever
+ * calling it, which is a convention, not a boundary. It is now the module-private
+ * `rotateRefreshStateRow` below, reachable ONLY from `persistRefreshedState`,
+ * which reaches it only after a verified access token has been judged.
+ *
+ * The first limb is taken on `RefreshProviderSessionInput.verifyAccessToken`,
+ * which is no longer optional — see the comment there.
+ *
+ * `tests/identity-boundary.test.ts` pins both from the source side:
+ * "the exported refresh surface cannot be driven without access-token verification".
  */
-export async function rotateSessionRefresh(input: {
-  sessionId: string;
-  presentedRefreshToken: string;
-  newRefreshToken: string;
-  authTime: Date;
-  ttlSeconds: number;
-  /** Seals the replacement. Omitted, the state becomes non-refreshable. */
-  cookiePassword?: string;
-  refreshStateKeyVersion?: number;
-  /**
-   * The `exp` of the access token that came back with this rotation, when it was
-   * VERIFIED. Omitted, the stored expiry is cleared rather than carried over: a
-   * rotation that cannot say when the new credential dies has no schedule to
-   * offer, and keeping the previous (already-past) instant would make the
-   * session look permanently due and refresh it on every single request.
-   */
-  providerAccessTokenExpiresAt?: Date | null;
-}): Promise<RefreshOutcome | null> {
-  // One transaction: the rotation and the audit row it owes are a single fact.
-  const row = await withTransaction((executor) => rotateRefreshStateRow(executor, input));
-  if (row === null) return null;
-  return {
-    session: mapSession(row),
-    refreshToken: input.newRefreshToken,
-    rotationCount: Number(row.refresh_rotation_count),
-  };
-}
-
 async function rotateRefreshStateRow(
   executor: Executor,
   input: {
@@ -799,7 +881,7 @@ async function rotateRefreshStateRow(
      * the write additionally requires that the lease is still the claimant's, so
      * an attempt whose claim expired and was reclaimed by someone else cannot
      * land its replacement over the newer attempt's. Omitted (the standalone
-     * `rotateSessionRefresh` primitive), the digest predicate alone decides.
+     * an exported rotation primitive), the digest predicate alone decides.
      */
     expectedLeaseId?: string;
   },
@@ -891,29 +973,31 @@ export async function revokeForIdentityBreach(
   sessionId: string,
   reason: IdentityBreachReason,
 ): Promise<boolean> {
-  return revokeWithin({ query }, sessionId, reason);
+  // R5 §1.1: its OWN transaction. R3 ran this entry point on the bare pool, so the
+  // revocation and the audit row it owes were two independent implicit
+  // transactions and a failure between them left a destroyed session with no trail.
+  return withTransaction((executor) => revokeWithin(executor, sessionId, reason));
 }
 
+/**
+ * A breach revocation on the CALLER'S executor, for the refresh paths that are
+ * already inside a transaction and must commit the revocation with whatever else
+ * they decided. The actor is deliberately null: a breach revocation is the
+ * PLATFORM's act, and attributing it to the person whose session was just destroyed
+ * would put a decision in the trail that they did not make.
+ */
 async function revokeWithin(
   executor: Executor,
   sessionId: string,
   reason: IdentityBreachReason,
 ): Promise<boolean> {
-  const result = await executor.query(
-    `UPDATE identity_sessions
-        SET revoked_at = NOW(), revoked_reason = $2,
-            authorization_version = authorization_version + 1,
-            updated_at = NOW(),
-            ${CLEAR_REFRESH_STATE_ON_REVOKE}
-      WHERE session_id = $1 AND revoked_at IS NULL
-      RETURNING session_id, tenant_id, user_link_id, credential_kind, authorization_version`,
-    [sessionId, reason],
+  const rows = await revokeSessionsWithin(
+    executor,
+    { by: 'session_id', value: sessionId },
+    reason,
+    null,
   );
-  // A breach revocation is the PLATFORM's act. The actor is deliberately null:
-  // attributing it to the person whose session was just destroyed would put a
-  // decision in the trail that they did not make.
-  await auditRevocations(executor, result.rows as Row[], reason, null);
-  return result.rows.length > 0;
+  return rows.length > 0;
 }
 
 /**
@@ -964,13 +1048,22 @@ export interface RefreshProviderSessionInput {
   readonly keyVersion?: number;
   readonly refreshStateMaxAgeSeconds?: number;
   /**
-   * OPTIONAL standards-based verification of the NEW access token. Supplied,
-   * it is authoritative: a verification failure revokes, an impersonated token
-   * revokes, and a genuinely newer auth_time is the ONLY thing that may move
-   * auth_time forward. Omitted, auth_time is preserved exactly and
-   * impersonation is judged from the provider result alone.
+   * FBL-020-R5 §1.8 — MANDATORY standards-based verification of the NEW access
+   * token. It is authoritative: a verification failure revokes, an impersonated
+   * token revokes, the verified subject/organization/provider-session must equal
+   * the ones the session was established with, and a genuinely newer auth_time is
+   * the ONLY thing that may move auth_time forward.
+   *
+   * It used to be OPTIONAL, and an absence test around the call below
+   * simply skipped the whole judgement when it was absent. That made this — an
+   * EXPORTED refresh boundary, re-exported wholesale by the package index — a
+   * surface on which a caller could take a brand-new provider access token into
+   * custody and schedule the session's future on its `exp` without ever proving
+   * the token was issued by the trusted issuer, was for this audience, or named
+   * this identity. "Every caller happens to pass one" is not a boundary; a
+   * required property is.
    */
-  readonly verifyAccessToken?: (accessToken: string) => Promise<VerifiedAccessToken>;
+  readonly verifyAccessToken: (accessToken: string) => Promise<VerifiedAccessToken>;
   /**
    * R3 correction C1 — DUE-GATE the exchange on the LOCKED row.
    *
@@ -1297,18 +1390,21 @@ export async function refreshProviderSession(
     return revokeLeasedSession(input.sessionId, 'impersonation_detected');
   }
 
-  let verified: VerifiedAccessToken | null = null;
-  if (input.verifyAccessToken !== undefined) {
-    try {
-      verified = await input.verifyAccessToken(refreshed.accessToken);
-    } catch {
-      // The provider answered with a token we cannot verify. That is a
-      // definitive failure of THIS session, not a transient one.
-      return revokeLeasedSession(input.sessionId, 'refresh_failed');
-    }
-    if (isImpersonated(verified.impersonation)) {
-      return revokeLeasedSession(input.sessionId, 'impersonation_detected');
-    }
+  // FBL-020-R5 §1.8: NOT a branch. There is no path from a provider reply to the
+  // persistence below that skips verification — the absence test that used to wrap
+  // this call is gone, and with it the possibility of an
+  // exported refresh that took a token into custody without proving anything
+  // about it.
+  let verified: VerifiedAccessToken;
+  try {
+    verified = await input.verifyAccessToken(refreshed.accessToken);
+  } catch {
+    // The provider answered with a token we cannot verify. That is a
+    // definitive failure of THIS session, not a transient one.
+    return revokeLeasedSession(input.sessionId, 'refresh_failed');
+  }
+  if (isImpersonated(verified.impersonation)) {
+    return revokeLeasedSession(input.sessionId, 'impersonation_detected');
   }
 
   // ── PHASE 3: persist ────────────────────────────────────────────────────
@@ -1323,8 +1419,8 @@ export async function refreshProviderSession(
 }
 
 /**
- * Revoking answers, in ONE statement of their own. The lease is cleared by the
- * revocation itself (`CLEAR_REFRESH_STATE_ON_REVOKE`), and deliberately WITHOUT a
+ * Revoking answers, in ONE transaction of their own. The lease is cleared by the
+ * revocation statement itself (`revokeSessionsWithin`), and deliberately WITHOUT a
  * lease predicate: "the provider says this session is over" is a fact about the
  * session, not about whose claim was current.
  */
@@ -1332,7 +1428,7 @@ async function revokeLeasedSession(
   sessionId: string,
   reason: IdentityBreachReason,
 ): Promise<RefreshSessionOutcome> {
-  await revokeWithin({ query }, sessionId, reason);
+  await withTransaction((executor) => revokeWithin(executor, sessionId, reason));
   return { outcome: 'revoked', reason };
 }
 
@@ -1346,7 +1442,8 @@ async function persistRefreshedState(args: {
   leaseId: string;
   refreshToken: string;
   refreshed: ProviderRefreshResult;
-  verified: VerifiedAccessToken | null;
+  /** FBL-020-R5 §1.8: never null. The boundary above cannot produce one. */
+  verified: VerifiedAccessToken;
 }): Promise<RefreshSessionOutcome> {
   const { input, keyVersion, leaseId, refreshToken, refreshed, verified } = args;
   return withTransaction(async (executor): Promise<RefreshSessionOutcome> => {
@@ -1381,9 +1478,7 @@ async function persistRefreshedState(args: {
     // auth_time moves ONLY forward, and only on verified evidence.
     const storedAuthTime = ts(row.auth_time);
     const nextAuthTime =
-      verified !== null && verified.authTime.getTime() > storedAuthTime.getTime()
-        ? verified.authTime
-        : storedAuthTime;
+      verified.authTime.getTime() > storedAuthTime.getTime() ? verified.authTime : storedAuthTime;
 
     const rotated = await rotateRefreshStateRow(executor, {
       sessionId: input.sessionId,
@@ -1397,7 +1492,7 @@ async function persistRefreshedState(args: {
       // Believing an `expires_in` the exchange volunteered would let the
       // provider response schedule its own next refresh; a verified `exp` is
       // the same fact the login recorded, proved the same way.
-      providerAccessTokenExpiresAt: verified === null ? null : verified.expiresAt,
+      providerAccessTokenExpiresAt: verified.expiresAt,
       expectedLeaseId: leaseId,
     });
     if (rotated === null) {
@@ -1442,7 +1537,7 @@ async function identityStillMatches(
   row: Row,
   expectedIssuer: string,
   refreshed: ProviderRefreshResult,
-  verified: VerifiedAccessToken | null,
+  verified: VerifiedAccessToken,
 ): Promise<boolean> {
   const connectionId = row.connection_id;
   const sessionIssuer = row.issuer;
@@ -1479,11 +1574,12 @@ async function identityStillMatches(
     return false;
   }
   if (refreshed.providerSessionId !== sessionProviderSessionId) return false;
-  if (verified !== null) {
-    if (verified.providerUserId !== sessionSubject) return false;
-    if (verified.organizationId !== sessionOrg) return false;
-    if (verified.providerSessionId !== sessionProviderSessionId) return false;
-  }
+  // FBL-020-R5 §1.8: unconditional. A verified token is always present here, so
+  // these three comparisons are made on every single refresh rather than only when
+  // a caller chose to supply a verifier.
+  if (verified.providerUserId !== sessionSubject) return false;
+  if (verified.organizationId !== sessionOrg) return false;
+  if (verified.providerSessionId !== sessionProviderSessionId) return false;
   // Connection, tenant and UserLink, all still effective, all still agreeing.
   const facts = await executor.query(
     `SELECT c.issuer          AS connection_issuer,

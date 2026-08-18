@@ -118,6 +118,26 @@ export type LoginTransactionFailureReason =
   | 'exchange_token_mismatch'
   | 'identity_not_admitted'
   | 'session_establishment_failed'
+  /**
+   * FBL-020-R5 §1.5 — THE PROVIDER SENT US TO THE CALLBACK WITH AN ERROR.
+   *
+   * An OAuth authorization server that refuses (`access_denied`, `login_required`,
+   * a misconfigured client) redirects to the registered callback carrying `error`
+   * and the original `state`, and NO `code`. That is a real transaction reaching a
+   * real end, and it now says so.
+   *
+   * The provider's own `error` / `error_description` strings are deliberately NOT
+   * recorded: `failure_reason` is a closed server vocabulary, and a provider
+   * message is caller-influenced text that must never reach the table or a log.
+   */
+  | 'provider_error_callback'
+  /**
+   * FBL-020-R5 §1.5 — a callback that presented a valid sealed handle and the
+   * matching state, and no authorization code at all. Distinct from the line above
+   * because "the provider refused" and "the callback arrived malformed or
+   * truncated" are different operational facts.
+   */
+  | 'authorization_code_missing'
   | 'expired';
 
 export interface StartedLoginTransaction {
@@ -367,19 +387,57 @@ export async function claimLoginTransactionAtomically(
  * already terminal (expired underneath us, or failed by another path), and the
  * caller must then fail closed rather than serve the session it just made.
  */
-export async function succeedLoginTransaction(loginTxnId: string): Promise<boolean> {
+export interface AdmittedLoginIdentity {
+  readonly loginTxnId: string;
+  /**
+   * FBL-020-R5 §1.11 — THE TENANT AND USER THE LOGIN WAS ADMITTED AS.
+   *
+   * A browser login knows neither when it opens: `GET /auth/login` has a purpose,
+   * a redirect, a return location and a TTL, and nothing else, so the row's
+   * `tenant_id` and `user_link_id` were NULL for the whole round trip. The success
+   * transition RETURNed those NULLs and handed them straight to the audit writer,
+   * which meant every successful browser login in `audit_events` was recorded
+   * against the NIL tenant with `actor_user_id = NULL` — the one event in the
+   * lifecycle that names WHO GOT IN named nobody, and could not be found by
+   * filtering a tenant's own trail.
+   *
+   * They are inputs now because the caller is the only party that knows them: it
+   * is the step that has just admitted the identity AND established the local
+   * session, so it holds the admitted tenant and link as facts rather than hopes.
+   * `tenantId` is nullable because a PLATFORM-scope actor genuinely has no tenant;
+   * `userLinkId` is not, because a login that admitted nobody is not a success.
+   */
+  readonly tenantId: string | null;
+  readonly userLinkId: string;
+  /** The connection the identity was admitted through, when the caller knows it. */
+  readonly connectionId?: string | null;
+}
+
+export async function succeedLoginTransaction(input: AdmittedLoginIdentity): Promise<boolean> {
+  const { loginTxnId } = input;
   return withTransaction(async (executor) => {
     const result = await executor.query(
       `UPDATE login_transactions
-          SET status = 'succeeded', consumed_at = NOW(), consumed_outcome = 'succeeded'
+          SET status = 'succeeded', consumed_at = NOW(), consumed_outcome = 'succeeded',
+              tenant_id = $2::uuid,
+              user_link_id = $3::uuid,
+              connection_id = COALESCE($4::uuid, connection_id)
         WHERE login_txn_id = $1 AND status = 'consuming'
+          -- A transaction that was OPENED against a known identity — the reauth
+          -- purpose is — may only succeed as THAT identity. A disagreement is a
+          -- refusal, never an overwrite: this statement records who was admitted,
+          -- it does not get to rewrite who the transaction was for.
+          AND (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2::uuid)
+          AND (user_link_id IS NULL OR user_link_id = $3::uuid)
         RETURNING tenant_id, user_link_id, purpose`,
-      [loginTxnId],
+      [loginTxnId, input.tenantId, input.userLinkId, input.connectionId ?? null],
     );
     if (result.rows.length === 0) return false;
     const row = result.rows[0] as Row;
     await auditLogin(executor, {
       loginTxnId,
+      // Read back from the row the UPDATE just wrote, not from the input: the
+      // evidence names what the database holds.
       tenantId: row.tenant_id === null ? null : String(row.tenant_id),
       userLinkId: row.user_link_id === null ? null : String(row.user_link_id),
       eventType: 'identity.login.succeeded',
@@ -430,17 +488,83 @@ async function failLoginTransactionWithin(
   return true;
 }
 
-/** Housekeeping for the scheduled aggregator; expiry is decided at read time. */
-export async function expireStaleLoginTransactions(): Promise<number> {
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `UPDATE login_transactions
-          SET status = 'failed', consumed_at = NOW(), consumed_outcome = 'failed',
-              failure_reason = 'expired'
-        WHERE status IN ('pending', 'consuming') AND expires_at < NOW()
-        RETURNING login_txn_id, tenant_id, user_link_id, purpose`,
+/** How many stale login transactions ONE pass will age. Bounded on purpose. */
+export const LOGIN_TRANSACTION_EXPIRY_DEFAULT_BATCH = 200;
+const LOGIN_TRANSACTION_EXPIRY_MAX_BATCH = 1000;
+
+/**
+ * FBL-020-R5 §1.6 — THE LOGIN-TRANSACTION EXPIRY SWEEP: BOUNDED, IDEMPOTENT AND
+ * CONCURRENCY-SAFE, in that order.
+ *
+ * ── what this replaces ──────────────────────────────────────────────────────
+ *
+ * One unbounded `UPDATE … WHERE status IN ('pending','consuming') AND expires_at <
+ * NOW()`, with the audit rows written in a loop inside the same transaction. It was
+ * idempotent — the second pass matched nothing — and it was neither of the other
+ * two things §1.6 names:
+ *
+ *   - NOT BOUNDED. A backlog (an outage, a first deployment against an old
+ *     database, a burst of abandoned logins) meant ONE statement locking every
+ *     matching row and one transaction holding one pool connection for as long as
+ *     it took, plus an audit INSERT per row before anything committed. The size of
+ *     the work decided the size of the transaction, which is the shape that turns a
+ *     backlog into an outage.
+ *   - NOT CONCURRENCY-SAFE in the sense the clause means. Two workers were SAFE
+ *     (the second found nothing to do) but they were not INDEPENDENT: the loser
+ *     blocked on the winner's row locks for the whole pass rather than taking other
+ *     work or finishing.
+ *
+ * ── the shape, and where the correctness actually lives ─────────────────────
+ *
+ * One row is claimed and transitioned per transaction, at most `limit` times.
+ *
+ *   - BOUNDED: `limit` is validated (1..1000, default 200) and each iteration is
+ *     its own short transaction, so the pass gives its connection back between
+ *     rows and a backlog is drained across passes instead of held in one.
+ *   - IDEMPOTENT: `status IN ('pending','consuming')` is both the predicate that
+ *     selects the work and the predicate the write invalidates. A second pass finds
+ *     the row `failed` and matches nothing, so it writes no second audit row.
+ *   - CONCURRENCY-SAFE for the SAME reason, not a different one: the loser of a
+ *     race re-evaluates that predicate against the row as the winner left it and
+ *     matches zero rows. `FOR UPDATE SKIP LOCKED` sits on top of that as a LIVENESS
+ *     choice — it stops N workers convoying behind one row — and it is stated as
+ *     such rather than as the guarantee, exactly as the support sweep documents.
+ *
+ * The audit row is written in the SAME transaction as the transition, so an aged
+ * transaction with no trail — or a trail for a transition that rolled back — is not
+ * a reachable state.
+ */
+export async function expireStaleLoginTransactions(options?: { limit?: number }): Promise<number> {
+  const requested = options?.limit ?? LOGIN_TRANSACTION_EXPIRY_DEFAULT_BATCH;
+  if (
+    !Number.isInteger(requested) ||
+    requested < 1 ||
+    requested > LOGIN_TRANSACTION_EXPIRY_MAX_BATCH
+  ) {
+    throw new RangeError(
+      `login transaction expiry batch limit must be an integer in 1..${LOGIN_TRANSACTION_EXPIRY_MAX_BATCH}`,
     );
-    for (const raw of result.rows as Row[]) {
+  }
+  let recorded = 0;
+  for (let i = 0; i < requested; i += 1) {
+    const aged = await withTransaction<boolean>(async (executor) => {
+      const claimed = await executor.query(
+        `UPDATE login_transactions
+            SET status = 'failed', consumed_at = NOW(), consumed_outcome = 'failed',
+                failure_reason = 'expired'
+          WHERE login_txn_id = (
+            SELECT lt.login_txn_id
+              FROM login_transactions lt
+             WHERE lt.status IN ('pending', 'consuming')
+               AND lt.expires_at < NOW()
+             ORDER BY lt.expires_at
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1
+          )
+          RETURNING login_txn_id, tenant_id, user_link_id, purpose`,
+      );
+      if (claimed.rows.length === 0) return false;
+      const raw = claimed.rows[0] as Row;
       await auditLogin(executor, {
         loginTxnId: String(raw.login_txn_id),
         tenantId: raw.tenant_id === null ? null : String(raw.tenant_id),
@@ -448,7 +572,10 @@ export async function expireStaleLoginTransactions(): Promise<number> {
         eventType: 'identity.login.expired',
         details: { purpose: String(raw.purpose), reason: 'expired' },
       });
-    }
-    return result.rowCount ?? 0;
-  });
+      return true;
+    });
+    if (!aged) break;
+    recorded += 1;
+  }
+  return recorded;
 }

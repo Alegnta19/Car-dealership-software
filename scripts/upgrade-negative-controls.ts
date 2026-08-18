@@ -64,6 +64,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from 'pg';
+import { FIXTURE_CHAIN_ENV } from './migration-fixture-chains';
 
 /**
  * One reconciliation. Its METADATA lives here; its ANCHOR TEXT lives in
@@ -186,6 +187,29 @@ export const CONTROLS: Control[] = [
     expectStage: 'migration',
     expectSignature: 'rat_started_is_bound',
   },
+  /*
+   * ── THE GRANTLESS-APPROVAL RECONCILIATION IS THREE STATEMENTS, AND R4 PROVED ONE ──
+   *
+   * 057 §5 reconciles an approved support request that cannot name an approving
+   * high-assurance grant with three statements, in this order:
+   *
+   *   1. the delegated SESSION is revoked, because access into a tenant must not outlive
+   *      the approval that justified it;
+   *   2. the supersession is RECORDED as an audit event carrying the prior decision;
+   *   3. the REQUEST is moved to a terminal state with its decision preserved in the
+   *      superseded_* columns.
+   *
+   * R4 shipped one control over this reconciliation — it removed (3) — and the delivery
+   * report described the ten controls as covering the load-bearing reconciliations. That
+   * overstated it: removing (3) makes `sar_approval_is_high_assurance` abort the
+   * migration, so (1) and (2) never run in that control either, and neither statement was
+   * ever shown to change any outcome. Both are exactly the shape that fails silently: no
+   * constraint is violated, nothing errors, and the result is a live support session into a
+   * tenant whose approval has been withdrawn, or a withdrawal with no audit trail.
+   *
+   * FBL-020-R5 §0.6 adds a control for each, removing ONE statement on its own isolated
+   * copy and requiring a DISTINCT verifier assertion to be the thing that fails.
+   */
   {
     id: 'sar_approval_without_grant_superseded',
     section: '§5 — support access authority and high-assurance approval',
@@ -195,6 +219,30 @@ export const CONTROLS: Control[] = [
       '`sar_approval_is_high_assurance` aborts the whole migration.',
     expectStage: 'migration',
     expectSignature: 'sar_approval_is_high_assurance',
+  },
+  {
+    id: 'sas_grantless_approval_session_revoked',
+    section: '§5 — support access authority and high-assurance approval',
+    intent:
+      'ends the live support session belonging to an approval that is about to be ' +
+      'withdrawn. Removed, NOTHING errors: the request is still superseded, every ' +
+      'constraint in 057 is still satisfied, and a platform person keeps an open ' +
+      "window into a tenant's data under an approval that no longer exists. The only " +
+      'thing that can see it is an assertion about the session row itself.',
+    expectStage: 'verifier',
+    expectSignature: 'sas_session_of_superseded_approval_ended',
+  },
+  {
+    id: 'aud_grantless_approval_supersession_recorded',
+    section: '§5 — support access authority and high-assurance approval',
+    intent:
+      'records the withdrawal of a support approval as an audit event naming the prior ' +
+      'decision and the reason. Removed, the request is still superseded and its ' +
+      'superseded_* columns still hold the old decision, so every row-level assertion ' +
+      'about the request passes — but the act itself becomes invisible in the audit ' +
+      'trail, which is the one place an operator would look for it.',
+    expectStage: 'verifier',
+    expectSignature: 'audit_grantless_supersession_is_recorded_with_its_reason',
   },
   {
     id: 'ipc_unbounded_certification_withdrawn',
@@ -232,6 +280,18 @@ export const CONTROLS: Control[] = [
  * load-bearing and no such claim is made. They are kept in 057 because the ORDERING
  * is the property under review: a later edit that re-points a column, or an operator
  * repair between migrations, brings the rows they guard into existence.
+ *
+ * THIS LIST IS A SUMMARY FOR A READER. IT IS NOT THE AUTHORITY, and FBL-020-R5 §0.6
+ * exists because R4 treated it as one. It groups several statements into one line, it is
+ * maintained by hand, and nothing checked that it was complete — so "the controls cover
+ * the load-bearing reconciliations" was an unfalsifiable claim, and a false one: 057 §5
+ * reconciles a grantless approval with THREE statements and R4 had a control for one.
+ *
+ * The authority is `scripts/reconciliation-inventory.ts`, which parses 057, computes which
+ * statement each control actually deletes, and REFUSES if any statement that changes
+ * retained rows is neither covered nor declared with a reason. Its current reading —
+ * 37 reconciliations, 11 covered by a control, 24 declared not-load-bearing, 2 refusal
+ * guards, 0 unaccounted — is published as `artifacts/reconciliation-inventory-057.json`.
  */
 export const NOT_LOAD_BEARING: Array<{ statement: string; reason: string }> = [
   {
@@ -272,16 +332,23 @@ export const NOT_LOAD_BEARING: Array<{ statement: string; reason: string }> = [
 
 const IS_WINDOWS = process.platform === 'win32';
 
-function parseArgs(): { before: string; out: string; log: string | undefined } {
+function parseArgs(): {
+  before: string;
+  out: string;
+  log: string | undefined;
+  only: string | undefined;
+} {
   const argv = process.argv.slice(2);
   let before: string | undefined;
   let out: string | undefined;
   let log: string | undefined;
+  let only: string | undefined;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] as string;
     if (arg === '--before') before = argv[(i += 1)];
     else if (arg === '--out') out = argv[(i += 1)];
     else if (arg === '--log') log = argv[(i += 1)];
+    else if (arg === '--only') only = argv[(i += 1)];
     else {
       console.error(`Unrecognized argument: ${arg}`);
       process.exit(2);
@@ -289,11 +356,18 @@ function parseArgs(): { before: string; out: string; log: string | undefined } {
   }
   if (before === undefined || out === undefined) {
     console.error(
-      'Usage: upgrade-negative-controls.ts --before <pre-057 census json> --out <json> [--log <txt>]',
+      'Usage: upgrade-negative-controls.ts --before <pre-057 census json> --out <json> ' +
+        '[--log <txt>] [--only <control-id>]',
     );
     process.exit(2);
   }
-  return { before, out, log };
+  if (only !== undefined && !CONTROLS.some((c) => c.id === only)) {
+    console.error(
+      `--only ${only} names no declared control. Declared: ${CONTROLS.map((c) => c.id).join(', ')}`,
+    );
+    process.exit(2);
+  }
+  return { before, out, log, only };
 }
 
 const MIGRATION_057 = '057_identity_boundary_completion.sql';
@@ -405,7 +479,7 @@ function copyUrl(databaseUrl: string, copyName: string): string {
 }
 
 async function main(): Promise<void> {
-  const { before, out, log } = parseArgs();
+  const { before, out, log, only } = parseArgs();
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl === '') {
     console.error('DATABASE_URL must name the pre-057 seeded database used as the template.');
@@ -423,8 +497,51 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString: admin });
   await client.connect();
 
+  /*
+   * THE TEMPLATE MUST BE PRE-057, AND THAT IS CHECKED RATHER THAN ASSUMED.
+   *
+   * Every control here works by applying a MUTATED 057 to a copy of the template. If the
+   * template has ALREADY had 057 applied, the runner skips it as present, no mutation ever
+   * executes, and each control reports "removing this reconciliation changed NOTHING" — so
+   * a wrong `DATABASE_URL` produces twelve FAILED CONTROLS that read exactly like twelve
+   * broken reconciliations. That happened during this order's own verification, and the
+   * misdiagnosis cost real time; a precondition is cheaper than a reader's confusion.
+   */
+  {
+    const probe = new Client({ connectionString: databaseUrl });
+    await probe.connect();
+    try {
+      const applied = (
+        await probe.query<{ filename: string }>(
+          `SELECT filename FROM schema_migrations WHERE filename >= '057' ORDER BY filename`,
+        )
+      ).rows.map((r) => r.filename);
+      if (applied.length > 0) {
+        console.error(
+          `The template database '${template}' has already applied ${applied.join(', ')}. ` +
+            'These controls apply a MUTATED 057 to copies of it, so on a post-057 template ' +
+            'the runner skips 057 entirely and every control reports a false failure. Point ' +
+            'DATABASE_URL at the PRE-057 drill database.',
+        );
+        process.exitCode = 2;
+        return;
+      }
+    } finally {
+      await probe.end();
+    }
+  }
+
   try {
+    /*
+     * `--only` runs ONE control, for the revert-proof loop: deleting a verifier assertion
+     * and re-running twelve controls to see whether one of them notices is a twenty-minute
+     * round trip that nobody repeats. It is a DIAGNOSTIC, and the artifact says so —
+     * `controls_filtered` is true and `controls_declared` records how many exist, so a
+     * filtered run cannot be presented as the gate. `ci.yml` asserts `controls_filtered`
+     * is false, which is what stops a narrowed run from ever standing in for the full one.
+     */
     for (const [index, control] of CONTROLS.entries()) {
+      if (only !== undefined && control.id !== only) continue;
       const copy = `${template}_nc${index}`.slice(0, 63);
       const dir = join(staging, control.id);
       mkdirSync(dir, { recursive: true });
@@ -436,10 +553,19 @@ async function main(): Promise<void> {
       await client.query(`DROP DATABASE IF EXISTS "${copy}"`);
       await client.query(`CREATE DATABASE "${copy}" TEMPLATE "${template}"`);
 
+      /*
+       * FBL-020-R5 §0.4: the harness declares the chain it is running, by name. The
+       * runner then requires the other nine files to match their pinned digests and
+       * requires THIS file to be the canonical body with exactly one contiguous span
+       * removed holding exactly one statement terminator. A harness bug that corrupted
+       * the copy, or an anchor that removed two statements, is refused by the runner
+       * rather than silently producing a "control satisfied" from the wrong mutation.
+       */
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         DATABASE_URL: copyUrl(databaseUrl, copy),
         MIGRATIONS_DIR: dir,
+        [FIXTURE_CHAIN_ENV]: 'negative-control-057',
       };
 
       const migration = run('npx', ['tsx', 'scripts/migrate.ts'], env);
@@ -525,8 +651,11 @@ async function main(): Promise<void> {
     migration: MIGRATION_057,
     migration_sha256_canonical_lf: sha256(baseSql),
     template_database: template,
-    controls_total: CONTROLS.length,
-    controls_satisfied: CONTROLS.length - failedControls,
+    controls_declared: CONTROLS.length,
+    controls_filtered: only !== undefined,
+    controls_only: only ?? null,
+    controls_total: results.length,
+    controls_satisfied: results.length - failedControls,
     controls_failed: failedControls,
     controls: results,
     not_load_bearing_on_a_pre_057_fixture: NOT_LOAD_BEARING,
@@ -538,7 +667,8 @@ async function main(): Promise<void> {
     '(enumerated rather than omitted; each operates on a column 057 itself creates)',
     ...NOT_LOAD_BEARING.map((n) => `  ${n.statement} — ${n.reason}`),
     '',
-    `controls_total=${CONTROLS.length} satisfied=${CONTROLS.length - failedControls} ` +
+    `controls_declared=${CONTROLS.length} controls_run=${results.length} ` +
+      `filtered=${String(only !== undefined)} satisfied=${results.length - failedControls} ` +
       `failed=${failedControls}`,
   );
   const text = lines.join('\n') + '\n';
