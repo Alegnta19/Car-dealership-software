@@ -17,3 +17,96 @@ de0f47f7dcb2c88d4c75891666fbcc8022283c4c:.github/workflows/ci.yml:generic-api-ke
 # restructured so it can no longer match; this suppression covers the historical
 # introduction only, by exact fingerprint.
 dd8b9aeaf4425f146b8c5a5ad587c29213b2c0f6:tests/platform.test.ts:generic-api-key:189
+
+# FBL-020-R5 (F2, after ci.yml run 32168154239 failed the full-history scan with 54
+# findings): the 057 RECONCILIATION INVENTORY's statement KEYS, in the two commits that
+# introduced and then removed them.
+#
+# WHAT THE VALUES ARE. `scripts/reconciliation-inventory.ts` keys every reconciliation in
+# the generated 057 inventory — the JSON file every fingerprint below names — by a CONTENT
+# ADDRESS of the SQL statement it describes: sha256 of the comment-stripped,
+# whitespace-normalised statement text taken from
+# `migrations/057_identity_boundary_completion.sql`, which is itself checked in. The key was
+# written as the bare 64-character hex digest, and `"key": "<64 hex>"` is exactly the shape
+# gitleaks' `generic-api-key` rule exists to catch: keyword plus a long high-entropy value.
+#
+# WHY THEY ARE NOT SECRETS. Every one is a pure function of committed SQL — recomputable
+# by anyone with the repository, and reproducible from the migration with `sha256sum`.
+# They authenticate nothing, are accepted by nothing, and grant nothing. Nothing was
+# rotated because there is nothing to rotate.
+#
+# WHICH TWO COMMITS, AND WHY THEY CANNOT BE EDITED. 27 findings live in
+# 52e1567ad67a2ccde30adc4d06ce4009b4762391, which added the inventory with bare digests;
+# the other 27 are reported again in 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee, whose patch
+# REPLACES those keys — the removal diff still contains the literal it removes, so the
+# scan of that commit sees them a second time, at the same line numbers. Both commits are
+# pushed and immutable: this order forbids rewriting or force-pushing history, so no
+# forward edit can reach either patch. A fingerprint over a frozen commit cannot rot,
+# which is what makes an exact-fingerprint suppression the correct instrument HERE and the
+# wrong one for the live file.
+#
+# NO FUTURE COMMIT ADDS MORE. The key FORMAT was changed, not the scan: `inventoryKey()`
+# now emits `stmt-<8 hex>-<8 hex>`, so no run of 32 or more hex characters survives in the
+# generated inventory (`grep -cE '[0-9a-f]{32,}'` over the current file returns 0), and
+# `assertUniqueKeys()` fails the generator rather than letting truncation merge two
+# statements. Regenerating the inventory therefore produces no new finding and no new
+# fingerprint. The scan itself is unchanged — same pinned image, same `--log-opts=--all`,
+# no path, rule, entropy, or pattern exemption.
+#
+# The 54 fingerprints below are gitleaks v8.24.3's own, copied from the SARIF report the
+# pinned image writes (commit:file:rule:line) — 27 for the introducing commit, then 27 for
+# the commit whose patch removes them. Nothing here is constructed by hand.
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:29
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:36
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:43
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:50
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:57
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:64
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:71
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:78
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:85
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:92
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:99
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:106
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:113
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:120
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:127
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:134
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:141
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:148
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:155
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:162
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:169
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:176
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:183
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:190
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:197
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:204
+52e1567ad67a2ccde30adc4d06ce4009b4762391:architecture/reconciliation-inventory-057.json:generic-api-key:211
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:29
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:36
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:43
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:50
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:57
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:64
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:71
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:78
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:85
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:92
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:99
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:106
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:113
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:120
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:127
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:134
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:141
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:148
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:155
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:162
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:169
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:176
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:183
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:190
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:197
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:204
+0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:211

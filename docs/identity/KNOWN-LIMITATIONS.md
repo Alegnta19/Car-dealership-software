@@ -369,7 +369,10 @@ outcome is a refused login. The identity boundary itself (admission, tuple const
 evidence completeness, lifecycle audit, support expiry, owned mutations, revocation) is
 pinned by tests proven to fail when the control is reverted. What is claimed for the gates
 themselves is only what was measured, and where it was measured: the report's "Verification
-evidence" section records local runs on this tree, and **no CI run exists for it**.
+evidence" section records local runs on this tree, and **no CI run exists for it**. Two
+earlier code-bearing commits were pushed and **both FAILED their exact-SHA `ci.yml` run** —
+`52e1567` (run 32162114699) and `0e99ecd` (run 32168154239). Neither failure is hidden and
+neither is a discharge; §1 and §2.1 of the delivery report carry the runs and the corrections.
 
 ## Blueprint citations that do not say which document (FBL-020-R5 §3.1)
 
@@ -418,6 +421,25 @@ those names are pinned verbatim by `docs/FBL-020-R5-REQUIREMENT-MAP.json` and ch
 is not what a document-reconciliation pass may make. **Nothing in this repository claims
 `§4.8` exists**: the delivery report names it as a citation the order does not use, and this
 entry is the register of where it survives.
+
+## The census reads a host, and one probe still depends on a daemon
+
+**`scripts/migration-census.ts` classifies the docker-compose volume as `persistent`, and
+when the Docker daemon is unreachable that probe's verdict falls to `indeterminate`.** An
+indeterminate persistent environment blocks §0.2 by design — that is the fail-closed rule
+working — but it means the §0.2 POSITION depends on whether a daemon happens to be running
+on the host taking the census, and the CI `verify` job does not otherwise use Docker or
+declare it. On this host the daemon is up and the position is `EDIT_057_IN_PLACE`; on a
+runner the probe resolves without blocking, and the two exact-SHA runs reached steps far
+past the census, which corroborates it. It is recorded here rather than fixed because
+making it unconditional would mean either trusting an uninspected environment — the exact
+error §0.2 exists to prevent — or declaring Docker a census dependency, which is a change
+to what the order asks for. A reviewer should know the position has a host dependency.
+
+Twice now the same defect class has been found in this file: an environment that CANNOT be
+inspected and an environment that IS NOT THERE were scored alike. Both are fixed (the port
+branch and the vanished-directory branch, each with a test driving both directions). This
+entry is the residue of the same shape and is stated rather than implied.
 
 ## Deliberately out of scope (named owners)
 

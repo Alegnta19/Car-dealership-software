@@ -69,7 +69,12 @@ export interface Statement {
   raises: boolean;
   /** Whitespace-normalized text. */
   normalized: string;
-  /** sha256 of `normalized` — the inventory key. */
+  /**
+   * The inventory key, as `inventoryKey` builds it: `stmt-<8 hex>-<8 hex>`, from the first
+   * 64 bits of the sha256 of `normalized`. It is NOT the sha256 itself. That is what it
+   * used to be, and a bare 64-character hex run is what gitleaks reads as a credential —
+   * see the comment on `inventoryKey`.
+   */
   key: string;
   /** First non-blank, non-comment line, for readability in the artifact. */
   excerpt: string;
@@ -177,11 +182,18 @@ export function digest(text: string): string {
  * findings and failed the full-history secret scan. The values were never secrets; they
  * are content-addressed identifiers derived from the statement text.
  *
- * The fix is the FORMAT, not a suppression list. 27 `.gitleaksignore` fingerprints would
- * have rotted the moment the inventory regenerated — every fingerprint embeds the commit
- * and the line — and this repository's suppression policy is exact fingerprints only. So
- * the key is now a readable prefix plus a hyphen-separated, truncated digest: no run of 32
- * or more hex characters survives, and the value is still a pure function of the statement.
+ * THE FORWARD FIX IS THE FORMAT. The key is now a readable prefix plus a hyphen-separated,
+ * truncated digest: no run of 32 or more hex characters survives, and the value is still a
+ * pure function of the statement. A suppression could not have been the forward fix —
+ * every gitleaks fingerprint embeds a commit and a line, so a fingerprint written for the
+ * LIVE file would rot the moment the inventory regenerated.
+ *
+ * HISTORY STILL NEEDED SUPPRESSING, AND THAT IS A DIFFERENT ARGUMENT. The bare digests were
+ * pushed in 52e1567 and replaced in 0e99ecd, and `--log-opts=--all` scans every commit —
+ * including the removal patch, which still contains the literal it removes. Run 32168154239
+ * therefore reported 54 findings that no forward edit can reach, because this order forbids
+ * rewriting history. `.gitleaksignore` carries all 54 as exact finding fingerprints, and a
+ * fingerprint over a frozen commit cannot rot. Nothing about the scan was narrowed.
  *
  * TRUNCATION IS GUARDED, NOT ASSUMED. 64 bits over a few dozen statements makes collision
  * vanishingly unlikely but not impossible, and a silent collision would merge two
@@ -494,7 +506,12 @@ function main(): void {
   const artifact = {
     migration: '057_identity_boundary_completion.sql',
     migration_sha256_canonical_lf: digest(sql),
-    key: 'sha256 of the whitespace-normalized statement text',
+    key:
+      '`stmt-<8 hex>-<8 hex>`: the literal prefix `stmt-` followed by the first and second ' +
+      '8-hex-character groups of the sha256 of the whitespace-normalized statement text. ' +
+      'The key is NOT that sha256 — an earlier revision of this artifact used the bare ' +
+      '64-character digest, which gitleaks reads as a credential; see `inventoryKey` in ' +
+      'scripts/reconciliation-inventory.ts.',
     totals: result.totals,
     inventory: result.rows,
     problems: result.problems,

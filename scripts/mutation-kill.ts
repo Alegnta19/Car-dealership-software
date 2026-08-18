@@ -834,7 +834,25 @@ function isolatedCopy(): string {
       const rel = src.slice(ROOT.length).replace(/\\/g, '/').replace(/^\//, '');
       if (rel === '') return true;
       const first = rel.split('/')[0] as string;
-      if (first === 'node_modules' || first === '.git') return false;
+      /*
+       * FBL-020-R5 — `artifacts/` IS EXCLUDED, AND THAT IS A CORRECTION, NOT A CONVENIENCE.
+       *
+       * It used to be copied in, which coupled every baseline in this runner to the very
+       * artifact the runner produces. `tests/delivery-documentation.test.ts` compares the
+       * delivery report's published mutation figures against `artifacts/mutation-kill.json`,
+       * and that battery is the one mutation `blueprint_digest_recorded_wrong` runs. So a
+       * single run that recorded anything other than what the report published left the NEXT
+       * run's baseline red — and a red baseline is reported as a SURVIVOR, because the runner
+       * (correctly) refuses to credit a kill to a battery that was already broken. One red
+       * run therefore poisoned every subsequent run, and no source change could clear it.
+       *
+       * `artifacts/` is gitignored: it is evidence ABOUT a tree, not part of the tree under
+       * test. Excluding it also makes this runner behave the way it already behaves in CI,
+       * where `artifacts/mutation-kill.json` does not exist yet when this step runs — the
+       * figure gate finds those figures unreadable and skips them, exactly as designed, and
+       * the mutual-consistency limb still binds every publication of a figure to every other.
+       */
+      if (first === 'node_modules' || first === '.git' || first === 'artifacts') return false;
       if (rel.endsWith('.tsbuildinfo')) return false;
       return !/(^|\/)dist(\/|$)/.test(rel);
     },
@@ -1025,7 +1043,23 @@ function main(): void {
     rmSync(join(copy, '..'), { recursive: true, force: true });
   }
 
+  /*
+   * FBL-020-R5 — THE ARTIFACT MUST SAY WHEN IT WAS TAKEN AND WHAT IT MEASURED.
+   *
+   * The delivered `artifacts/mutation-kill.json` was a genuine, complete, all-killed run,
+   * and the delivery report described it as a fresh run at the current head. It was not:
+   * it predated two commits and a source fix. Nothing in the artifact could contradict the
+   * sentence, because the artifact recorded no time and no revision. These two fields are
+   * the fix — a reader can now compare `head` with `git rev-parse HEAD` and see for
+   * themselves. `tree_dirty` is recorded too, because a run taken over uncommitted work is
+   * a run against a tree no SHA identifies.
+   */
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
+  const dirty = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout ?? '';
   const summary = {
+    generated_at: new Date().toISOString(),
+    head: head === '' ? 'unknown' : head,
+    tree_dirty: dirty.trim() !== '',
     mutations_total: MUTATIONS.length,
     mutations_killed: MUTATIONS.length - survivors,
     mutations_survived: survivors,

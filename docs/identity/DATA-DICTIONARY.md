@@ -380,10 +380,28 @@ values**, computed as
 sed 's/\r$//' migrations/<file>.sql | sha256sum
 ```
 
-`HEAD` is deliberately not used here: the delivery is an uncommitted working tree, so a
-digest taken from `HEAD` would describe a different body. `docs/FBL-020-DELIVERY-REPORT.md`
-publishes the same values beside their git blob OIDs, under its "The migration chain"
-heading, measured on this tree.
+**Where the bytes are read from does not change the value, and `HEAD` may be used.** Every
+migration in this repository is committed — `git status --short migrations/` reports nothing
+— so each file's `HEAD` blob canonicalises to the same digest as the file on disk. For `057`,
+the one this section is most often read for, both of
+
+```bash
+git show HEAD:migrations/057_identity_boundary_completion.sql | sed 's/\r$//' | sha256sum
+sed 's/\r$//' migrations/057_identity_boundary_completion.sql | sha256sum
+```
+
+produce `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` at commit
+`0e99ecd`. `docs/FBL-020-DELIVERY-REPORT.md` publishes the same values beside their git blob
+OIDs, under its "The migration chain" heading, measured on this tree.
+
+**A correction, recorded rather than quietly overwritten.** Until this revision the two
+sentences above read: "`HEAD` is deliberately not used here: the delivery is an uncommitted
+working tree, so a digest taken from `HEAD` would describe a different body." Both halves
+were false from commit `52e1567` onward — the migrations have been committed since then, and
+the two commands above return the same digest, so the stated justification was not merely
+stale but demonstrably wrong. The same claim was corrected in
+`docs/FBL-020-DELIVERY-REPORT.md` and `docs/identity/KNOWN-LIMITATIONS.md` in an earlier
+pass; this document is one of the nine §3.6 documents and was missed by it.
 
 They are **not** Windows working-tree values: a working copy checked out with
 CRLF line endings hashes differently for every file, and a checksum taken there

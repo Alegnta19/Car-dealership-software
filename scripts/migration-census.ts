@@ -267,6 +267,19 @@ export const LEDGER_TABLE = 'schema_migrations';
 
 export interface ClusterInspection {
   data_directory: string;
+  /**
+   * Whether the directory itself still existed AT INSPECTION TIME.
+   *
+   * FBL-020-R5: this field exists to separate two states `readable: false` used to merge —
+   * "the directory is there and I could not read it" from "the directory is not there".
+   * The host sweep enumerates directories and the inspection happens afterwards, so on a
+   * machine that is churning scratch clusters a directory can be enumerated and be gone
+   * moments later. Merging the two made every such vanishing an `indeterminate`, and
+   * `summarize` counts indeterminates with the persistent environments, so a sweep that
+   * caught a few disappearing temp clusters could drive the whole census to
+   * `BLOCKED_INDETERMINATE`. See `verdictFromInspection`.
+   */
+  exists: boolean;
   readable: boolean;
   pg_version: string;
   /** `base/` subdirectory names: one per database, including the three defaults. */
@@ -288,6 +301,11 @@ export interface ClusterInspection {
  * production-shaped environment to satisfy a read. The filesystem answers the question.
  */
 export function inspectDataDirectory(dataDir: string, markers: string[]): ClusterInspection {
+  /*
+   * Asked FIRST and recorded separately, because the answer to "is it there?" and the
+   * answer to "can I read it?" are different answers with different §0.2 consequences.
+   */
+  const exists = existsSync(dataDir);
   const readable = existsSync(join(dataDir, 'PG_VERSION'));
   const conf = join(dataDir, 'postgresql.conf');
   const hba = join(dataDir, 'pg_hba.conf');
@@ -356,8 +374,13 @@ export function inspectDataDirectory(dataDir: string, markers: string[]): Cluste
 
   return {
     data_directory: dataDir,
+    exists,
     readable,
-    pg_version: readable ? readFileSync(join(dataDir, 'PG_VERSION'), 'utf8').trim() : 'unreadable',
+    pg_version: readable
+      ? readFileSync(join(dataDir, 'PG_VERSION'), 'utf8').trim()
+      : exists
+        ? 'unreadable'
+        : 'gone — the directory no longer exists',
     base_oids: baseOids,
     base_mtimes: baseMtimes,
     configured_port: port,
@@ -380,10 +403,44 @@ export function inspectDataDirectory(dataDir: string, markers: string[]): Cluste
  * can drive every branch — including the two that must NOT be reported as `no`.
  */
 export function verdictFromInspection(c: ClusterInspection): { verdict: Verdict; basis: string } {
+  /*
+   * FBL-020-R5 — ABSENCE IS NOT SILENCE, the same distinction `localClusterFinding`'s
+   * absence branch draws for a port with no cluster behind it.
+   *
+   * The host sweep ENUMERATES data directories and this function INSPECTS them, and those
+   * are two moments in time. A machine running this project's own drills creates and
+   * destroys scratch clusters under the OS temp directory continuously, so a directory can
+   * be enumerated and be gone before the inspection reaches it. The earlier revision saw
+   * only `readable: false` and answered `indeterminate` — silence — and because
+   * `summarize` counts indeterminates WITH the persistent environments, a handful of
+   * vanishing temp clusters was enough to move the whole census to BLOCKED_INDETERMINATE
+   * and take `check-census-prose.ts` RED. The §0.2 position then depended on how busy the
+   * host happened to be, which is not evidence.
+   *
+   * A directory that no longer exists holds no migration. That is a POSITIVE observation,
+   * not a failed look: `existsSync` returned false, which is an answer. So the verdict is
+   * `no`, with the vanishing stated as its basis rather than hidden behind a generic
+   * unreadability line.
+   *
+   * "Present but unreadable" keeps its `indeterminate` and keeps blocking §0.2, because
+   * that one IS a failed look: something is there and this census could not see into it.
+   */
+  if (!c.exists)
+    return {
+      verdict: 'no',
+      basis:
+        'the data directory did not exist at inspection time: it was enumerated by the host ' +
+        'sweep and had vanished before this census came to read it, which is what a machine ' +
+        'churning scratch clusters looks like. A directory that no longer exists holds no ' +
+        'migration, so this is absence and the verdict is `no` — NOT `indeterminate`, which ' +
+        'is reserved for a directory that is present and could not be read.',
+    };
   if (!c.readable)
     return {
       verdict: 'indeterminate',
-      basis: 'the data directory could not be read, so nothing was established either way',
+      basis:
+        'the data directory is PRESENT and could not be read, so nothing was established ' +
+        'either way',
     };
   if (c.marker_057.hits.length > 0)
     return {
@@ -1844,11 +1901,19 @@ function otherClusterFinding(
         : `windows-service:${service.service}`,
     what_it_is:
       service === undefined
-        ? `a PostgreSQL ${insp.pg_version} data directory found on this host`
+        ? insp.exists
+          ? `a PostgreSQL ${insp.pg_version} data directory found on this host`
+          : 'a data directory the host sweep enumerated that no longer existed when this ' +
+            'census came to inspect it'
         : `the Windows service '${service.service}' — a PostgreSQL ${insp.pg_version} server ` +
           `registered to start with the machine (${insp.configured_port})`,
     persistence,
-    inspected: insp.readable,
+    /*
+     * An ABSENT directory HAS been inspected: the inspection is exactly what established
+     * that it is absent, and it produced a verdict (`no`) rather than a shrug. Only
+     * "present and could not be read" is an environment nobody managed to look at.
+     */
+    inspected: insp.readable || !insp.exists,
     inspection_method:
       'filesystem only — PG_VERSION, the base/ OID census with modification times, the ' +
       'configured port, the host-based authentication methods, the server log listing, and a ' +
@@ -1857,6 +1922,13 @@ function otherClusterFinding(
       ...(service === undefined
         ? []
         : [{ check: 'Windows service state', observed: `${service.service} — ${service.state}` }]),
+      {
+        check: 'did the data directory still exist when this census inspected it?',
+        observed: insp.exists
+          ? 'YES'
+          : 'NO — enumerated by the host sweep and gone before the inspection. An absent ' +
+            'directory holds no migration, so the verdict is `no`, not `indeterminate`.',
+      },
       { check: 'PG_VERSION', observed: insp.pg_version },
       { check: 'configured port', observed: insp.configured_port },
       {
@@ -1908,10 +1980,37 @@ function otherClusterFinding(
   };
 }
 
+/**
+ * FBL-020-R5 — WHAT IN THIS ARTIFACT IS DURABLE AND WHAT IS NOT.
+ *
+ * The environment COUNT is a reading of one host at one instant. This machine runs the
+ * project's own drills, which create and destroy PostgreSQL clusters under the OS temp
+ * directory continuously, and it carries scratch clusters left by unrelated work; the
+ * sweep therefore returns a different number of directories on almost every run —
+ * directories appear and vanish DURING a single sweep. None of that motion is a finding
+ * about this repository.
+ *
+ * `conclusion.position` is the durable claim. It is a statement about whether any
+ * PERSISTENT environment holds a form of 057, and it is what §0.2 turns on. Every delivery
+ * document quotes the POSITION; `scripts/check-census-prose.ts` enforces that and
+ * deliberately does not require any count to be quoted.
+ */
+export const COUNT_IS_POINT_IN_TIME =
+  'THE ENVIRONMENT COUNT IN THIS ARTIFACT IS A POINT-IN-TIME READING OF ONE HOST, NOT A ' +
+  'DURABLE FIGURE. This machine creates and destroys scratch PostgreSQL clusters under the ' +
+  'OS temporary directory as a matter of course, including for work unrelated to this ' +
+  'order, so the number of directories the sweep enumerates changes between runs and even ' +
+  'during a single run. The durable claim of this census is `conclusion.position` — ' +
+  'whether any PERSISTENT environment holds a form of migration 057 — and that is what ' +
+  '§0.2 turns on and what the delivery documents quote. Do not read the count as a ' +
+  'measurement of anything.';
+
 interface Census {
   order: string;
   acceptance: string;
   disclaimer: string;
+  /** See `COUNT_IS_POINT_IN_TIME`: the position is the claim, the count is a reading. */
+  counts_are_point_in_time: string;
   generated_at: string;
   host: { platform: string; node: string };
   repository: { head: string; markers_searched_for: string[] };
@@ -2125,6 +2224,7 @@ async function main(): Promise<void> {
       'This document REPORTS a finding and states the implementer’s reading of it. It is NOT ' +
       'an acceptance, ratification or discharge by the architect or by anyone else, and it ' +
       'must not be cited as one.',
+    counts_are_point_in_time: COUNT_IS_POINT_IN_TIME,
     generated_at: new Date().toISOString(),
     host: { platform: process.platform, node: process.version },
     repository: { head: head === '' ? 'unknown' : head, markers_searched_for: markers },
@@ -2153,6 +2253,8 @@ async function main(): Promise<void> {
   const lines: string[] = [
     `order=${census.order} acceptance=${census.acceptance}`,
     census.disclaimer,
+    '',
+    census.counts_are_point_in_time,
     '',
     `markers=${markers.join(', ')}`,
     '',

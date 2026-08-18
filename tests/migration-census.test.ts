@@ -13,6 +13,7 @@ import {
   composeVolumeCandidates,
   databaseNamesFromDisk,
   discoverWindowsDataDirectories,
+  inspectDataDirectory,
   loadDisposableClusterPolicy,
   migration057Markers,
   persistenceFrom,
@@ -85,6 +86,9 @@ describe('the migration census (FBL-020-R5 §0.1)', () => {
     // the scan finished.
     const unreadable: ClusterInspection = {
       data_directory: 'D:/nowhere',
+      // PRESENT and unreadable — the case that stays `indeterminate`. The absent case is
+      // pinned separately by 'a data directory that VANISHED …' below.
+      exists: true,
       readable: false,
       pg_version: 'unreadable',
       base_oids: [],
@@ -140,6 +144,98 @@ describe('the migration census (FBL-020-R5 §0.1)', () => {
     assert.match(reading, /COULD NOT\s+BE INSPECTED|COULD NOT BE INSPECTED/);
     assert.match(reading, /cannot\s+be taken on this evidence|cannot be taken/);
     assert.deepEqual(summarize(unknown).persistent_environments_indeterminate, ['u']);
+  });
+
+  test('a data directory that VANISHED between enumeration and inspection is `no`, while a PRESENT unreadable one stays `indeterminate`', () => {
+    /*
+     * FBL-020-R5 — the third appearance of the absence-is-not-silence class, pinned in
+     * BOTH directions so it cannot come back a fourth time.
+     *
+     * The host sweep ENUMERATES data directories and the inspection reads them afterwards.
+     * On a machine running this project's own drills, scratch clusters under the OS temp
+     * directory are created and destroyed continuously, so a directory can be enumerated
+     * and be gone by the time the inspection reaches it. `inspectDataDirectory` used to
+     * return the same `readable: false` shape for that as for a directory that is sitting
+     * right there and cannot be read, and `verdictFromInspection` mapped both to
+     * `indeterminate` — which `summarize` counts WITH the persistent environments, so a few
+     * disappearing temp clusters were enough to take the whole census to
+     * BLOCKED_INDETERMINATE and `scripts/check-census-prose.ts` RED. A §0.2 position that
+     * depends on how busy the host is is not evidence.
+     *
+     * Both halves are driven through the REAL filesystem, not a hand-built literal, because
+     * the defect was in what the filesystem read produced, not in the mapping alone.
+     */
+    const scratch = mkdtempSync(join(tmpdir(), 'census-vanish-'));
+    try {
+      // ── DIRECTION 1: PRESENT and unreadable ⇒ indeterminate, and it still blocks §0.2.
+      const present = join(scratch, 'present-but-unreadable');
+      mkdirSync(present);
+      const p = inspectDataDirectory(present, ['057_identity_boundary_completion.sql']);
+      assert.equal(p.exists, true, 'the directory is there');
+      assert.equal(p.readable, false, 'no PG_VERSION, so it cannot be read as a cluster');
+      const pv = verdictFromInspection(p);
+      assert.equal(pv.verdict, 'indeterminate');
+      assert.match(pv.basis, /PRESENT/);
+
+      const blocked = summarize([
+        {
+          id: 'present-but-unreadable',
+          what_it_is: 'a directory that is there and could not be read',
+          persistence: 'persistent',
+          inspected: false,
+          inspection_method: 'filesystem only',
+          evidence: [],
+          migration_057_applied: pv.verdict,
+          basis: pv.basis,
+          limits: [],
+        },
+      ]);
+      assert.equal(
+        blocked.position,
+        'BLOCKED_INDETERMINATE',
+        'a present-but-unreadable persistent environment must still stop the §0.2 branch',
+      );
+
+      // ── DIRECTION 2: enumerated, then GONE ⇒ `no`, with the vanishing as the basis.
+      const doomed = join(scratch, 'vanishes');
+      mkdirSync(doomed);
+      writeFileSync(join(doomed, 'PG_VERSION'), '16\n');
+      // Enumeration sees it…
+      assert.ok(existsSync(doomed), 'enumerated while it existed');
+      // …and it is gone before the inspection, exactly as a churning host does it.
+      rmSync(doomed, { recursive: true, force: true });
+
+      const g = inspectDataDirectory(doomed, ['057_identity_boundary_completion.sql']);
+      assert.equal(g.exists, false, 'the directory is not there any more');
+      assert.equal(g.readable, false);
+      assert.match(g.pg_version, /gone/, 'the shape must say which of the two states it is in');
+      const gv = verdictFromInspection(g);
+      assert.equal(gv.verdict, 'no', 'a directory that no longer exists holds no migration');
+      assert.match(gv.basis, /did not exist at inspection time|vanished/);
+
+      const notBlocked = summarize([
+        {
+          id: 'vanished',
+          what_it_is: 'a directory enumerated and gone before inspection',
+          // Worst case for this test: even classified as PERSISTENT it must not block.
+          persistence: 'persistent',
+          inspected: true,
+          inspection_method: 'filesystem only',
+          evidence: [],
+          migration_057_applied: gv.verdict,
+          basis: gv.basis,
+          limits: [],
+        },
+      ]);
+      assert.equal(
+        notBlocked.position,
+        'EDIT_057_IN_PLACE',
+        'absence must not be counted as an uninspected environment',
+      );
+      assert.deepEqual(notBlocked.persistent_environments_indeterminate, []);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   test('a persistent environment holding 057 forces the 058 branch, and is reported separately from a disposable one', () => {

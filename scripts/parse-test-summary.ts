@@ -63,8 +63,11 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * observation checks and the census-versus-prose comparison, 567 → 572 when the
  * stale-figure gate and its revert proofs were added, and 572 → 573 when that gate's
  * MUTUAL-CONSISTENCY limb — the one binding two publications of a figure to each other when
- * no artifact is readable to arbitrate between them — got its own named test. Each of these
- * numbers was MEASURED before it was written here.
+ * no artifact is readable to arbitrate between them — got its own named test. It moved
+ * 573 → 577 when the R5 verification pass added four: the census absence-versus-silence
+ * test (S1), the §3.6 uncommitted-working-tree class check (S3), and the two that pin the
+ * inventory key's shape and refuse a credential-shaped literal under `architecture/` (S5).
+ * Each of these numbers was MEASURED before it was written here.
  *
  * A floor is raised only AFTER a measured run, never to a number nobody has seen run.
  * `tests/ci-gates.test.ts` refuses a suite floor above the declarations that exist and a
@@ -74,7 +77,7 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * shipped when the requirement map published `MINIMUM_TESTS = 554` against a source
  * holding 567.
  */
-export const MINIMUM_TESTS = 573;
+export const MINIMUM_TESTS = 577;
 export const MINIMUM_SUITES = 59;
 
 /**

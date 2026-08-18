@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -35,6 +36,7 @@ import {
 } from '../scripts/upgrade-negative-controls';
 import {
   buildInventory,
+  inventoryKey,
   isReconciliation,
   loadDeclarations,
   normalizeStatement,
@@ -802,6 +804,143 @@ describe('the reconciliation inventory of migration 057 (FBL-020-R5 §0.6)', () 
     assert.notEqual(
       normalizeStatement('UPDATE t SET x = 1;'),
       normalizeStatement('UPDATE t SET x = 2;'),
+    );
+  });
+
+  test('every inventory key is `stmt-`-shaped, and no key is a bare digest', () => {
+    /*
+     * FBL-020-R5 — THE PROPERTY WHOSE ABSENCE PRODUCED 54 GITLEAKS FINDINGS, PINNED.
+     *
+     * The key used to be `digest(normalized)`: a bare 64-character hex sha256. gitleaks'
+     * `generic-api-key` rule reads a long hex run as a credential, so committing the
+     * inventory produced 27 findings in `52e1567` and 54 across history in `0e99ecd`. The
+     * format was changed to `stmt-<8 hex>-<8 hex>` and NOTHING ASSERTED THE NEW SHAPE — a
+     * later edit could return to the bare digest and every gate would stay green until the
+     * secret scan failed again.
+     *
+     * WHAT THIS COVERS: the shape `inventoryKey` produces, the keys of every row the
+     * generator builds from the real `057`, and the keys declared in
+     * `architecture/reconciliation-inventory-057.json`.
+     *
+     * WHAT IT DELIBERATELY DOES NOT COVER: whether the key is derived from a digest at all.
+     * It is — from the first 64 bits of the sha256 of the normalized statement — and that is
+     * the point of it. This test constrains only the SHAPE of what gets written down. The
+     * test after it is the one that says no credential-shaped literal may reach a file under
+     * `architecture/`.
+     *
+     * The inventory is rebuilt IN PROCESS from `migrations/057…`, not read from `artifacts/`,
+     * so this test holds with the artifacts directory absent.
+     */
+    const SHAPE = /^stmt-[0-9a-f]{8}-[0-9a-f]{8}$/;
+
+    // The generator itself.
+    assert.match(inventoryKey('UPDATE t SET x = 1'), SHAPE);
+    assert.equal(
+      inventoryKey('UPDATE t SET x = 1'),
+      inventoryKey('UPDATE t SET x = 1'),
+      'the key is still a pure function of the statement',
+    );
+    assert.notEqual(
+      inventoryKey('UPDATE t SET x = 1'),
+      inventoryKey('UPDATE t SET x = 2'),
+      'and still distinguishes different statements',
+    );
+
+    // Every row of the real inventory.
+    const rows = buildInventory().rows;
+    assert.ok(rows.length >= 30, `sanity: the inventory has rows (${rows.length})`);
+    const badRows = rows.filter((r) => !SHAPE.test(r.key)).map((r) => `${r.line}: ${r.key}`);
+    assert.deepEqual(badRows, [], `inventory keys that are not stmt-shaped: ${badRows.join(', ')}`);
+
+    // Every declaration checked in beside it.
+    const badDeclared = loadDeclarations()
+      .filter((d) => !SHAPE.test(d.key))
+      .map((d) => d.key);
+    assert.deepEqual(
+      badDeclared,
+      [],
+      `declared keys that are not stmt-shaped: ${badDeclared.join(', ')}`,
+    );
+
+    // The same statement from the other direction: nothing in the generated rows is long
+    // enough to be read as a credential.
+    const longRuns = [...JSON.stringify(rows).matchAll(/[0-9a-fA-F]{32,}/g)].map((m) => m[0]);
+    assert.deepEqual(
+      longRuns,
+      [],
+      `the generated inventory rows contain credential-shaped hex runs: ${longRuns.join(', ')}`,
+    );
+  });
+
+  test('no file under architecture/ carries a credential-shaped hex literal that is not a published migration digest', () => {
+    /*
+     * FBL-020-R5 — THE CLASS, ONE LEVEL UP FROM THE KEY.
+     *
+     * `architecture/reconciliation-inventory-057.json` is where the 27 findings were, and it
+     * is one of several machine-derived files checked in under `architecture/`. The rule
+     * enforced here is the one that would have caught them:
+     *
+     *   any run of 32 or more hex characters under `architecture/` must be the canonical-LF
+     *   sha256 of a migration in this repository.
+     *
+     * The allowance is not a name list and not a suppression — it is RECOMPUTED from
+     * `migrations/`, so a digest is permitted only while it really is a migration's digest,
+     * and a stale one starts failing.
+     *
+     * WHAT THIS COVERS: every checked-in file under `architecture/`, of any type — the
+     * inventory declarations, the negative-control anchors, the module manifest, the
+     * fixture-chain declarations and the analyzer fixtures.
+     *
+     * WHAT IT DELIBERATELY DOES NOT COVER, and why:
+     *   * `docs/` — the delivery report and the data dictionary PUBLISH digests on purpose:
+     *     migration checksums, git blob OIDs, and the Version 1.0 / Version 2.0 blueprint
+     *     sha256 values. Those are the evidence a reviewer recomputes, and a rule that fired
+     *     on them would be wrong.
+     *   * `migrations/`, `tests/fixtures/` and `artifacts/` — fixture manifests and evidence
+     *     artifacts are digest-bearing by design.
+     *   * runs shorter than 32 characters. 32 is where gitleaks' `generic-api-key` entropy
+     *     rule bites, and it is the threshold the failing scan actually used.
+     *   * whether any value is SECRET. Nothing here was ever a secret; the finding was about
+     *     SHAPE, and shape is what this checks.
+     */
+    const migrationsDir = join(ROOT, 'migrations');
+    const published = new Set(
+      readdirSync(migrationsDir)
+        .filter((f) => f.endsWith('.sql'))
+        .map((f) =>
+          createHash('sha256')
+            .update(readFileSync(join(migrationsDir, f), 'utf8').replace(/\r\n/g, '\n'), 'utf8')
+            .digest('hex'),
+        ),
+    );
+    assert.ok(published.size >= 10, 'sanity: the migration digests were computed');
+
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+      );
+    const files = walk(join(ROOT, 'architecture'));
+    assert.ok(files.length > 5, 'sanity: architecture/ was walked');
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(/[0-9a-fA-F]{32,}/g) as IterableIterator<RegExpMatchArray>) {
+        const literal = m[0];
+        if (published.has(literal.toLowerCase())) continue;
+        offenders.push(
+          `${file
+            .slice(ROOT.length + 1)
+            .split('\\')
+            .join('/')}: ${literal}`,
+        );
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      'credential-shaped literals under architecture/ that are not migration digests — this is ' +
+        `exactly the shape gitleaks reported 54 times:\n${offenders.join('\n')}`,
     );
   });
 

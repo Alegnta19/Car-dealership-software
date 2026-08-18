@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -152,6 +154,33 @@ function deliveryDocuments(): Array<[string, string]> {
   };
   walk('docs');
   return docs;
+}
+
+/**
+ * The value a delivery DOCUMENT publishes for a figure, read from its `<!--fig:id-->` span.
+ *
+ * FBL-020-R5, after ci.yml run 32168154239: the two self-tests below built their fixtures
+ * from `values`, which includes figures sourced from `artifacts/`. That directory is
+ * gitignored, and in CI the battery runs BEFORE `parse-test-summary.ts` writes the artifact
+ * — so `Number(values.suite_tests)` was NaN on a runner, the fixture could not be built,
+ * and both tests failed there while passing locally. That is the third time this order has
+ * been bitten by one asymmetry: a local tree has artifacts, a fresh checkout does not.
+ *
+ * A self-test of the GATE'S REPORTING LOGIC must not depend on a file that may be absent.
+ * The documents are committed, so what they publish is always readable, and staging a
+ * contradiction against that is exactly as strong a fixture. The gate's behaviour on the
+ * real tree is asserted separately, by the test that compares each figure with its source
+ * and correctly skips what it cannot read.
+ */
+function publishedFigureValue(documents: Record<string, string>, id: string): number {
+  const span = new RegExp(`<!--fig:${id}-->(.*?)<!--/fig-->`, 'gs');
+  for (const text of Object.values(documents)) {
+    for (const m of text.matchAll(span)) {
+      const n = Number((m[1] ?? '').replace(/[^0-9]/g, ''));
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return Number.NaN;
 }
 
 describe('the supplied blueprint, and the one that is absent (FBL-020-R5 §3.1/§3.4)', () => {
@@ -700,6 +729,118 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
     }
   });
 
+  test('no §3.6 document claims the migrations are an uncommitted working tree, because git says they are not', () => {
+    /*
+     * FBL-020-R5 — THE CLASS, NOT THE INSTANCE.
+     *
+     * `docs/identity/DATA-DICTIONARY.md` justified refusing to quote a `HEAD` digest with
+     * "the delivery is an uncommitted working tree, so a digest taken from `HEAD` would
+     * describe a different body". Both halves stopped being true at commit `52e1567`, and
+     * the second half was never true in the way it mattered: the `HEAD` blob and the
+     * working tree canonicalise to the SAME digest. A correction pass fixed the identical
+     * claim in the report and in KNOWN-LIMITATIONS and missed this one, because nothing
+     * checked the claim against git.
+     *
+     * This test checks it against git. The premise is measured first — so the test fails
+     * loudly if the repository ever genuinely does carry uncommitted migrations, rather
+     * than silently enforcing a stale rule — and only then are the nine documents scanned.
+     *
+     * WHY THE PREMISE IS CONDITIONAL AND THE DOCUMENT SCAN IS NOT. `scripts/mutation-kill.ts`
+     * runs this battery inside an ISOLATED COPY of the tree, and that copy deliberately
+     * excludes `.git`. The first version of this test called git unconditionally, so inside
+     * the copy every git call threw and the battery went red — which took the BASELINE of
+     * mutation `blueprint_digest_recorded_wrong` red with it and turned a killed mutation
+     * into a reported survivor. The runner was right to refuse it: a battery that is already
+     * broken cannot kill anything.
+     *
+     * So the git premise runs only where git can answer, and the ASSERTION — no §3.6
+     * document may claim the migrations are uncommitted — runs everywhere, unconditionally.
+     * That is the safe split: the premise is a GUARD that can only ever stop this test from
+     * enforcing the rule against a repository where the rule is genuinely false, and a
+     * detached copy of the tree is not such a repository. The branch that was taken is
+     * asserted about, not passed over in silence.
+     */
+    const git = (...args: string[]): string =>
+      execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const canonical = (buf: string): string =>
+      createHash('sha256').update(buf.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+
+    let insideWorkTree: boolean;
+    try {
+      insideWorkTree = git('rev-parse', '--is-inside-work-tree').trim() === 'true';
+    } catch {
+      // git is absent, or this directory is not a checkout — e.g. the mutation runner's copy.
+      insideWorkTree = false;
+    }
+
+    if (insideWorkTree) {
+      assert.equal(
+        git('status', '--porcelain', '--', 'migrations').trim(),
+        '',
+        'PREMISE: every migration is committed. If this fails the documents are not the problem.',
+      );
+
+      const migrations = readdirSync(join(ROOT, 'migrations'))
+        .filter((f) => f.endsWith('.sql'))
+        .sort();
+      assert.ok(migrations.length >= 10, 'sanity: the migration chain was found');
+      const differing = migrations.filter(
+        (f) =>
+          canonical(git('show', `HEAD:migrations/${f}`)) !==
+          canonical(readFileSync(join(ROOT, 'migrations', f), 'utf8')),
+      );
+      assert.deepEqual(
+        differing,
+        [],
+        `a digest taken from HEAD describes exactly the body in this tree; these differ: ${differing.join(', ')}`,
+      );
+      // Named outright, because it is the file the false sentence was written about.
+      assert.equal(
+        canonical(git('show', 'HEAD:migrations/057_identity_boundary_completion.sql')),
+        canonical(
+          readFileSync(join(ROOT, 'migrations', '057_identity_boundary_completion.sql'), 'utf8'),
+        ),
+        '057 in HEAD and 057 in this tree are the same body',
+      );
+    } else {
+      // Not a skip: the assertion below still runs. What is recorded is WHY the premise
+      // could not be measured, so a reader of a passing run knows which half executed.
+      assert.ok(
+        !existsSync(join(ROOT, '.git')),
+        'the premise was skipped, so this must genuinely not be a git checkout — otherwise ' +
+          'git failed for a reason that needs investigating rather than tolerating',
+      );
+      assert.ok(
+        existsSync(join(ROOT, 'migrations')),
+        'sanity: this is still a copy of this repository',
+      );
+    }
+
+    /*
+     * The sentence may appear ONLY where a document is withdrawing it. Deleting the
+     * history of a corrected claim is its own dishonesty — a reviewer holding the old
+     * document needs to find the correction — so the allowance is the same one this file
+     * already grants the "no test invokes" claim: a withdrawal word must be nearby.
+     */
+    const offenders: string[] = [];
+    for (const [name, path] of RECONCILED_DOCUMENTS) {
+      const doc = readFileSync(join(ROOT, path), 'utf8');
+      for (const m of doc.matchAll(
+        /uncommitted working tree|digest taken from `?HEAD`? would describe a different body/gi,
+      ) as IterableIterator<RegExpMatchArray>) {
+        const at = m.index ?? 0;
+        const around = doc.slice(Math.max(0, at - 400), at + 400);
+        if (!/\bfalse\b|\bwrong\b|withdraw|no longer true|not true/i.test(around))
+          offenders.push(`${name}: ${m[0]}`);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `documents asserting the migrations are uncommitted, which git contradicts:\n${offenders.join('\n')}`,
+    );
+  });
+
   test('known-limitations, the runbooks and the README agree that live certification is BLOCKED', () => {
     for (const [name, doc] of [
       ['the delivery report', REPORT],
@@ -867,12 +1008,34 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
 
     // 2. THE PROSE MOVES AND THE SOURCE DOES NOT — a restatement in a NEW sentence, which
     //    is what makes this a check on the class rather than on the four known instances.
+    const declaredFromArtifact = Number(values.mutations_declared);
+    const mutationsDeclared = Number.isFinite(declaredFromArtifact)
+      ? declaredFromArtifact
+      : publishedFigureValue(docs, 'mutations_declared');
+    assert.ok(
+      Number.isFinite(mutationsDeclared),
+      'mutations_declared must be readable from the artifact OR a published span',
+    );
     const invented =
       `${docs[REPORT_PATH] as string}\n\nA later paragraph nobody gated says the runner ` +
-      `declared ${Number(values.mutations_declared) - 10} mutations declared.\n`;
-    const whenProseInvents = figureProblems(values, { ...docs, [REPORT_PATH]: invented }).problems;
+      `declared ${mutationsDeclared - 10} mutations declared.\n`;
+    /*
+     * The SOURCE is supplied, not assumed present. This limb is the source comparison, so
+     * it only speaks when the source is readable; passing `values` made the assertion pass
+     * locally (artifact on disk) and, when `artifacts/` was absent, pass only by accident —
+     * the mutual-consistency limb's message also quotes `restatement rule
+     * mutations-registry`, because it names the rule each occurrence came through. Staging
+     * the value makes the limb under test the limb asserted, in either condition.
+     */
+    const provenSource = { ...values, mutations_declared: String(mutationsDeclared) };
+    const whenProseInvents = figureProblems(provenSource, {
+      ...docs,
+      [REPORT_PATH]: invented,
+    }).problems;
     assert.ok(
-      whenProseInvents.some((p) => p.includes('restatement rule mutations-registry')),
+      whenProseInvents.some(
+        (p) => p.includes('restatement rule mutations-registry') && p.includes('its source reads'),
+      ),
       `a restated figure outside any span must be reported: ${whenProseInvents.join('; ')}`,
     );
 
@@ -940,9 +1103,18 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
     for (const figure of FIGURES)
       if (figure.source.kind === 'json' && figure.source.artifact === true)
         delete noArtifacts[figure.id];
+    /*
+     * FBL-020-R5, after ci.yml run 32168154239: this asserted that DELETING the
+     * artifact-sourced figures shrank the map, which is only true when the artifacts were
+     * readable in the first place. In CI they are not — the battery runs before
+     * `parse-test-summary.ts` writes them — so the premise failed on a runner and passed
+     * locally. The property that actually matters is about the REGISTRY, which is committed
+     * and therefore identical in both places: some figures must be artifact-sourced, or this
+     * test proves nothing about the no-artifact path.
+     */
     assert.ok(
-      Object.keys(noArtifacts).length < Object.keys(values).length,
-      'the registry must contain artifact-sourced figures for this test to mean anything',
+      FIGURES.some((f) => f.source.kind === 'json' && f.source.artifact === true),
+      'the registry must declare artifact-sourced figures for this test to mean anything',
     );
     assert.deepEqual(
       figureProblems(noArtifacts, docs).problems,
@@ -952,11 +1124,25 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
 
     // Stage the defect that shipped: one more sentence stating the suite total at a value
     // the rest of the documents do not use, with nothing readable to arbitrate.
-    const stated = Number(values.suite_tests);
-    assert.ok(Number.isFinite(stated), 'suite_tests must be readable to build this fixture');
+    const statedFromArtifact = Number(values.suite_tests);
+    const stated = Number.isFinite(statedFromArtifact)
+      ? statedFromArtifact
+      : publishedFigureValue(docs, 'suite_tests');
+    assert.ok(
+      Number.isFinite(stated),
+      'suite_tests must be readable from the artifact OR a published span to build this fixture',
+    );
+    const suitesFromArtifact = Number(values.suite_suites);
+    const statedSuites = Number.isFinite(suitesFromArtifact)
+      ? suitesFromArtifact
+      : publishedFigureValue(docs, 'suite_suites');
+    assert.ok(
+      Number.isFinite(statedSuites),
+      'suite_suites must be readable from the artifact OR a published span',
+    );
     const contradicted =
       `${docs[REPORT_PATH] as string}\n\nA later paragraph nobody reconciled: the battery ` +
-      `ran ${stated + 27} tests, ${values.suite_suites as string} suites.\n`;
+      `ran ${stated + 27} tests, ${statedSuites} suites.\n`;
     const problems = figureProblems(noArtifacts, {
       ...docs,
       [REPORT_PATH]: contradicted,
@@ -970,16 +1156,38 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
       `a figure published at two values with no readable source must be reported: ${problems.join('; ')}`,
     );
 
-    // And the limb must not fire when the source IS readable — there the stronger
-    // source comparison already speaks, and two messages for one defect is noise.
-    const withSource = figureProblems(values, { ...docs, [REPORT_PATH]: contradicted }).problems;
+    /*
+     * And the limb must not fire when the source IS readable — there the stronger source
+     * comparison already speaks, and two messages for one defect is noise.
+     *
+     * FBL-020-R5, after ci.yml run 32168154239: this condition used to be staged by handing
+     * the gate `values` and TRUSTING that `artifacts/test-summary.json` was on disk. It is
+     * gitignored, and in CI the battery runs before `parse-test-summary.ts` writes it, so on
+     * a runner `suite_tests` was unreadable, the source could NOT arbitrate, the limb
+     * correctly fired, and the assertion that it stays silent failed — while passing locally
+     * on a tree that had artifacts. Third instance of one asymmetry in this order.
+     *
+     * The arbitrating source is now SUPPLIED at the value the documents publish, so BOTH
+     * directions of the property — fires with no source, silent with one — are exercised
+     * with or without `artifacts/` present. The gate's behaviour against the REAL sources is
+     * asserted by the first test in this suite, which reads them and skips what it cannot.
+     */
+    const arbitrated = {
+      ...values,
+      suite_tests: String(stated),
+      suite_suites: String(statedSuites),
+    };
+    const withSource = figureProblems(arbitrated, {
+      ...docs,
+      [REPORT_PATH]: contradicted,
+    }).problems;
     assert.ok(
       withSource.some((p) => p.includes('restatement rule suite-totals')),
-      'with the artifact present the source comparison must catch it',
+      `with the source readable the source comparison must catch it: ${withSource.join('; ')}`,
     );
     assert.ok(
       !withSource.some((p) => p.includes('different values and its source is not readable')),
-      'the mutual-consistency limb must stay silent when the source can arbitrate',
+      `the mutual-consistency limb must stay silent when the source can arbitrate: ${withSource.join('; ')}`,
     );
   });
 
