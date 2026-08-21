@@ -26,7 +26,15 @@
  * non-zero. Nothing is repaired, and the template is left byte-identical.
  */
 import { spawnSync } from 'child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Client } from 'pg';
@@ -185,12 +193,23 @@ async function main(): Promise<void> {
   const { admin, database: template } = maintenanceUrl(databaseUrl);
 
   const staging = mkdtempSync(join(tmpdir(), 'fbl020-refusal-'));
-  // A copy of `migrations/` with 057 withheld: the same shape the CI upgrade job stages, and
-  // byte-identical to the repository's files, so the `pre-057` chain admits it.
+  // A copy of `migrations/` with 057 AND EVERYTHING AFTER IT withheld: the same shape the CI
+  // upgrade job stages, and byte-identical to the repository's files, so the `pre-057` chain
+  // admits it.
+  //
+  // FBL-020-R6 §3: the rule is stated by NUMBER rather than by naming one file. It used to
+  // delete `057_identity_boundary_completion.sql` and keep the rest, which was the same set
+  // only while 057 was the last migration; with `058` on disk that form staged a POST-057
+  // file into a directory meant to be the chain BEFORE 057, and the `pre-057` chain — quite
+  // correctly — refused a file it does not declare.
   const partial = join(staging, 'pre-057');
   mkdirSync(partial, { recursive: true });
   cpSync(MIGRATIONS, partial, { recursive: true });
-  rmSync(join(partial, '057_identity_boundary_completion.sql'), { force: true });
+  for (const file of readdirSync(partial)) {
+    if (file.endsWith('.sql') && Number(file.slice(0, 3)) >= 57) {
+      rmSync(join(partial, file), { force: true });
+    }
+  }
   // …and one that additionally carries a file no chain declares.
   const unadmitted = join(staging, 'unadmitted');
   mkdirSync(unadmitted, { recursive: true });

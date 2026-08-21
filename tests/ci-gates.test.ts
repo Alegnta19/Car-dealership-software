@@ -44,6 +44,7 @@ import {
   splitStatements,
 } from '../scripts/reconciliation-inventory';
 import { compareToChain, manifest } from '../scripts/migration-manifest';
+import type { ChainFile } from '../scripts/migration-fixture-chains';
 import { loadFixtureChains } from '../scripts/migration-fixture-chains';
 
 /**
@@ -308,7 +309,7 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
     /*
      * THE SUITE FLOOR IS EXACTLY BOUNDABLE. Node reports one suite per `describe(`
      * declaration, and this tree's anchored count matches the reported total exactly
-     * (59 declarations, 59 suites at this revision), so a floor above the count would make CI red
+     * (64 declarations, 64 suites at this revision), so a floor above the count would make CI red
      * forever. This direction was checked NOWHERE before — the asymmetry is how the
      * suite floor reached 41 while the baseline fixture above still called a 40-suite
      * run acceptable.
@@ -321,8 +322,8 @@ describe('the test-summary gate (FBL-020-R4 §7)', () => {
     /*
      * THE TEST FLOOR IS NOT UPPER-BOUNDABLE FROM SOURCE, and this test does not pretend
      * otherwise. A declaration inside a loop yields several tests from one site, so the
-     * declaration count is a LOWER bound on what runs — 548 declarations against 572
-     * tests reported at this revision — and it therefore CANNOT confirm that a floor pinned to the
+     * declaration count is a LOWER bound on what runs — 623 declarations against the total
+     * the measured run reports at this revision — and it therefore CANNOT confirm that a floor pinned to the
      * measured total is reachable. Only a measured run can, which is why the floor is
      * pinned to `artifacts/test-summary.json` and the delivery report cites that
      * artifact rather than resting on this assertion.
@@ -604,9 +605,33 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
     assert.ok(sql.includes('2099-01-01'), 'a future-dated (ineffective) role binding');
     assert.ok(sql.includes('mfa_policy_certified'), 'an unbounded MFA certification');
 
+    /*
+     * FBL-020-R6 gate finding C1 — THE SHAPE THE FIXTURE DID NOT HAVE.
+     *
+     * For four revisions every decision in this fixture carried an EMPTY
+     * `matched_role_binding_ids`: one deliberately incomplete history row, and a deny,
+     * which may not claim a binding at all. Migration 058 §0 reconciles the normalized
+     * authority rows 057 never backfilled, and it DERIVES them from that array — so an
+     * empty array derives nothing and the drill exercised the migration not at all. The
+     * CI job was green over a migration that aborts on the first real ALLOW in production.
+     *
+     * A count is not asserted here, because `scripts/verify-upgrade-state.ts` measures the
+     * seeded rows against the running database and would catch a miscount. What is
+     * asserted is the SHAPE: the fixture must seed at least one ALLOW whose array is not
+     * `{}`, or it cannot reach 058 §0 at all.
+     */
+    const populatedAuthority = [
+      ...sql.matchAll(/'\{[0-9a-f]{8}-[0-9a-f-]+\}'\s*,\s*'\{\d+(?:,\d+)*\}'/g),
+    ];
+    assert.ok(
+      populatedAuthority.length > 0,
+      'the fixture must seed at least one ALLOW carrying a NON-EMPTY matched-binding array; ' +
+        'a fixture whose decisions all carry {} cannot exercise migration 058 §0',
+    );
+
     // …and CI must seed it BEFORE 057, or none of it is a pre-057 fixture.
     const seedAt = WORKFLOW.indexOf('legacy-identity-seed-pre-057.sql');
-    const applyAt = WORKFLOW.indexOf('Apply 057 on top of the populated legacy data');
+    const applyAt = WORKFLOW.indexOf('Apply 057 ONLY, on top of the populated legacy data');
     assert.ok(seedAt > 0 && applyAt > 0, 'both steps must exist');
     assert.ok(seedAt < applyAt, 'the fixture must be seeded before 057 is applied');
   });
@@ -642,17 +667,41 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       'Seed NONEMPTY legacy identity data (pre-057 schema)',
       'Verify the identity fixture is present and NONEMPTY (phase=pre-057)',
       'Reconciliation negative controls (isolated copies of the pre-057 database)',
-      'Apply 057 on top of the populated legacy data',
+      // FBL-020-R6-R6 §D1b — 057 AND 058 ARE APPLIED SEPARATELY, WITH REAL USE BETWEEN
+      // THEM. One `npm run migrate` applied both, which made 058's §3.1 pre-check a query
+      // over zero rows: the seeded fixture is pre-057 by construction and cannot carry a
+      // decision that names a session. These five step names are the split, and they are
+      // asserted rather than described so a workflow that quietly re-merged the two
+      // migrations fails this test.
+      'Stage the pre-058 chain (057 included, 058 withheld)',
+      'Apply 057 ONLY, on top of the populated legacy data',
       'Verify the reconciled state and before/after counts (phase=post-057)',
+      'Generate REALISTIC POST-057 ACTIVITY (production code paths)',
+      'Apply 058 on top of the USED database',
+      'The shipped engine writes version-3 evidence after the upgrade',
+      'Verify the 058 state and the §3.1 exemption (phase=post-058)',
       'Fingerprints must be identical (fresh chain vs upgrade path)',
     ]) {
       assert.ok(steps.has(step), `ci.yml must carry the step: ${step}`);
     }
+    // …and 058 must NOT be inside the pre-058 chain the 057-only step applies. Asserting
+    // the step names alone would pass a workflow that staged the whole of migrations/ and
+    // called it `pre-058`.
+    assert.match(
+      WORKFLOW,
+      /0\[0-4\]\*\|05\[0-7\]\*\) cp "\$f" "\$PRE058\/" ;;/,
+      'the pre-058 chain must copy 000-057 and withhold everything numbered 058 or above',
+    );
+    assert.match(
+      WORKFLOW,
+      /test "\$\(ls -1 "\$PRE058" \| wc -l\)" -eq 10/,
+      'and pin the count, so migration 059 fails this step rather than riding along',
+    );
     // A step that merely PRINTS a failure is not a gate.
     assert.ok(WORKFLOW.includes('"controls_failed": 0'), 'a failed control must fail the job');
     assert.ok(
-      (WORKFLOW.match(/'"result": "OK"'/g) ?? []).length >= 2,
-      'both populated phases must be gated on their own JSON verdict',
+      (WORKFLOW.match(/'"result": "OK"'/g) ?? []).length >= 5,
+      'every populated phase and both activity stages must be gated on their own JSON verdict',
     );
   });
 
@@ -903,17 +952,54 @@ describe('the reconciliation inventory of migration 057 (FBL-020-R5 §0.6)', () 
      *   * whether any value is SECRET. Nothing here was ever a secret; the finding was about
      *     SHAPE, and shape is what this checks.
      */
+    const canonicalSha = (text: string): string =>
+      createHash('sha256').update(text.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+
     const migrationsDir = join(ROOT, 'migrations');
     const published = new Set(
       readdirSync(migrationsDir)
         .filter((f) => f.endsWith('.sql'))
-        .map((f) =>
-          createHash('sha256')
-            .update(readFileSync(join(migrationsDir, f), 'utf8').replace(/\r\n/g, '\n'), 'utf8')
-            .digest('hex'),
-        ),
+        .map((f) => canonicalSha(readFileSync(join(migrationsDir, f), 'utf8'))),
     );
     assert.ok(published.size >= 10, 'sanity: the migration digests were computed');
+
+    /*
+     * FBL-020-R6 §1.4 — TWO MORE CLASSES OF MIGRATION-BODY DIGEST, BOTH RECOMPUTED.
+     *
+     * The fixture-chain allowlist stopped admitting bodies by NAME, which means it now
+     * carries a digest for every body it admits: the twelve deletions the negative-control
+     * harness performs on `057`, and the ledger-probe fixtures. Both are digests of
+     * MIGRATION BODIES — the same class the rule above allows — and both are RECOMPUTED
+     * here from committed inputs rather than listed:
+     *
+     *   * the control variants from `migrations/057…`, the committed anchors and the
+     *     harness's own `removeStatement`;
+     *   * the probe bodies from the string literals `tests/migration-ledger.test.ts`
+     *     writes, read out of that file as text (importing it would register its suites
+     *     inside this battery and double them).
+     *
+     * So a digest is admitted only while it really is the digest of a body this repository
+     * can produce, and a stale one starts failing — which is what makes this an allowance
+     * and not a suppression.
+     */
+    const base057 = canonical057();
+    const anchors = loadAnchors();
+    for (const control of CONTROLS) {
+      const anchor = anchors[control.id];
+      assert.ok(anchor !== undefined, `no anchor for ${control.id}`);
+      if (anchor === undefined) continue;
+      published.add(canonicalSha(removeStatement(base057, control, anchor)));
+    }
+
+    const ledgerBattery = readFileSync(join(ROOT, 'tests', 'migration-ledger.test.ts'), 'utf8');
+    const start = ledgerBattery.indexOf('const PROBE_BODIES = {');
+    assert.notEqual(start, -1, 'the ledger battery must declare PROBE_BODIES');
+    const block = ledgerBattery.slice(start, ledgerBattery.indexOf('} as const;', start));
+    const bodies = [...block.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) =>
+      (m[1] as string).split('\\n').join('\n'),
+    );
+    assert.ok(bodies.length >= 4, `the probe bodies were not recovered: ${bodies.length}`);
+    for (const body of bodies) published.add(canonicalSha(body));
 
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
@@ -950,6 +1036,109 @@ describe('the reconciliation inventory of migration 057 (FBL-020-R5 §0.6)', () 
       WORKFLOW.includes('"reconciliations_unaccounted": 0'),
       'CI must FAIL on an unaccounted reconciliation, not merely record it',
     );
+  });
+
+  test('the FINAL-STATE gate is wired into CI, and its record is COMMITTED', () => {
+    /*
+     * FBL-020-R6 §4.5. The figure gate compares NUMBERS, and FBL-020-R5 was rejected for
+     * sentences: a delivery report naming a red HEAD that was no longer HEAD, a
+     * KNOWN-LIMITATIONS repeating that no CI run existed, a requirement map still awaiting
+     * a run that had already happened. A gate that is not run proves nothing, and a record
+     * that is not committed is a gate reading different bytes on different machines — the
+     * asymmetry that has cost this order four failures — so both are asserted.
+     */
+    assert.ok(
+      WORKFLOW.includes('scripts/check-final-state.ts'),
+      'CI must run the final-state gate',
+    );
+    assert.ok(
+      existsSync(join(ROOT, 'docs', 'evidence', 'FBL-020-FINAL-STATE.json')),
+      'the final-state record must be COMMITTED, outside the gitignored artifacts/',
+    );
+    assert.ok(
+      !/artifacts\/[a-z-]*\.json\b[^\n]*check-final-state/.test(WORKFLOW),
+      'the gate must not be pointed at an artifact',
+    );
+  });
+
+  test('the DATABASE-control mutations are wired into CI and gate on zero survivors', () => {
+    /*
+     * FBL-020-R6 §4.1 requires the section 3 controls — which live in the database rather
+     * than in a TypeScript source — to be mutation-killed with zero survivors. A runner
+     * that exists and is never invoked proves nothing, and a run narrowed with `--only`
+     * proves one control while reading like a full pass, so all three are asserted.
+     */
+    assert.ok(
+      WORKFLOW.includes('scripts/database-control-mutations.ts'),
+      'CI must run the database-control mutation runner',
+    );
+    assert.ok(
+      WORKFLOW.includes('"survivors": 0'),
+      'CI must FAIL on a surviving database control, not merely record it',
+    );
+    assert.ok(
+      WORKFLOW.includes('"controls_filtered": false'),
+      'a narrowed diagnostic run must not be able to stand in for the gate',
+    );
+  });
+});
+
+describe("the CI runner's own census decides nothing (FBL-020-R6 §1.2)", () => {
+  test('the workflow ASSERTS that the runner census may not decide the 057/058 branch', () => {
+    /*
+     * R5 substituted the CI-runner census for the census of the operator's actual
+     * persistent environments, and the review rejected it. The workflow comment said the
+     * step was evidence rather than a gate; a comment is not a control. So the artifact
+     * declares its authority in a field, and the step asserts that field's value.
+     */
+    assert.match(
+      WORKFLOW,
+      /grep -q '"role": "CI_RUNNER"' artifacts\/migration-census\.json/,
+      'the workflow must assert that the census it takes reports a RUNNER',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"may_decide_the_057_058_branch": false' artifacts\/migration-census\.json/,
+      'and that it declares itself unable to decide the branch',
+    );
+  });
+
+  test('the branch rests on a COMMITTED operator census, not on a gitignored artifact', () => {
+    /*
+     * `artifacts/` is gitignored, so a gate that read its evidence from there checked a
+     * different thing on a developer machine than on a fresh checkout — and in CI the thing
+     * it checked was the runner census. The census the prose gate reads is committed.
+     */
+    const gitignore = readFileSync(join(ROOT, '.gitignore'), 'utf8');
+    assert.match(
+      gitignore,
+      /^artifacts\/$/m,
+      'artifacts/ is gitignored, which is why this matters',
+    );
+
+    const census = join(ROOT, 'docs', 'evidence', 'FBL-020-R6-operator-environment-census.json');
+    assert.ok(existsSync(census), 'the operator census must be present in the checkout');
+
+    const parsed = JSON.parse(readFileSync(census, 'utf8')) as {
+      authority: { role: string; may_decide_the_057_058_branch: boolean };
+      census_scope: { enumerated_classes: string[]; out_of_scope: string[] };
+      source_head_provenance: { head: string; tree_state: string; migrations_match_head: boolean };
+      environments: Array<{ inspection_method: string; limits: string[]; basis: string }>;
+    };
+    assert.equal(parsed.authority.role, 'OPERATOR_CONTROLLED_HOST');
+    assert.equal(parsed.authority.may_decide_the_057_058_branch, true);
+
+    // FBL-020-R6 §1.1: generation time, host scope, inspected targets, per-probe
+    // uncertainty and source-head provenance are all carried.
+    assert.ok(parsed.census_scope.enumerated_classes.length > 0, 'host scope');
+    assert.ok(parsed.census_scope.out_of_scope.length > 0, 'and what it does NOT cover');
+    assert.match(parsed.source_head_provenance.head, /^[0-9a-f]{40}$/, 'source-head provenance');
+    assert.ok(parsed.environments.length > 0, 'the inspected targets');
+    for (const e of parsed.environments)
+      assert.ok(
+        e.inspection_method.length > 0 && e.basis.length > 0,
+        'every target states how it was inspected and on what basis its verdict rests',
+      );
   });
 });
 
@@ -992,10 +1181,12 @@ describe('the retained-fixture digest pin (FBL-020-R5 §0.5)', () => {
       'a missing declared file must be refused',
     );
 
-    // …and a chain whose bodies are deliberately NOT pinned cannot be compared this way,
-    // rather than silently reporting a pass.
+    // …and a chain that admits SEVERAL bodies for a file cannot be compared this way,
+    // rather than silently reporting a pass. `ledger-probe` admits two bodies for
+    // `900_ledger_probe_alpha.sql`, so "it is one of them" cannot answer "is this the
+    // historical schema".
     assert.ok(
-      compareToChain(good, 'ledger-probe').some((p) => p.includes('not pinned to fixed digests')),
+      compareToChain(good, 'ledger-probe').some((p) => p.includes('admits more than one body for')),
     );
   });
 
@@ -1005,10 +1196,16 @@ describe('the retained-fixture digest pin (FBL-020-R5 §0.5)', () => {
     // the canonical one.
     const chains = loadFixtureChains();
     const chain = chains['schema-f76a27a'];
-    assert.ok(chain !== undefined && chain.kind === 'pinned');
-    if (chain === undefined || chain.kind !== 'pinned') return;
+    assert.ok(chain !== undefined);
+    if (chain === undefined) return;
     for (const e of manifest(FIXTURE)) {
-      assert.equal(chain.files[e.file], e.sha256_canonical_lf);
+      const entry: ChainFile | undefined = chain.files[e.file];
+      assert.ok(entry !== undefined, `${e.file} is not declared by the chain`);
+      assert.deepEqual(
+        entry?.variants.map((v) => v.sha256),
+        [e.sha256_canonical_lf],
+        'a retained fixture file is pinned to exactly one canonical-LF digest',
+      );
       assert.match(e.sha256, /^[0-9a-f]{64}$/, 'the raw digest is still recorded, as evidence');
     }
   });

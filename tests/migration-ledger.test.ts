@@ -10,13 +10,45 @@ import { INTEGRATION_DATABASE_URL, skipIntegration } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import { ledgerRefusals } from '../scripts/migrate';
 import {
+  FIXTURE_CHAINS_FILE,
   FIXTURE_CHAIN_ENV,
+  WITHDRAWN_CHAIN_KEYS,
   canonicalDigest as chainDigest,
   decideMode,
   loadFixtureChains,
-  singleSpanDeletion,
   validateChainDirectory,
 } from '../scripts/migration-fixture-chains';
+import type { ControlAnchor } from '../scripts/upgrade-negative-controls';
+import {
+  CONTROLS,
+  canonical057,
+  loadAnchors,
+  removeStatement,
+} from '../scripts/upgrade-negative-controls';
+
+/**
+ * FBL-020-R6 §1.4 — THE BODIES THE LEDGER BATTERY WRITES, IN ONE PLACE.
+ *
+ * Every one of them is declared in `architecture/migration-fixture-chains.json` under the
+ * filename it occupies, by its canonical-LF digest, and a test below proves that. They live
+ * at module scope rather than inside the integration `describe` so that proof runs even when
+ * no database is configured — a fixture-admission rule that is only checked when
+ * `TEST_DATABASE_URL` happens to be set is not a rule.
+ */
+const PROBE_BODIES = {
+  alpha: 'CREATE TABLE ledger_probe_alpha (id integer PRIMARY KEY);\n',
+  alphaDrifted: 'CREATE TABLE ledger_probe_alpha (id integer PRIMARY KEY, extra text);\n',
+  beta: 'CREATE TABLE ledger_probe_beta (id integer PRIMARY KEY);\n',
+  gamma: 'CREATE TABLE ledger_probe_gamma (id integer PRIMARY KEY);\n',
+} as const;
+
+/** Which probe filename each body may be written to. */
+const PROBE_FILENAMES: Record<keyof typeof PROBE_BODIES, string> = {
+  alpha: '900_ledger_probe_alpha.sql',
+  alphaDrifted: '900_ledger_probe_alpha.sql',
+  beta: '901_ledger_probe_beta.sql',
+  gamma: '902_ledger_probe_gamma.sql',
+};
 
 /**
  * FBL-020-R4 §0 — MIGRATION LEDGER INTEGRITY.
@@ -49,12 +81,14 @@ describe(
     }
 
     /*
-     * FBL-020-R5 §0.4: this battery runs the runner against a THROWAWAY directory of probe
-     * migrations, which is exactly the redirection that is now opt-in. So it declares the
-     * `ledger-probe` chain by name, the same way CI declares `pre-057`. The chain pins the
-     * reserved filenames and deliberately does NOT pin their bodies — changing a body is how
-     * the drift refusal below is fired — and it suppresses no refusal whatsoever, which is
-     * what the tests in this file demonstrate.
+     * FBL-020-R6 §1.4: this battery runs the runner against a THROWAWAY directory of probe
+     * migrations, which is exactly the redirection that is opt-in. So it declares the
+     * `ledger-probe` chain by name, the same way CI declares `pre-057`. Under R5 that chain
+     * pinned the probe FILENAMES and not their bodies, on the reasoning that a body has to
+     * change for the drift refusal to fire; R6 declares the drifted body too, so every body
+     * `PROBE_BODIES` holds is pinned by checksum and a fourth body is refused. The chain
+     * still suppresses no refusal whatsoever, which is what the tests in this file
+     * demonstrate.
      */
     function runMigrate(env: Record<string, string> = {}): Run {
       const child = spawnSync(process.execPath, ['--import', 'tsx', RUNNER], {
@@ -137,8 +171,8 @@ describe(
      * working bytes would therefore disagree with itself across the two, so the fixture
      * writes the hostile case rather than the convenient one.
      */
-    const ALPHA_LF = 'CREATE TABLE ledger_probe_alpha (id integer PRIMARY KEY);\n';
-    const BETA_LF = 'CREATE TABLE ledger_probe_beta (id integer PRIMARY KEY);\n';
+    const ALPHA_LF = PROBE_BODIES.alpha;
+    const BETA_LF = PROBE_BODIES.beta;
     const toCrlf = (text: string): string => text.replace(/\n/g, '\r\n');
 
     function writeMigrations(alpha: string, beta: string): void {
@@ -374,15 +408,11 @@ describe(
     test('a CHANGED body of an applied migration REFUSES the run, names the file and both digests', () => {
       // 900 is already applied. Its body is now edited — the exact scenario the old
       // ledger could not see, because it matched on filename alone.
-      const changed = 'CREATE TABLE ledger_probe_alpha (id integer PRIMARY KEY, extra text);\n';
+      const changed = PROBE_BODIES.alphaDrifted;
       writeFileSync(join(dir, '900_ledger_probe_alpha.sql'), toCrlf(changed), 'utf8');
       // …and a genuinely new migration is queued behind it, so "nothing was applied"
       // is observable rather than asserted.
-      writeFileSync(
-        join(dir, '902_ledger_probe_gamma.sql'),
-        toCrlf('CREATE TABLE ledger_probe_gamma (id integer PRIMARY KEY);\n'),
-        'utf8',
-      );
+      writeFileSync(join(dir, '902_ledger_probe_gamma.sql'), toCrlf(PROBE_BODIES.gamma), 'utf8');
 
       const run = runMigrate();
       assert.equal(run.status, 1, `the runner must refuse to proceed:\n${run.output}`);
@@ -433,11 +463,7 @@ describe(
 
       // …and a genuinely new migration is queued behind it, so "nothing was applied" is
       // OBSERVABLE rather than merely asserted.
-      writeFileSync(
-        join(dir, '902_ledger_probe_gamma.sql'),
-        toCrlf('CREATE TABLE ledger_probe_gamma (id integer PRIMARY KEY);\n'),
-        'utf8',
-      );
+      writeFileSync(join(dir, '902_ledger_probe_gamma.sql'), toCrlf(PROBE_BODIES.gamma), 'utf8');
 
       const run = runMigrate();
       assert.equal(run.status, 1, `an unverifiable row must REFUSE the run:\n${run.output}`);
@@ -572,9 +598,9 @@ describe(
     });
 
     test('the runner REFUSES a migrations directory that no declared chain admits', () => {
-      // The §0.4 opt-in, driven through a real process. Without a chain name the redirection
-      // is refused; with an undeclared name it is refused; and a file outside the reserved
-      // probe namespace is refused even under the right chain.
+      // The §1.4 opt-in, driven through a real process. Without a chain name the redirection
+      // is refused; with an undeclared name it is refused; and a file the chain does not
+      // declare is refused even under the right chain name.
       const unnamed = runMigrate({ [FIXTURE_CHAIN_ENV]: '' });
       assert.equal(unnamed.status, 1, unnamed.output);
       assert.match(unnamed.output, /fixture-chain check FAILED/i);
@@ -586,10 +612,53 @@ describe(
       writeFileSync(join(dir, '058_pretend_migration.sql'), 'SELECT 1;\n', 'utf8');
       const intruder = runMigrate();
       assert.equal(intruder.status, 1, intruder.output);
-      assert.match(intruder.output, /reserved probe namespace/);
+      assert.match(intruder.output, /does not declare it/);
       rmSync(join(dir, '058_pretend_migration.sql'), { force: true });
 
       assert.equal(runMigrate().status, 0, 'and the admitted chain still runs');
+    });
+
+    test('the RUNNER refuses an undeclared body written to a DECLARED probe filename', () => {
+      /*
+       * FBL-020-R6 §1.4, through the real process rather than through `validateChainDirectory`
+       * alone. Until R6 this chain admitted its files by FILENAME, so any body at all could be
+       * written to `902_ledger_probe_gamma.sql` and the runner would apply it. The name is now
+       * only half the admission: the body must hash to a digest the chain declares.
+       */
+      writeFileSync(
+        join(dir, '902_ledger_probe_gamma.sql'),
+        toCrlf('CREATE TABLE ledger_probe_smuggled (id integer PRIMARY KEY);\n'),
+        'utf8',
+      );
+      const smuggled = runMigrate();
+      assert.equal(
+        smuggled.status,
+        1,
+        `an undeclared body must REFUSE the run:\n${smuggled.output}`,
+      );
+      assert.match(smuggled.output, /is not an admitted variant of this file/);
+      assert.match(smuggled.output, /902_ledger_probe_gamma\.sql/);
+      assert.equal(
+        scratchExec(`SELECT 1 FROM ledger_probe_smuggled`).status,
+        1,
+        'and nothing it declared was created',
+      );
+
+      // The DECLARED body under the same filename is admitted, so what was refused is the
+      // body and not the name.
+      writeFileSync(join(dir, '902_ledger_probe_gamma.sql'), toCrlf(PROBE_BODIES.gamma), 'utf8');
+      const declared = runMigrate();
+      assert.equal(declared.status, 0, `the declared body must apply:\n${declared.output}`);
+      assert.equal(scratchExec(`SELECT 1 FROM ledger_probe_gamma`).status, 0);
+
+      rmSync(join(dir, '902_ledger_probe_gamma.sql'), { force: true });
+      assert.equal(scratchExec(`DROP TABLE ledger_probe_gamma`).status, 0);
+      assert.equal(
+        scratchExec(`DELETE FROM schema_migrations WHERE filename = '902_ledger_probe_gamma.sql'`)
+          .status,
+        0,
+      );
+      assert.equal(runMigrate().status, 0, 'and the probe chain is clean again');
     });
 
     test('the ledger refuses a malformed digest and a digest with no algorithm', () => {
@@ -723,9 +792,25 @@ describe(
  * every branch is exercised — including the ones a green run never reaches — without needing
  * a database to be present.
  */
-describe('the migration fixture-chain admission rules (FBL-020-R5 §0.4)', () => {
+describe('the migration fixture-chain admission rules (FBL-020-R6 §1.4)', () => {
   const CANONICAL = join(__dirname, '..', 'migrations');
   const chains = loadFixtureChains();
+
+  /** Stages a directory, runs `work` against it, and removes it whatever happens. */
+  function staged(work: (dir: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), 'fbl020-chain-'));
+    try {
+      work(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    }
+  }
+
+  /** Copies `migrations/` into `dir`, which is what both mutating chains start from. */
+  function copyMigrations(dir: string): void {
+    for (const f of readdirSync(CANONICAL).filter((x) => x.endsWith('.sql')))
+      writeFileSync(join(dir, f), readFileSync(join(CANONICAL, f)));
+  }
 
   test('a non-canonical directory with no chain named is REFUSED', () => {
     const decision = decideMode('/tmp/somewhere', CANONICAL, undefined, () => chains);
@@ -791,132 +876,308 @@ describe('the migration fixture-chain admission rules (FBL-020-R5 §0.4)', () =>
     assert.throws(() => decideMode(CANONICAL, CANONICAL, 'pre-057', explode), /must NOT be read/);
   });
 
-  test('every declared PINNED chain matches its committed digests exactly, today', () => {
-    // The `pre-057` chain must equal migrations/ minus 057, and `schema-f76a27a` must equal
-    // the retained fixture. If a pinned digest and the file it pins ever part company, the
-    // CI upgrade job stops working — and it should stop, loudly, here.
+  test('every declared chain matches its committed digests exactly, today', () => {
+    // The `pre-057` chain must equal migrations/ WITHHOLDING 057 AND EVERYTHING AFTER IT,
+    // and `schema-f76a27a` must equal the retained fixture. If a pinned digest and the file
+    // it pins ever part company, the CI upgrade job stops working — and it should stop,
+    // loudly, here.
+    //
+    // FBL-020-R6 §3: the staging rule is stated by NUMBER, not by naming one file. It used
+    // to be "everything except 057", which was the same set only while 057 was the last
+    // migration; with `058` on disk that form would have staged a POST-057 file into a
+    // directory meant to hold the schema as it stood BEFORE 057 — and the chain, correctly,
+    // refuses a file it does not declare. The CI job's staging step carries the same rule.
     const f76 = validateChainDirectory(
       'schema-f76a27a',
       join(__dirname, 'fixtures', 'schema-f76a27a'),
       chains,
-      CANONICAL,
     );
     assert.deepEqual(f76.problems, [], f76.problems.join('\n'));
 
-    const staged = mkdtempSync(join(tmpdir(), 'fbl020-pre057-'));
-    try {
+    staged((dir) => {
       for (const f of readdirSync(CANONICAL).filter((x) => x.endsWith('.sql')))
-        if (!f.startsWith('057_')) writeFileSync(join(staged, f), readFileSync(join(CANONICAL, f)));
-      const pre = validateChainDirectory('pre-057', staged, chains, CANONICAL);
+        if (Number(f.slice(0, 3)) < 57)
+          writeFileSync(join(dir, f), readFileSync(join(CANONICAL, f)));
+      const pre = validateChainDirectory('pre-057', dir, chains);
       assert.deepEqual(pre.problems, [], pre.problems.join('\n'));
 
       // An EXTRA file is refused — this is the case that would let an unreviewed migration
       // ride along inside a directory the chain otherwise admits.
-      writeFileSync(join(staged, '999_unreviewed.sql'), 'SELECT 1;\n', 'utf8');
-      const intruder = validateChainDirectory('pre-057', staged, chains, CANONICAL);
+      writeFileSync(join(dir, '999_unreviewed.sql'), 'SELECT 1;\n', 'utf8');
+      const intruder = validateChainDirectory('pre-057', dir, chains);
       assert.ok(
         intruder.problems.some(
-          (p) => p.includes('999_unreviewed.sql') && p.includes('does not declare'),
+          (p) => p.includes('999_unreviewed.sql') && p.includes('does not declare it'),
         ),
         intruder.problems.join('; '),
       );
-      rmSync(join(staged, '999_unreviewed.sql'), { force: true });
+      rmSync(join(dir, '999_unreviewed.sql'), { force: true });
 
-      // A CHANGED body is refused, and the message says the pin is not a baseline.
-      writeFileSync(join(staged, '055_identity_organization.sql'), 'SELECT 1;\n', 'utf8');
-      const changed = validateChainDirectory('pre-057', staged, chains, CANONICAL);
+      // A CHANGED body is refused, and the message says the digest is not a new baseline.
+      writeFileSync(join(dir, '055_identity_organization.sql'), 'SELECT 1;\n', 'utf8');
+      const changed = validateChainDirectory('pre-057', dir, chains);
       assert.ok(
         changed.problems.some(
-          (p) => p.includes('055_identity_organization.sql') && p.includes('expected canonical-LF'),
+          (p) =>
+            p.includes('055_identity_organization.sql') &&
+            p.includes('is not an admitted variant of this file'),
         ),
         changed.problems.join('; '),
       );
 
-      // A MISSING declared file is refused too.
-      rmSync(join(staged, '055_identity_organization.sql'), { force: true });
-      const missing = validateChainDirectory('pre-057', staged, chains, CANONICAL);
+      // A MISSING required file is refused too.
+      rmSync(join(dir, '055_identity_organization.sql'), { force: true });
+      const missing = validateChainDirectory('pre-057', dir, chains);
       assert.ok(
         missing.problems.some(
-          (p) => p.includes('055_identity_organization.sql') && p.includes('is not present'),
+          (p) =>
+            p.includes('055_identity_organization.sql') &&
+            p.includes('declared REQUIRED by the chain but is not present'),
         ),
         missing.problems.join('; '),
       );
+    });
+  });
+
+  /*
+   * ── FBL-020-R6 §1.4: THE TWO WITHDRAWN ADMISSION RULES ─────────────────────────
+   *
+   * R5 admitted the ledger-probe fixtures by FILENAME and the negative-control 057 by a
+   * COMPUTED RULE about deletions. Both are gone. The four tests below are the proof that
+   * they are gone rather than merely renamed: one for each withdrawn rule at the data
+   * layer, one for each at the admission layer.
+   */
+
+  test('a fixture admitted only by its FILENAME is REFUSED', () => {
+    /*
+     * The exact R5 behaviour, driven at the file the rule used to cover. `ledger-probe`
+     * declared `filename_pattern` and a list of names and NO digests, so any body at all was
+     * admitted under `900_ledger_probe_alpha.sql`. It now carries two digests — the probe
+     * body and the drifted body the changed-body refusal is fired with — and a third body is
+     * refused however plausible its name.
+     */
+    staged((dir) => {
+      writeFileSync(join(dir, '900_ledger_probe_alpha.sql'), PROBE_BODIES.alpha, 'utf8');
+      writeFileSync(join(dir, '901_ledger_probe_beta.sql'), PROBE_BODIES.beta, 'utf8');
+      const admitted = validateChainDirectory('ledger-probe', dir, chains);
+      assert.deepEqual(admitted.problems, [], admitted.problems.join('\n'));
+
+      // The name stays right; only the BODY changes. Under the withdrawn rule this passed.
+      const undeclared =
+        'CREATE TABLE ledger_probe_alpha (id integer PRIMARY KEY, smuggled text);\n';
+      writeFileSync(join(dir, '900_ledger_probe_alpha.sql'), undeclared, 'utf8');
+      const refused = validateChainDirectory('ledger-probe', dir, chains);
+      assert.ok(
+        refused.problems.some(
+          (p) =>
+            p.includes('900_ledger_probe_alpha.sql') &&
+            p.includes('is not an admitted variant of this file') &&
+            p.includes(chainDigest(undeclared)),
+        ),
+        `a body admitted only by its filename must be refused: ${refused.problems.join('; ')}`,
+      );
+      assert.equal(refused.ok, false);
+
+      // And the DRIFTED body, which the refusal battery needs, IS declared — so what was
+      // refused above is the undeclared body and not the act of changing one.
+      writeFileSync(join(dir, '900_ledger_probe_alpha.sql'), PROBE_BODIES.alphaDrifted, 'utf8');
+      assert.deepEqual(validateChainDirectory('ledger-probe', dir, chains).problems, []);
+    });
+  });
+
+  test('the allowlist REFUSES a chain that declares a filename with no checksum', () => {
+    /*
+     * The data-layer half of the same removal. A chain may not come back to filename-only
+     * admission by declaring a file with an empty variant list, and it may not carry the
+     * withdrawn rules' keys at all — `loadFixtureChains` throws before any directory is
+     * compared against anything.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'fbl020-allowlist-'));
+    try {
+      const nameOnly = join(dir, 'name-only.json');
+      writeFileSync(
+        nameOnly,
+        JSON.stringify({
+          chains: {
+            probe: { reason: 'x', files: { '900_p.sql': { required: true, variants: [] } } },
+          },
+        }),
+        'utf8',
+      );
+      assert.throws(
+        () => loadFixtureChains(nameOnly),
+        /FILENAME-ONLY ADMISSION/,
+        'a filename with no digest must be refused at load',
+      );
+
+      for (const key of WITHDRAWN_CHAIN_KEYS) {
+        const withdrawn = join(dir, `withdrawn-${key}.json`);
+        writeFileSync(
+          withdrawn,
+          JSON.stringify({
+            chains: {
+              probe: {
+                reason: 'x',
+                [key]: 'anything',
+                files: {
+                  '900_p.sql': {
+                    required: true,
+                    variants: [{ sha256: 'a'.repeat(64), note: 'n' }],
+                  },
+                },
+              },
+            },
+          }),
+          'utf8',
+        );
+        assert.throws(
+          () => loadFixtureChains(withdrawn),
+          new RegExp(`declares '${key}', which belonged to an admission rule`),
+          `${key} must not be loadable`,
+        );
+      }
+
+      // The shipped allowlist itself loads, so the checks above are not simply refusing
+      // everything.
+      assert.ok(Object.keys(loadFixtureChains(FIXTURE_CHAINS_FILE)).length > 0);
     } finally {
-      rmSync(staged, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     }
   });
 
-  test('the negative-control chain admits a ONE-STATEMENT deletion and nothing else', () => {
+  test('every negative-control deletion variant is declared by the digest the harness produces', () => {
     /*
-     * This is the admission rule that replaces a checksum for the one file the harness is
-     * allowed to mutate. It has to be exactly as strict as it claims: a rule that accepted a
-     * two-statement deletion, or a substitution, would let a control report a satisfied
-     * verdict for a mutation nobody sanctioned.
+     * The allowlist and the harness must agree, and the agreement is COMPUTED rather than
+     * asserted by hand: each control's mutated body is regenerated here from the committed
+     * anchors and canonical 057, and its digest must be one the chain declares for that file.
+     * If 057 is corrected, or an anchor moves, twelve digests change and this fails — which
+     * is the point. The harness must refuse rather than run a mutation nobody declared.
      */
-    const canonical = 'AAA;\nBBB;\nCCC;\n';
-    const oneGone = singleSpanDeletion(canonical, 'AAA;\nCCC;\n');
-    assert.equal(oneGone.ok, true, oneGone.reason);
-    assert.equal(oneGone.deleted, 'BBB;\n');
+    const entry = chains['negative-control-057']?.files['057_identity_boundary_completion.sql'];
+    assert.ok(entry !== undefined, 'the chain must declare the file it mutates');
+    if (entry === undefined) return;
 
-    // A span at either END is still ONE contiguous span, so both are admitted.
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\n', 'BBB;\n').ok, true);
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\n', 'AAA;\n').ok, true);
+    const anchors = loadAnchors();
+    const base = canonical057();
+    const produced = CONTROLS.map((control) => {
+      const anchor = anchors[control.id];
+      assert.ok(anchor !== undefined, `no anchor for ${control.id}`);
+      return {
+        id: control.id,
+        sha256: chainDigest(removeStatement(base, control, anchor as ControlAnchor)),
+      };
+    });
 
-    // TWO separate deletions are refused — including the shape that trims both ends, which
-    // is what a careless anchor pair would produce. Neither the common prefix nor the common
-    // suffix reaches the stretch between them, so the lengths cannot add up.
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\nCCC;\nDDD;\n', 'BBB;\nCCC;\n').ok, false);
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\nCCC;\nDDD;\n', 'AAA;\nCCC;\n').ok, false);
-
-    // A substitution of equal length is rejected by the length check…
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\n', 'AAA;\nXXX;\n').ok, false);
-    // …and a shortening substitution by the prefix/suffix accounting.
-    assert.equal(singleSpanDeletion('AAA;\nBBB;\n', 'AAA;\nX;\n').ok, false);
-    // An insertion cannot make the text shorter.
-    assert.equal(singleSpanDeletion('AAA;\n', 'AAA;\nBBB;\n').ok, false);
-    // Identical text is not a deletion.
-    assert.equal(singleSpanDeletion('AAA;\n', 'AAA;\n').ok, false);
+    assert.equal(produced.length, 12, 'twelve controls, twelve declared variants');
+    for (const { id, sha256 } of produced)
+      assert.ok(
+        entry.variants.some((v) => v.sha256 === sha256 && v.note.includes(id)),
+        `the chain declares no variant ${sha256} noted for ${id}`,
+      );
+    assert.deepEqual(
+      [...entry.variants].map((v) => v.sha256).sort(),
+      produced.map((p) => p.sha256).sort(),
+      'the chain declares exactly the twelve bodies the harness produces, and no others',
+    );
   });
 
-  test('the negative-control chain pins the canonical digest of the file it mutates', () => {
-    // If 057 is corrected and this pin is not updated with it, the harness must refuse rather
-    // than mutate a file nobody reviewed against a digest nobody checked.
-    const chain = chains['negative-control-057'];
-    assert.ok(chain !== undefined && chain.kind === 'single-statement-deletion');
-    if (chain === undefined || chain.kind !== 'single-statement-deletion') return;
-    assert.equal(
-      chain.mutated_file_canonical_sha256,
-      chainDigest(readFileSync(join(CANONICAL, chain.mutated_file))),
-      'the pinned canonical digest of 057 and the file in migrations/ must agree',
-    );
+  test('an UNLISTED deletion variant is REFUSED', () => {
+    /*
+     * The rule R6 §1.4 withdrew admitted ANY body reachable from 057 by deleting one
+     * contiguous span holding one `;` — a large set whose membership was computed, not
+     * reviewed. The three bodies below are all in that set or beside it, none is one of the
+     * twelve, and all three are now refused:
+     *
+     *   1. a single-statement deletion nobody declared — the case the withdrawn rule ADMITTED;
+     *   2. the unmutated canonical 057 — no control produces it;
+     *   3. a two-statement deletion — refused under both rules, kept so the test cannot pass
+     *      merely because the new rule refuses everything.
+     */
+    const text = canonical057();
 
-    const staged = mkdtempSync(join(tmpdir(), 'fbl020-nc-chain-'));
-    try {
-      for (const f of readdirSync(CANONICAL).filter((x) => x.endsWith('.sql')))
-        writeFileSync(join(staged, f), readFileSync(join(CANONICAL, f)));
-      // Unmutated: refused, because nothing was deleted.
-      const unmutated = validateChainDirectory('negative-control-057', staged, chains, CANONICAL);
-      assert.ok(
-        unmutated.problems.some((p) => p.includes('nothing was deleted')),
-        unmutated.problems.join('; '),
+    staged((dir) => {
+      copyMigrations(dir);
+      const first = text.indexOf(';');
+      const undeclaredOneStatement = text.slice(0, first) + text.slice(first + 1);
+      writeFileSync(
+        join(dir, '057_identity_boundary_completion.sql'),
+        undeclaredOneStatement,
+        'utf8',
       );
+      const one = validateChainDirectory('negative-control-057', dir, chains);
+      assert.ok(
+        one.problems.some(
+          (p) =>
+            p.includes('057_identity_boundary_completion.sql') &&
+            p.includes('is not an admitted variant of this file') &&
+            p.includes(chainDigest(undeclaredOneStatement)),
+        ),
+        `an undeclared one-statement deletion must be refused: ${one.problems.join('; ')}`,
+      );
+    });
 
-      // Two statements removed: refused, with the terminator count named.
-      const text = readFileSync(join(CANONICAL, chain.mutated_file), 'utf8').replace(/\r\n/g, '\n');
+    staged((dir) => {
+      copyMigrations(dir);
+      const unmutated = validateChainDirectory('negative-control-057', dir, chains);
+      assert.ok(
+        unmutated.problems.some(
+          (p) =>
+            p.includes('057_identity_boundary_completion.sql') &&
+            p.includes(
+              chainDigest(readFileSync(join(CANONICAL, '057_identity_boundary_completion.sql'))),
+            ),
+        ),
+        `the unmutated 057 is not a control's body and must be refused: ${unmutated.problems.join('; ')}`,
+      );
+    });
+
+    staged((dir) => {
+      copyMigrations(dir);
       const first = text.indexOf(';');
       const second = text.indexOf(';', first + 1);
       writeFileSync(
-        join(staged, chain.mutated_file),
+        join(dir, '057_identity_boundary_completion.sql'),
         text.slice(0, first) + text.slice(second + 1),
         'utf8',
       );
-      const twoGone = validateChainDirectory('negative-control-057', staged, chains, CANONICAL);
+      const twoGone = validateChainDirectory('negative-control-057', dir, chains);
       assert.ok(
-        twoGone.problems.some((p) => p.includes('statement terminator')),
+        twoGone.problems.some((p) => p.includes('is not an admitted variant of this file')),
         twoGone.problems.join('; '),
       );
-    } finally {
-      rmSync(staged, { recursive: true, force: true });
+    });
+
+    // …and a body that IS one of the twelve is admitted, so the chain is not simply closed.
+    staged((dir) => {
+      copyMigrations(dir);
+      const control = CONTROLS[0] as (typeof CONTROLS)[number];
+      const anchor = loadAnchors()[control.id];
+      assert.ok(anchor !== undefined);
+      writeFileSync(
+        join(dir, '057_identity_boundary_completion.sql'),
+        removeStatement(text, control, anchor as ControlAnchor),
+        'utf8',
+      );
+      const declared = validateChainDirectory('negative-control-057', dir, chains);
+      assert.deepEqual(declared.problems, [], declared.problems.join('\n'));
+    });
+  });
+
+  test('every ledger-probe body the battery writes is declared under the filename it occupies', () => {
+    // The bodies live at module scope and the allowlist pins their digests; nothing but this
+    // comparison keeps the two in step, so a probe body that is edited without the allowlist
+    // being updated fails here rather than in the integration battery.
+    const chain = chains['ledger-probe'];
+    assert.ok(chain !== undefined);
+    if (chain === undefined) return;
+    for (const [key, body] of Object.entries(PROBE_BODIES)) {
+      const filename = PROBE_FILENAMES[key as keyof typeof PROBE_BODIES];
+      const entry = chain.files[filename];
+      assert.ok(entry !== undefined, `${filename} is not declared by the ledger-probe chain`);
+      assert.ok(
+        entry?.variants.some((v) => v.sha256 === chainDigest(body)),
+        `the body written as ${key} (${chainDigest(body)}) is not a declared variant of ${filename}`,
+      );
     }
   });
 });

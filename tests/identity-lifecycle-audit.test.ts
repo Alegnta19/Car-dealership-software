@@ -196,20 +196,46 @@ describe(
     }
 
     // ── the LOGIN claim: handle AND exact redirect, both required ─────────
-    test('the login claim requires the OPAQUE HANDLE and the EXACT redirect', async () => {
+    //
+    // FBL-020-R6 §2.2 CHANGED WHAT A REFUSAL LEAVES BEHIND, and this test says so.
+    // R5 recorded a redirect disagreement as `identity.login.replayed` and left the
+    // row `pending` — its state unburned, ready for the next attempt — and this test
+    // asserted that pending row as if it were the property. It was the defect. A
+    // callback that NAMES A REAL TRANSACTION and disagrees with it now ends that
+    // transaction, with its own reason and exactly one terminal audit event.
+    //
+    // The handle case is different in kind and stays different: a claim naming a
+    // handle that exists nowhere touches no row at all, so THIS transaction is
+    // untouched and there is nothing to attribute an event to.
+    async function openLogin() {
       const started = await startLoginTransaction({
         purpose: 'login',
         redirectUri: LOGIN_REDIRECT,
         returnTo: '/',
       });
-      const good = {
-        loginTxnId: started.loginTxnId,
-        redirectUri: LOGIN_REDIRECT,
-        state: started.state,
-        purpose: 'login' as const,
-        nonce: started.nonce,
-        codeVerifier: started.codeVerifier,
+      return {
+        started,
+        good: {
+          loginTxnId: started.loginTxnId,
+          redirectUri: LOGIN_REDIRECT,
+          state: started.state,
+          purpose: 'login' as const,
+          nonce: started.nonce,
+          codeVerifier: started.codeVerifier,
+        },
       };
+    }
+    async function loginStatus(loginTxnId: string) {
+      return (
+        await query(
+          `SELECT status, failure_reason FROM login_transactions WHERE login_txn_id = $1`,
+          [loginTxnId],
+        )
+      ).rows[0] as { status: string; failure_reason: unknown };
+    }
+
+    test('the login claim requires the OPAQUE HANDLE and the EXACT redirect', async () => {
+      const { started, good } = await openLogin();
 
       // R3 claimed by state alone: a callback naming a state it had somehow
       // obtained was claimed even though it had never been handed THIS
@@ -220,22 +246,43 @@ describe(
         null,
         'a claim naming a different transaction handle must lose',
       );
+      // …and THIS transaction is untouched by it: no row was named, so no row moved
+      // and no event was written against one.
+      assert.equal((await loginStatus(started.loginTxnId)).status, 'pending');
+      assert.equal(await eventCount('identity.login.failed', started.loginTxnId), 0);
+      assert.ok(await claimLoginTransactionAtomically(good), 'the correct claim still wins');
+
+      // The REDIRECT disagreement, on a transaction of its own because it is now
+      // terminal: the leg was opened for one registered redirect and presented
+      // another, so the transaction ends rather than staying claimable.
+      const other = await openLogin();
       assert.equal(
         await claimLoginTransactionAtomically({
-          ...good,
+          ...other.good,
           redirectUri: 'http://127.0.0.1:3000/auth/reauth/callback',
         }),
         null,
         'a claim naming a different redirect must lose',
       );
-      // …and the row is still PENDING, so neither refusal burned the transaction
-      const pending = (
-        await query(`SELECT status FROM login_transactions WHERE login_txn_id = $1`, [
-          started.loginTxnId,
-        ])
-      ).rows[0] as { status: string };
-      assert.equal(pending.status, 'pending');
-      assert.ok(await claimLoginTransactionAtomically(good), 'the correct claim still wins');
+      const burned = await loginStatus(other.started.loginTxnId);
+      assert.equal(burned.status, 'failed', 'and it must burn the transaction, not park it');
+      assert.equal(burned.failure_reason, 'callback_redirect_mismatch');
+      assert.equal(
+        await eventCount('identity.login.failed', other.started.loginTxnId),
+        1,
+        'exactly one terminal audit event',
+      );
+      // A LATER CORRECT CALLBACK LOSES — the whole point of burning it.
+      assert.equal(
+        await claimLoginTransactionAtomically(other.good),
+        null,
+        'the correct callback arriving afterwards must lose to the terminal row',
+      );
+      assert.deepEqual(
+        await loginStatus(other.started.loginTxnId),
+        burned,
+        'and it changes nothing: the FIRST terminal fact wins',
+      );
     });
 
     // ── the SERVER ROW is authoritative for the callback ──────────────────

@@ -153,6 +153,20 @@ const TABLE_DECL =
   /\b(?:CREATE\s+TABLE|ALTER\s+TABLE)\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/gi;
 
 /**
+ * `INSERT INTO x (…, authorization_version, …)`: the table is named right there, in
+ * the same statement, so a mention inside THAT COLUMN LIST is attributed to THAT table
+ * and to nothing else.
+ *
+ * It is matched exactly rather than turned into another nearest-preceding anchor, and
+ * the difference is not cosmetic: 057 §5 writes `INSERT INTO audit_events (…)` and
+ * then `UPDATE support_access_requests r SET … authorization_version = …`, so a
+ * nearest-preceding rule that admitted bare `INSERT INTO` would attribute the version
+ * to `audit_events` — a table that carries no such column. Bounding the match to the
+ * parenthesised list cannot make that mistake.
+ */
+const INSERT_COLUMN_LIST = /\bINSERT\s+INTO\s+([a-z_][a-z0-9_]*)\s*\(([^)]*)\)/gi;
+
+/**
  * THE DECLARED EXPECTATION, cross-checked against the derivation below.
  *
  * The derivation is what keeps the guard current; this list is what makes a CHANGE in
@@ -191,8 +205,10 @@ const EXPECTED_OWNED_TABLES = [
  * Two shapes appear in this repository and both are handled:
  *
  *   - the ordinary one, `ALTER TABLE x ADD COLUMN authorization_version …` (or a
- *     CREATE TABLE that declares it), attributed to the nearest preceding
- *     CREATE/ALTER TABLE;
+ *     CREATE TABLE that declares it), attributed to the nearest preceding statement
+ *     that NAMES a table — `CREATE TABLE`, `ALTER TABLE`, or the `INSERT INTO x (…,
+ *     authorization_version, …)` of a trigger body, which names its table just as
+ *     explicitly;
  *   - migration 056's `DO $$ … FOREACH t IN ARRAY ARRAY['tenants','dealer_groups',…]
  *     … EXECUTE format('ALTER TABLE %I ADD COLUMN authorization_version …', t) … $$`,
  *     where the table names exist only as an array of literals. A DO block that
@@ -202,7 +218,26 @@ const EXPECTED_OWNED_TABLES = [
  *
  * A mention that can be attributed to neither is a hard failure, never a skipped line:
  * a guard that silently narrows its own scope is worse than no guard.
+ *
+ * FBL-020-R6 §3 — THE THIRD SHAPE: A QUALIFIED READ. Migration 058 constrains versions
+ * that earlier migrations already declared, so it mentions the column only as
+ * `rb.authorization_version`, `m.authorization_version` and `NEW.authorization_version`
+ * — comparisons, inside trigger bodies and read-only pre-checks. A qualified reference
+ * declares no column and versions no table, so it contributes nothing and requires
+ * nothing.
+ *
+ * WHY THAT DOES NOT NARROW THE GUARD, stated because a parser that starts ignoring
+ * lines is exactly what the paragraph above warns about. A table enters the owned set
+ * only by having the column ADDED to it, and an addition is always written unqualified
+ * — `ADD COLUMN authorization_version`, `SET authorization_version = …`, a CREATE TABLE
+ * column list. Every one of those keeps the original rule verbatim, DO-block ARRAY
+ * requirement included. No table in this repository is derivable from a qualified
+ * mention alone, and the derived set is the same twelve tables before and after this
+ * clause — which `EXPECTED_OWNED_TABLES` above pins independently, so a narrowing here
+ * fails the run rather than passing quietly.
  */
+const QUALIFIED_COLUMN = /[.]\s*$/;
+
 function ownedTables(): { tables: Set<string>; failures: string[] } {
   const tables = new Set<string>();
   const failures: string[] = [];
@@ -217,7 +252,16 @@ function ownedTables(): { tables: Set<string>; failures: string[] } {
     const doBlock = /DO\s+\$\$[\s\S]*?\$\$/gi;
     for (let m = doBlock.exec(original); m !== null; m = doBlock.exec(original)) {
       const block = m[0];
-      if (/\bauthorization_version\b/i.test(block)) {
+      // A block whose every mention is QUALIFIED is reading the column, not adding
+      // it — migration 058's reconciliation pre-checks are exactly that shape.
+      let versions = false;
+      {
+        const mention = /\bauthorization_version\b/gi;
+        for (let c = mention.exec(block); c !== null; c = mention.exec(block)) {
+          if (!QUALIFIED_COLUMN.test(block.slice(0, c.index))) versions = true;
+        }
+      }
+      if (versions) {
         const arrays = /ARRAY\s*\[([^\]]*)\]/gi;
         let named = 0;
         for (let a = arrays.exec(block); a !== null; a = arrays.exec(block)) {
@@ -240,9 +284,27 @@ function ownedTables(): { tables: Set<string>; failures: string[] } {
     for (let m = TABLE_DECL.exec(sql); m !== null; m = TABLE_DECL.exec(sql)) {
       declarations.push({ index: m.index, table: m[1]!.toLowerCase() });
     }
+    // 2a. every mention that sits inside an INSERT's own column list, resolved exactly
+    const inColumnList = new Map<number, string>();
+    INSERT_COLUMN_LIST.lastIndex = 0;
+    for (let m = INSERT_COLUMN_LIST.exec(sql); m !== null; m = INSERT_COLUMN_LIST.exec(sql)) {
+      const listStart = m.index + m[0].indexOf('(') + 1;
+      const mention = /\bauthorization_version\b/gi;
+      for (let c = mention.exec(m[2]!); c !== null; c = mention.exec(m[2]!)) {
+        inColumnList.set(listStart + c.index, m[1]!.toLowerCase());
+      }
+    }
     const column = /\bauthorization_version\b/gi;
     for (let m = column.exec(sql); m !== null; m = column.exec(sql)) {
       const at = m.index;
+      // `rb.authorization_version` / `NEW.authorization_version`: a read of a column
+      // another migration declared. It owns nothing and demands nothing.
+      if (QUALIFIED_COLUMN.test(sql.slice(0, at))) continue;
+      const named = inColumnList.get(at);
+      if (named !== undefined) {
+        tables.add(named);
+        continue;
+      }
       const owner = [...declarations].reverse().find((d) => d.index < at);
       if (owner === undefined) {
         failures.push(

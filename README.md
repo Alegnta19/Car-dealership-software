@@ -106,7 +106,8 @@ migrations/
   056_identity_contract_completion.sql  forward-only contract completion (additive)
   057_identity_boundary_completion.sql  the identity boundary: login_transactions,
                                      policy_decision_matched_bindings, reconciliations
-                                     and constraints (edited in place, not yet accepted)
+                                     and constraints (FROZEN by FBL-020-R6 §1.3; further
+                                     schema changes go in a new 058)
 scripts/                             migrate runner, quality ratchet, schema fingerprint,
                                      architecture checkers, MPI seed
 tests/                              cross-package suites: unit, docs, HTTP contract,
@@ -279,10 +280,10 @@ ratcheted: `npm run ratchet:check` fails on any new strict-mode or lint finding 
 
 ### The gates that check the checks
 
-A green suite is not by itself evidence that the suite is holding anything, so **six** gates
+A green suite is not by itself evidence that the suite is holding anything, so **seven** gates
 exist to make the evidence mechanical rather than trusted. (This sentence read "four" while
-listing five bullets until FBL-020-R5; the count is the list, and the list has since grown by
-one.)
+listing five bullets until FBL-020-R5; the count is the list, and the list has since grown
+twice.)
 
 - **The populated upgrade drill.** `tests/fixtures/legacy-identity-seed-pre-057.sql` seeds NONEMPTY
   legacy identity data against the schema as it stood before migration `057`, and
@@ -309,21 +310,51 @@ one.)
   appears.
 - **The order and the blueprint it comes from.** The active order text is checked in at
   `docs/orders/FBL-020-R5.md`, verbatim and in full, canonical-LF SHA-256
-  `75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`
+  `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`
   (`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`), with a clause register that marks
   **all twenty-nine clauses as held verbatim**. An earlier revision of this bullet described
   that register as listing "the clauses this repository does NOT hold"; that was an artefact
   of the order having been routed to the implementation waves one section at a time, and it
   is **withdrawn** — no clause is registered as unheld, and
-  `tests/delivery-documentation.test.ts` fails if one ever is again. Which blueprint governs —
-  and which one a reviewer is probably holding, since the two number their sections
-  differently — is `docs/orders/BLUEPRINT-PROVENANCE.md`. The superseded Version 1.0 blueprint
-  is committed beside it and `tests/delivery-documentation.test.ts` reads its bytes, so the
-  recorded facts cannot drift from the document.
+  `tests/delivery-documentation.test.ts` fails if one ever is again. **The R6 corrective order
+  is checked in beside it at `docs/orders/FBL-020-R6.md`** — the R6 gate's finding C3 — with
+  §4.3 and the gate's correction order held verbatim, a clause register for the rest, and a
+  plain statement that the verbatim text of §1, §2, §3 and §4.1–§4.2, §4.4–§4.6 is NOT in this
+  repository's hands and is therefore marked _(derived)_ rather than paraphrased into quotes.
+  Which blueprint governs, and what a bare §14 citation resolves to in each — the two number
+  their sections differently — is `docs/orders/BLUEPRINT-PROVENANCE.md`. **BOTH** blueprints
+  are committed beside it, and `tests/delivery-documentation.test.ts` reads the bytes of each,
+  so the recorded facts cannot drift from the documents. What the two project copies outside
+  this repository hold is UNKNOWN HERE, and no gate here asserts it in either direction.
+- **The final state, including its prose.** `docs/evidence/FBL-020-FINAL-STATE.json` is the
+  one record of which commits exist, which exact-SHA `ci.yml` run measured which of them
+  with what per-job conclusions, whether the commit budget was kept and whether the revision
+  may be submitted; `scripts/check-final-state.ts` checks that record against **git** — the
+  commits exist, their subjects match, and the recorded list is exactly the commits in the
+  recorded range — against the run data, and then sentence by sentence against this README,
+  the delivery report, the requirement map, KNOWN-LIMITATIONS and the provenance record. It
+  exists because the figure gate above compares NUMBERS: FBL-020-R5 shipped a delivery
+  report naming a red `HEAD` that was no longer `HEAD`, a KNOWN-LIMITATIONS repeating that
+  no CI run existed, and a requirement map still awaiting a run that had already happened —
+  and every figure gate stayed green throughout, because not one of those sentences is a
+  number.
 
 **Every R5 clause is UNVERIFIED until the final package proves it** (the order's Appendix A).
 Nothing in this README closes one, and no "closed"/"discharged" claim about an R5 clause
 stands anywhere in this repository as a governing status.
+
+**THE FINAL CODE-BEARING COMMIT IS `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32190154935 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
+The FBL-020-R6 work sits in the working tree on top of it, uncommitted by instruction, so no
+CI run covers it; the one-commit budget was violated by two commits, both of which failed
+their own runs. §1 and §1.1 of `docs/FBL-020-DELIVERY-REPORT.md` carry the tables, and
+**FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN** — §3.1 requires the governing
+Version 2.0 blueprint in both designated project copies; the document itself is committed here
+at `docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, and whether
+those two copies hold it is not observable from this repository, which can neither write to
+nor read that record. An earlier version of this sentence said the blueprint "has not reached
+the reviewed project record"; that is a claim about a record nothing here can see, and it is
+**withdrawn**.
 
 **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED.** Every provider property is proven against a
 deterministic local issuer and a provider-neutral fake, and the WorkOS adapter itself is invoked

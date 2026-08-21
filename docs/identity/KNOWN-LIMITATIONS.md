@@ -2,9 +2,9 @@
 
 **Current as of FBL-020-R5.** Stated plainly so the next order starts from facts. The
 active order text is checked in at `docs/orders/FBL-020-R5.md`, canonical-LF SHA-256
-`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`
-(`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`); which blueprint governs, and which
-one a reviewer is holding, is `docs/orders/BLUEPRINT-PROVENANCE.md`.
+`83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`
+(`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`); which blueprint governs, and what a bare
+§14 citation resolves to in each, is `docs/orders/BLUEPRINT-PROVENANCE.md`.
 
 **Every R5 clause is UNVERIFIED until the final package proves it** (that order's
 Appendix A). Nothing in this document closes a clause, and any earlier statement anywhere in
@@ -110,6 +110,28 @@ re-run the drill.
   `migration-upgrade` job comparing two fingerprints. Local runs corroborate only:
   catalog text differs across PostgreSQL builds, so a local value is not the
   authoritative one.
+  **FBL-020-R6 §3 found the comparison itself to be unsound and fixed it.**
+  `scripts/schema-fingerprint.ts` sorted functions by name alone, and `pgcrypto` installs
+  overloads that tie on the name — so two databases carrying the SAME schema could return
+  the tied rows in different physical orders and the job would compare a set against a
+  permutation of itself. It did exactly that on this order's drill: everything but the
+  function list matched, and the fingerprints differed. The sort is now `proname` plus
+  `pg_get_function_identity_arguments`, which is unique, and the two paths converge on one
+  value. Every fingerprint taken before that change is a value from a nondeterministic
+  ordering and should not be quoted.
+- **FBL-020-R6 §3's database controls are proved by dropping them, not by `npm test`.**
+  The §3 rules live in migration `058` as CHECKs, an index and triggers, so the ordinary
+  mutation runner cannot reach them: it edits TypeScript, and the suite runs against a
+  database where `058` has already been applied. `scripts/database-control-mutations.ts`
+  is the counterpart — it copies the migrated database, DROPS one control (or removes one
+  anchored clause from one trigger function, read out of `058` itself), requires a
+  SPECIFICALLY NAMED test to die, restores the control and requires the same test to pass
+  again. Twenty-two checks, zero survivors, gated in CI — the count is
+  `grep -c "^    id: '" scripts/database-control-mutations.ts`, and it moved because R6-R6
+  added the two the D1 and D4 findings needed. What `npm test` alone still does not
+  catch is a later migration that quietly drops one of these controls: the battery would
+  go red, but only because the named tests would start failing — there is no separate
+  assertion that the controls exist.
 - **The delivery report's own numbers.** `docs/FBL-020-DELIVERY-REPORT.md`
   carries test counts, checksums, ratchet values and CI evidence. **No gate pins
   any of them**, which is how the R2 report came to describe a head two commits and
@@ -133,16 +155,19 @@ re-run the drill.
   under the report's own heading "The changed-path summary", beside the two commands that
   reproduce them; find it by that heading, not by a number.
   Migration checksums are the one part with a defence: the frozen chain is published beside
-  git blob OIDs, so a stale value can be caught by re-deriving it — and `057`, which is
-  still being edited in place, is deliberately left unpinned in both this repository's data
-  dictionary and the report for the same reason. THAT ADVICE IS NOW NARROWER THAN IT WAS, and the change is a
+  git blob OIDs, so a stale value can be caught by re-deriving it — and `057` was
+  deliberately left unpinned in both this repository's data dictionary and the report while
+  it was still being edited in place. **FBL-020-R6 §1.3 FROZE `057`**, so that reason has
+  lapsed; the pin is a matter for the revision that next publishes the chain, and until
+  then the digest is re-derivable from `scripts/migration-manifest.ts`. THAT ADVICE IS NOW NARROWER THAN IT WAS, and the change is a
   gate rather than a promise: every run-produced or script-produced figure in that report
   and in the requirement map is read from its own artifact or constant by
-  , which fails the build when a published number and
-  its source disagree — by marked span or by restated prose. THREE figures remain outside
-  it and each is labelled where it appears: the Version 2.0 blueprint’s byte length, the
-  quality ceilings below, and the changed-path counts. Treat those three as
-  true-when-written and re-measure before quoting them.
+  `scripts/check-published-figures.ts`, which fails the build when a published number and
+  its source disagree — by marked span or by restated prose. THREE figures used to sit
+  outside it, each labelled where it appeared. NONE DO NOW: the Version 2.0 blueprint's byte
+  length and the quality ceilings below are derived from that document's own bytes since
+  FBL-020-R6 committed it, and the changed-path counts are no longer published at all
+  because a working-tree diffstat cannot stay true long enough to be worth labelling.
   The risk is live, not hypothetical. R4's report carried a 163-row per-file diffstat table;
   the final review pass of R3 found its row for **this file** stale, and recording that very
   finding here moved the same row again. **That table was deleted in this revision rather
@@ -152,8 +177,7 @@ re-run the drill.
   table in the report to hold it.
 
 - **The ratchet ceilings are a document, not a gate.** The ceilings are
-  **59 / 136 / 23** (_NOT GATE-CHECKED: readable only in the Version 2.0 blueprint_),
-  defined by the GOVERNING blueprint
+  **59 / 136 / 23**, defined by the GOVERNING blueprint
   (`Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, sha256
   `556d4e10…`, §14.3, "R2 gate and stop rule": _"Quality ceilings remain tsc-strict
   <=59, eslint <=136 and format <=23."_).
@@ -162,12 +186,16 @@ re-run the drill.
   "corrected" the reporting to match the ADR on the grounds that it was the only
   place in the repository that stated them. Both are reconciled to the blueprint
   now; `docs/FBL-020-DELIVERY-REPORT.md` carries the full history under its
-  "Verification evidence" heading. **A reviewer holding only the Version 1.0 blueprint
-  cannot verify these three numbers from anything in the project record**: the word
-  "ceiling" appears nowhere in that document, and it appears nowhere in the checked-in R5
-  order text either (`grep -i ceiling docs/orders/FBL-020-R5.md` → nothing). An earlier
-  revision of `docs/orders/BLUEPRINT-PROVENANCE.md` said the order text restated them; that
-  was false and is withdrawn there.
+  "Verification evidence" heading. **These three numbers ARE verifiable from this
+  repository**, because FBL-020-R6 committed the Version 2.0 document into it:
+  `scripts/check-published-figures.ts` derives each of them from that file's paragraph text,
+  and `tests/delivery-documentation.test.ts` asserts the sentence occurs EXACTLY ONCE there
+  and that the word "ceiling" appears nowhere in the Version 1.0 document. What remains true
+  is the narrower statement: a reader holding only the Version 1.0 **document** cannot find
+  them, and neither can the checked-in R5 order text
+  (`grep -i ceiling docs/orders/FBL-020-R5.md` → nothing). Two earlier claims are withdrawn
+  in `docs/orders/BLUEPRINT-PROVENANCE.md`: that the order text restated them, and that they
+  could not be checked from this project record at all.
   Independently of which number is right: `scripts/quality-ratchet.ts` implements
   no ceiling concept whatsoever (`grep -c ceiling` → 0); `check` refuses growth
   against `quality-baselines.json` per-total and per-file, and nothing more. Any
@@ -247,9 +275,16 @@ re-run the drill.
   reconciliation, which can only happen once, on a database that predates the
   migration. Its `provenIn` / `provenBy` therefore name
   `scripts/verify-upgrade-state.ts` and its check id
-  `audit_supersession_is_recorded` rather than a `test(…)`. The audit-inventory
-  gate verifies the file contains that string; the assertion itself runs in the
-  CI upgrade job, not in `npm test`.
+  `audit_grantless_supersession_is_recorded_with_its_reason` rather than a
+  `test(…)`. The audit-inventory gate verifies the file contains that string; the
+  assertion itself runs in the CI upgrade job, not in `npm test`.
+  **FBL-020-R6-R6 §D9 corrected the id printed here.** This paragraph used to name
+  `audit_supersession_is_recorded`, which is not the inventory's `provenBy` value
+  and is not a string in `scripts/verify-upgrade-state.ts` — an id that resolves
+  nowhere, cited as though a reader could look it up. The audit-inventory gate
+  compared the inventory against the script and was satisfied; NOTHING compared
+  this document's restatement of the id against either, which is exactly the space
+  the R5 and R6 gates kept finding defects in.
 
 - **The refresh-lease conditional write is unpinned defence-in-depth.** The claim
   UPDATE in `packages/identity-access/src/session.ts` carries
@@ -272,17 +307,27 @@ re-run the drill.
 
 ## Open at FBL-020-R5 submission — disclosed, not closed
 
-**Five** items are open here. **Four were found by R4's own final gate** and are still open
-at R5 submission, at the repository owner's explicit instruction, rather than held for a
-further correction pass; R5 did not close them and does not claim to. **The fifth — the
-untested `session_establishment_failed` login exit — was found by THIS revision's
-document-reconciliation pass** and is new, not carried: it is listed here because the
-comment that concealed it has been corrected and the gap it concealed has not.
+**FOUR** items are open here, all of them found by R4's own final gate and still open at
+submission, at the repository owner's explicit instruction, rather than held for a further
+correction pass; neither R5 nor R6 closed them and neither claims to.
 
-None of the five is a runtime authorization defect. Four are gaps in the **guard
-scaffolding** or in the precision of a header; the fifth is missing test coverage of a
-terminal-state exit that the code does take. They are listed here so the architect can weigh
-them directly instead of discovering them.
+**A FIFTH ITEM STOOD HERE AND IS NOW CLOSED — the untested `session_establishment_failed`
+login exit.** FBL-020-R6 §4.2 covered it with a route-level test,
+_a login whose LOCAL SESSION cannot be established is terminal, with ONE audit event_ in
+`tests/login-admission.test.ts`, which drives a real `GET /auth/callback` against a valid
+provider exchange while a `BEFORE INSERT` trigger makes the local session write impossible,
+and then asserts the terminal state (`failed` / `session_establishment_failed`), the single
+terminal audit event (`identity.login.started`, `identity.login.claimed`,
+`identity.login.failed` and nothing else) and that no session, credential or success event
+survives. The control is registered in `scripts/mutation-kill.ts` as
+`session_establishment_failure_left_pending`, so CI kills it rather than a reader trusting
+this paragraph: deleting the route's `failLoginTransaction(…, 'session_establishment_failed')`
+call takes that named test from pass to fail. `docs/identity/AUTH-FLOWS.md` no longer says
+one of the nine reasons reaches no test, because none does.
+
+None of the four is a runtime authorization defect. All are gaps in the **guard
+scaffolding** or in the precision of a header. They are listed here so the architect can
+weigh them directly instead of discovering them.
 
 - **Three declared residue SHAPES have no fixture behind them.** The bulleted list above
   names **four residue CLASSES** for the audit-inventory gate, and the arithmetic is worth
@@ -306,6 +351,32 @@ them directly instead of discovering them.
      which is the standard classes 1 and 2 meet. _Consequence: a future edit could close or
      widen one of those three and no test would notice._
 
+- **`058` §0's ABSENT-BINDING residue shape has no committed control.** §0 reconciles the
+  normalized authority rows `057` never backfilled, and a decision it cannot reconcile is
+  left whole in a RESIDUE at `evidence_version` 1. The residue has three shapes: an array
+  naming a binding that no longer exists or was never the decision actor's; a recorded
+  version the binding has never reached or that is below 1; and the same binding named
+  twice. **The retained pre-057 fixture carries only the VERSION shape**, and that one is
+  asserted exactly — which decisions were normalized, at which ordinality, from which
+  binding at which version, and that the unreconciled rows survived byte-for-byte — by
+  `scripts/verify-upgrade-state.ts --phase=post-057` on every drill run. The absent-binding
+  shape reaches the same branch by construction (one LEFT JOIN and one `rb.role_binding_id
+IS NULL` test — there is no second code path), but **no fixture and no control drives it**.
+  <!--final-state:withdrawn-->
+
+  An earlier revision of `migrations/058_policy_evidence_reconstructable.sql` and of
+  `docs/FBL-020-DELIVERY-REPORT.md` closed this gap with the words "MEASURED, NOT ARGUED",
+  citing a one-off experiment on a drill database — deleting the binding a named retained
+  decision points at, and observing three residue decisions instead of two. **Nothing in
+  this repository re-runs it.** That is a cited control that does not exist in the tree, and
+  both citations are **withdrawn** rather than restated. This bullet is what replaced them.
+  <!--/final-state-->
+
+  _Consequence: if the LEFT JOIN were replaced by an INNER JOIN, the absent-binding decision
+  would silently vanish from the reconciliation instead of landing in the residue, and the
+  drill would stay green. Closing this needs a control that copies the post-057 drill
+  database, deletes one named binding, applies `058` and asserts the residue classification._
+
 - **One audit-inventory rule has no test, under a header saying every rule does.**
   `scripts/check-audit-inventory.ts` states "EVERY RULE IN THIS FILE IS TESTED". The
   variant-overflow branch — a third, independently-conditioned raise of
@@ -321,36 +392,6 @@ them directly instead of discovering them.
   drive them directly — was not applied here. _Consequence: an owner declaration that
   stops matching a real writer can sit unnoticed._
 
-- **One LOGIN failure reason reaches no test at all, and a comment said otherwise.**
-  `session_establishment_failed` is written by `apps/api/src/routes/auth.ts` when the local
-  session cannot be established after a successful exchange. It is declared in
-  `LoginTransactionFailureReason`, described in `AUTH-FLOWS.md`, and **matched by no
-  assertion anywhere**: `grep -rn session_establishment_failed tests/` finds hits in exactly one
-  file, `tests/login-admission.test.ts`, and every one of them is inside a COMMENT — no
-  assertion anywhere reads the value.
-  The comment is the finding. `tests/login-admission.test.ts` justified not covering three
-  internal reasons — `provider_exchange_failed`, `token_verification_failed` and
-  `session_establishment_failed` — by asserting that "each is already driven to its own
-  terminal state and single audit event by `tests/identity-lifecycle-audit.test.ts`
-  (_every provider-side failure reaches exactly ONE terminal state and ONE audit event_)".
-  Both halves were wrong. That test drives **REAUTHENTICATION** transactions
-  (`startStepUp`, `failReauthentication`, `identity.reauthentication.failed`), not login
-  transactions — a different transaction kind — and its reason list is
-  `provider_exchange_failed, impersonation_detected, token_verification_failed,
-identity_not_admitted, binding_mismatch`, which **omits `session_establishment_failed`
-  entirely**. The comment has been rewritten to say what is actually covered and by which
-  named test; this bullet records the residue that rewriting exposed.
-  What IS covered on the login leg: `token_verification_failed` reaches one terminal state
-  with one reason by _a claimed transaction that fails is terminal WITH A REASON and can
-  never become succeeded_ (`tests/identity-boundary.test.ts`) and writes exactly one
-  `identity.login.failed` event by _the audit inventory is complete, and every transition in
-  it writes its event_ (`tests/identity-lifecycle-audit.test.ts`).
-  `provider_exchange_failed` appears on the login leg only as a REFUSED re-termination of an
-  already-succeeded transaction, which proves absorption rather than terminalization.
-  _Consequence: the route's `session_establishment_failed` exit is unexercised; a future
-  edit could stop terminalizing it and nothing would fail. Closing this is a test addition,
-  which this documentation revision does not make._
-
 - **The shared resolver's header is marginally broader than its code.**
   `scripts/static-string-resolver.ts` paragraph 1 lists `.reduce` accumulation and
   template tags among what it "resolves"; the code treats a `.reduce` fold and a
@@ -360,24 +401,63 @@ identity_not_admitted, binding_mismatch`, which **omits `session_establishment_f
   behaviour is correct and fail-closed in every case; the prose overstates the reading
   power.
 
-Two things these five are **not**: none of them is a mandatory gate — the undischarged gates
+Two things these items are **not**: none of them is a mandatory gate — the undischarged gates
 are listed in `docs/FBL-020-DELIVERY-REPORT.md` under its "Gates NOT DISCHARGED" heading,
 and these are not among them — and none is a runtime access-control hole that an
 unauthenticated or unauthorized caller can reach. For the four guard-scaffolding items a
-developer must author the code in question; for the fifth, the exit is reachable but its
-outcome is a refused login. The identity boundary itself (admission, tuple constraints,
-evidence completeness, lifecycle audit, support expiry, owned mutations, revocation) is
-pinned by tests proven to fail when the control is reverted. What is claimed for the gates
-themselves is only what was measured, and where it was measured: the report's "Verification
-evidence" section records local runs on this tree, and **no CI run exists for it**. Two
-earlier code-bearing commits were pushed and **both FAILED their exact-SHA `ci.yml` run** —
-`52e1567` (run 32162114699) and `0e99ecd` (run 32168154239). Neither failure is hidden and
-neither is a discharge; §1 and §2.1 of the delivery report carry the runs and the corrections.
+developer must author the code in question. The identity boundary itself (admission, tuple
+constraints, evidence completeness, lifecycle audit, support expiry, owned mutations,
+revocation) is pinned by tests proven to fail when the control is reverted.
+
+### The CI state, stated once and exactly (FBL-020-R6 §4.4)
+
+**THE FINAL CODE-BEARING COMMIT IS `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32190154935 COMPLETED WITH 4 OF 4 JOBS
+SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
+the single committed record both documents read is
+`docs/evidence/FBL-020-FINAL-STATE.json`.
+
+**NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT
+COMMIT.** The R6 order forbids committing and pushing, so §1–§4 of R6 sit in the working
+tree; the delivery report's "Verification evidence" section records the local runs that
+measured them, and a local run is not a CI run.
+
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 3 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+1, 2 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** The two that failed
+were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red each time;
+the third, `174c789`, is the green one above. Delivery report §1.1 carries the table.
+
+<!--final-state:withdrawn-->
+
+This section used to end: "the report's Verification evidence section records local runs on
+this tree, and **no CI run exists for it**. Two earlier code-bearing commits were pushed and
+both FAILED their exact-SHA `ci.yml` run." Both halves were false by the time they were
+read — a green run existed for the final commit, and three code-bearing commits existed, not
+two. `scripts/check-final-state.ts` refuses both sentences outside this block.
+
+<!--/final-state-->
+
+## The R6 order text is only PARTLY checked in (FBL-020-R6 gate finding C3)
+
+`docs/orders/FBL-020-R6.md` now exists, and it is what finding C3 required: without it, R6
+§4.3 was both unaddressed and undisclosed, so a reviewer could not learn what had been
+skipped. **What that file can hold verbatim, it holds verbatim:** §4.3, quoted in full by the
+gate, and the gate's own correction order.
+
+**What it cannot hold is the verbatim text of §1, §2, §3 and §4.1–§4.2, §4.4–§4.6.** That
+text was routed to the implementation waves section by section and is not in this
+repository's hands. The clause register in Part 2 of that file therefore records those
+clauses by identifier and by the subject **this repository's own artifacts cite them under**,
+and marks every such row _(derived)_. No paraphrase is presented as an order's words.
+
+This is an **OPEN** item, not a closed one. It is the same defect the R5 order file carried —
+that file recorded some clauses as "text not held" and was corrected when the text arrived —
+and it closes the same way: by the text arriving.
 
 ## Blueprint citations that do not say which document (FBL-020-R5 §3.1)
 
-`§14.3` names FBL-000 in the Version 1.0 blueprint a reviewer holds and FBL-020-R2 in the
-Version 2.0 governing document. Every markdown document in this repository is held to
+`§14.3` names FBL-000 in the superseded Version 1.0 blueprint and FBL-020-R2 in the
+governing Version 2.0 document, both of which are committed here. Every markdown document in this repository is held to
 naming the version, the file or the digest — `tests/delivery-documentation.test.ts` fails
 otherwise. **Three source files are not, and they are declared rather than quietly
 tolerated:**
@@ -418,23 +498,31 @@ NAMES — `the worker job registry, through the compiled entry point (FBL-020-R5
 `every registered worker job performs its transition exactly once (FBL-020-R5 §4.8)` — and
 those names are pinned verbatim by `docs/FBL-020-R5-REQUIREMENT-MAP.json` and checked by
 `scripts/check-requirement-map.ts`. Renaming them is a coordinated code-and-map change, which
-is not what a document-reconciliation pass may make. **Nothing in this repository claims
-`§4.8` exists**: the delivery report names it as a citation the order does not use, and this
-entry is the register of where it survives.
+is not what a document-reconciliation pass may make. **No PROSE in this repository claims
+`§4.8` exists**, and the narrowing is the point: the seven citations counted above DO claim
+it, because a citation is a claim, which is why they are registered as a defect rather than
+waved through. The delivery report names `§4.8` as a citation the order does not use, and
+this entry is the register of every place it survives.
 
 ## The census reads a host, and one probe still depends on a daemon
 
 **`scripts/migration-census.ts` classifies the docker-compose volume as `persistent`, and
 when the Docker daemon is unreachable that probe's verdict falls to `indeterminate`.** An
-indeterminate persistent environment blocks §0.2 by design — that is the fail-closed rule
-working — but it means the §0.2 POSITION depends on whether a daemon happens to be running
-on the host taking the census, and the CI `verify` job does not otherwise use Docker or
-declare it. On this host the daemon is up and the position is `EDIT_057_IN_PLACE`; on a
-runner the probe resolves without blocking, and the two exact-SHA runs reached steps far
-past the census, which corroborates it. It is recorded here rather than fixed because
-making it unconditional would mean either trusting an uninspected environment — the exact
-error §0.2 exists to prevent — or declaring Docker a census dependency, which is a change
-to what the order asks for. A reviewer should know the position has a host dependency.
+indeterminate persistent environment blocks the in-place branch by design — that is the
+fail-closed rule working — but it means the POSITION depends on whether a daemon happens to
+be running on the host taking the census, and the CI `verify` job does not otherwise use
+Docker or declare it. It is recorded here rather than fixed because making it unconditional
+would mean either trusting an uninspected environment — the exact error the rule exists to
+prevent — or declaring Docker a census dependency, which is a change to what the order asks
+for. A reviewer should know the position has a host dependency.
+
+**As of FBL-020-R6 §1.3 this dependency cannot change the branch, and that is worth stating
+plainly.** The committed operator census reports `FREEZE_057_AND_ADD_058`: one cluster
+counted with the persistent ones holds a form of `057`, and many more on the host cannot be
+classified at all, so the negative §1.3 requires is unproven and `057` is frozen. A daemon
+that went away would turn one more probe indeterminate, which lands on the same branch. Only a census in which
+EVERY environment is classified AND every probe answers `no` permits editing `057` in
+place, and this host is not that.
 
 Twice now the same defect class has been found in this file: an environment that CANNOT be
 inspected and an environment that IS NOT THERE were scored alike. Both are fixed (the port

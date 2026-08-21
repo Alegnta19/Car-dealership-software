@@ -132,7 +132,7 @@ configuration that turns them on. Enabling them is a separate order.
 
 ---
 
-## R2 corrections (FBL-020-R2 — Version 2.0 blueprint, `Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, §14.3; in the Version 1.0 document a reviewer holds, the same order is §14.5)
+## R2 corrections (FBL-020-R2 — Version 2.0 blueprint, `Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, §14.3; in the superseded Version 1.0 document, `Car_Dealership_SaaS_Architecture_Blueprint.docx`, the same order is §14.5)
 
 ### Issuer binding is mandatory
 

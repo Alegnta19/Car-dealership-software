@@ -252,8 +252,8 @@ export function citationIsQualified(neighbourhood: string, qualifiers: string[])
 
 /**
  * Files outside the delivery documents that cite a blueprint section by number WITHOUT
- * saying which document. `§14.3` names FBL-000 in the Version 1.0 document the reviewer
- * holds and FBL-020-R2 in the Version 2.0 governing one, so an unqualified citation is
+ * saying which document. `§14.3` names FBL-000 in the superseded Version 1.0 document
+ * and FBL-020-R2 in the governing Version 2.0 one — both committed here, so an unqualified citation is
  * ambiguous by construction.
  * The documents are required to disambiguate every citation
  * (`tests/delivery-documentation.test.ts`); source comments and the migration header cannot

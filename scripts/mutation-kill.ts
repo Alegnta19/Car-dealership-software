@@ -211,13 +211,13 @@ export const MUTATIONS: Mutation[] = [
   {
     id: 'fixture_chain_digests_not_compared',
     control:
-      "a declared chain's files must match their FIXED committed digests; a chain that " +
-      'accepted any body would be an allowlist of directory names, not of contents',
+      "a declared chain's files must match a DECLARED CANONICAL DIGEST; a chain that " +
+      'accepted any body would be an allowlist of names, not of contents (FBL-020-R6 §1.4)',
     file: 'scripts/migration-fixture-chains.ts',
-    from: '    if (found.sha256 !== expected)',
-    to: '    if (false && found.sha256 !== expected)',
+    from: '    if (!entry.variants.some((v) => v.sha256 === found.sha256))',
+    to: '    if (false && !entry.variants.some((v) => v.sha256 === found.sha256))',
     testFile: 'tests/migration-ledger.test.ts',
-    testName: 'every declared PINNED chain matches its committed digests exactly, today',
+    testName: 'a fixture admitted only by its FILENAME is REFUSED',
   },
   {
     id: 'fixture_chain_admits_undeclared_files',
@@ -225,22 +225,21 @@ export const MUTATIONS: Mutation[] = [
       'a file the chain does not declare is refused — this is the one gap through which an ' +
       'unreviewed migration could ride along inside an otherwise admitted fixture',
     file: 'scripts/migration-fixture-chains.ts',
-    from: '  for (const f of present)\n    if (!expectedNames.has(f))',
-    to: '  for (const f of present)\n    if (false && !expectedNames.has(f))',
+    from: '    if (entry === undefined) {\n      problems.push(',
+    to: '    if (false && entry === undefined) {\n      problems.push(',
     testFile: 'tests/migration-ledger.test.ts',
-    testName: 'every declared PINNED chain matches its committed digests exactly, today',
+    testName: 'every declared chain matches its committed digests exactly, today',
   },
   {
-    id: 'single_span_deletion_accepts_anything',
+    id: 'fixture_chain_admits_by_filename_only',
     control:
-      'the negative-control chain admits ONLY the canonical migration with one contiguous ' +
-      'span removed; a looser rule would let a control report a verdict for a mutation ' +
-      'nobody sanctioned',
+      'FBL-020-R6 §1.4 WITHDREW filename-only admission. The allowlist refuses a chain that ' +
+      'declares a filename with no digest, so the withdrawn rule cannot return as data',
     file: 'scripts/migration-fixture-chains.ts',
-    from: '  if (prefix + suffix !== mutated.length)',
-    to: '  if (false && prefix + suffix !== mutated.length)',
+    from: '      if (!Array.isArray(variants) || variants.length === 0) {',
+    to: '      if (!Array.isArray(variants)) {',
     testFile: 'tests/migration-ledger.test.ts',
-    testName: 'the negative-control chain admits a ONE-STATEMENT deletion and nothing else',
+    testName: 'the allowlist REFUSES a chain that declares a filename with no checksum',
   },
   {
     id: 'retained_fixture_digests_not_compared',
@@ -558,7 +557,7 @@ export const MUTATIONS: Mutation[] = [
       'the map names the canonical-LF digest of the order text it was built against and ' +
       'the checker recomputes it, so the authority cannot move under the map unnoticed',
     file: 'docs/FBL-020-R5-REQUIREMENT-MAP.json',
-    from: '75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783',
+    from: '83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44',
     to: '75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd780',
     testFile: 'tests/ci-gates.test.ts',
     testName: 'every requirement names tests that exist, and every mapped battery is claimed',
@@ -739,7 +738,8 @@ export const MUTATIONS: Mutation[] = [
     from:
       '  if (tenantId !== null) {\n' +
       '    const tenant = await executor.query(\n' +
-      '      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}`,\n' +
+      '      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}\n' +
+      '        FOR SHARE`,\n' +
       '      [tenantId],\n' +
       '    );\n' +
       '    if (tenant.rows.length === 0) {\n' +
@@ -771,10 +771,212 @@ export const MUTATIONS: Mutation[] = [
       'the successful-login transition records the ADMITTED tenant and user, so the one ' +
       'event that says who got in is not written against the nil tenant naming nobody',
     file: 'packages/identity-access/src/login-transaction.ts',
-    from: '              tenant_id = $2::uuid,\n              user_link_id = $3::uuid,',
-    to: '              tenant_id = NULL,\n              user_link_id = NULL,',
+    from: '            tenant_id = $2::uuid,\n            user_link_id = $3::uuid,',
+    to: '            tenant_id = NULL,\n            user_link_id = NULL,',
     testFile: 'tests/login-admission.test.ts',
     testName: 'the successful-login audit event names the ADMITTED tenant and user',
+  },
+
+  // ── FBL-020-R6 §2 — RUNTIME LIFECYCLE CLOSURE ────────────────────────────
+  //
+  // Ten controls, each removed by ONE exact edit that restores the R5 behaviour the
+  // order names. The batteries that carry them drive the REAL HTTP routes, so each of
+  // these is a claim about what a browser can actually make happen.
+  {
+    id: 'login_route_judges_state_before_the_claim',
+    control:
+      'a callback carrying a valid sealed handle reaches the server-authoritative ' +
+      'lifecycle service even when its state is missing or wrong; the route does not ' +
+      'refuse it first and leave the transaction claimable',
+    file: 'apps/api/src/routes/auth.ts',
+    from:
+      "    clearCookie(res, AUTH_TXN_COOKIE, '/auth');\n" +
+      "    if (txn === null) throw new UnauthorizedError('Authentication failed');\n",
+    to:
+      "    clearCookie(res, AUTH_TXN_COOKIE, '/auth');\n" +
+      '    if (\n' +
+      '      txn === null ||\n' +
+      "      txn.purpose !== 'login' ||\n" +
+      "      typeof req.query.state !== 'string' ||\n" +
+      '      req.query.state !== txn.state\n' +
+      '    ) {\n' +
+      "      throw new UnauthorizedError('Authentication failed');\n" +
+      '    }\n',
+    testFile: 'tests/login-admission.test.ts',
+    testName:
+      'a callback with NO state reaches the lifecycle service and ends its transaction (R6 §2.1)',
+  },
+  {
+    id: 'login_callback_mismatch_left_pending',
+    control:
+      'a callback that names a real transaction and disagrees with it reaches ONE ' +
+      'explained terminal state, not a replay record on a row left pending',
+    file: 'packages/identity-access/src/login-transaction.ts',
+    from:
+      '    const terminal = async (reason: LoginTransactionFailureReason): Promise<null> => {\n' +
+      '      await failLoginTransactionWithin(executor, loginTxnId, reason);\n' +
+      '      return null;\n' +
+      '    };',
+    to:
+      '    const terminal = async (reason: LoginTransactionFailureReason): Promise<null> => {\n' +
+      '      await auditLogin(executor, {\n' +
+      '        loginTxnId,\n' +
+      '        tenantId,\n' +
+      '        userLinkId,\n' +
+      "        eventType: 'identity.login.replayed',\n" +
+      '        details: { purpose: rowPurpose, observed_status: String(reason) },\n' +
+      '      });\n' +
+      '      return null;\n' +
+      '    };',
+    testFile: 'tests/login-admission.test.ts',
+    testName:
+      'a callback whose state DISAGREES ends its transaction, and the correct one afterwards loses (R6 §2.2)',
+  },
+  {
+    id: 'login_success_ignores_expiry',
+    control:
+      'the login success transition requires the transaction to be unexpired in ' +
+      'DATABASE TIME at the moment of completion',
+    file: 'packages/identity-access/src/login-transaction.ts',
+    from:
+      '        -- FBL-020-R6 §2.3: LOGIN EXPIRY, ENFORCED AT COMPLETION, IN DATABASE TIME.\n' +
+      '        AND expires_at > NOW()\n',
+    to: '',
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a login claimed before expiry and completed after it is refused WITHOUT any sweep',
+  },
+  {
+    id: 'login_custody_survives_a_refused_success',
+    control:
+      'a login-success transition that is refused ROLLS BACK the session row and the ' +
+      'sealed provider credential rather than committing them anyway',
+    file: 'packages/identity-access/src/login-admission.ts',
+    from: '        if (!recorded.recorded) throw new LoginSuccessNotRecorded(recorded.refusal);',
+    to: '        if (!recorded.recorded) return { identity, created };',
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a login claimed before expiry and completed after it is refused WITHOUT any sweep',
+  },
+  {
+    id: 'login_success_is_a_second_commit',
+    control:
+      'session custody, the login success transition and their audits are ONE local ' +
+      'commit; a failing success audit cannot leave a refreshable session behind',
+    file: 'packages/identity-access/src/login-admission.ts',
+    from:
+      '        const recorded = await succeedLoginTransactionWithin(executor, {\n' +
+      '          loginTxnId: input.loginTxnId,\n' +
+      '          tenantId: created.session.tenantId,\n' +
+      '          userLinkId: created.session.userLinkId,\n' +
+      '          connectionId: created.session.connectionId,\n' +
+      '        });\n' +
+      '        if (!recorded.recorded) throw new LoginSuccessNotRecorded(recorded.refusal);\n' +
+      '        return { identity, created };',
+    to: '        return { identity, created };',
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a failing login-success AUDIT write leaves NO custody behind (R6 §2.5)',
+  },
+  {
+    id: 'stepup_route_judges_state_before_the_claim',
+    control:
+      'the step-up callback leg routes a valid sealed handle to the claim even when ' +
+      'its state is missing or wrong, so the transaction ends instead of staying claimable',
+    file: 'apps/api/src/routes/auth.ts',
+    from:
+      "    clearCookie(res, REAUTH_TXN_COOKIE, '/auth');\n" +
+      "    if (txn === null) throw new UnauthorizedError('Reauthentication failed');\n",
+    to:
+      "    clearCookie(res, REAUTH_TXN_COOKIE, '/auth');\n" +
+      '    if (\n' +
+      '      txn === null ||\n' +
+      "      txn.purpose !== 'reauth' ||\n" +
+      "      typeof req.query.state !== 'string' ||\n" +
+      '      req.query.state !== txn.state\n' +
+      '    ) {\n' +
+      "      throw new UnauthorizedError('Reauthentication failed');\n" +
+      '    }\n',
+    testFile: 'tests/reauth-callback-lifecycle.test.ts',
+    testName:
+      'a step-up callback with NO state ends its transaction rather than leaving it claimable',
+  },
+  {
+    id: 'stepup_completion_filters_by_subject',
+    control:
+      'the step-up completion finds and LOCKS by the server handle first and then ' +
+      'classifies wrong subject, expiry and the missing claim — rather than filtering ' +
+      'them out of the lookup and returning a silent null',
+    file: 'packages/identity-access/src/reauthentication.ts',
+    from:
+      '      `SELECT *, (expires_at <= NOW()) AS is_expired FROM reauthentication_transactions\n' +
+      '        WHERE nonce_hash = $1\n' +
+      '        FOR UPDATE`,\n' +
+      '      [sha256hex(input.nonce)],',
+    to:
+      '      `SELECT *, (expires_at <= NOW()) AS is_expired FROM reauthentication_transactions\n' +
+      "        WHERE nonce_hash = $1 AND user_link_id = $2 AND state = 'started'\n" +
+      '          AND claimed_at IS NOT NULL AND expires_at > NOW()\n' +
+      '        FOR UPDATE`,\n' +
+      '      [sha256hex(input.nonce), input.userLinkId],',
+    testFile: 'tests/reauth-callback-lifecycle.test.ts',
+    testName:
+      'a step-up completed by the WRONG ACTIVE USER is terminal, audited, and mints nothing',
+  },
+  {
+    id: 'stepup_expiry_not_classified_at_completion',
+    control:
+      'a step-up that expired while the provider was answering is terminalized as an ' +
+      'EXPIRY by the completion itself, with no sweep involved',
+    file: 'packages/identity-access/src/reauthentication.ts',
+    from: "    if (startRow.is_expired === true) return fail('expired');",
+    to: '',
+    testFile: 'tests/reauth-callback-lifecycle.test.ts',
+    testName:
+      'a step-up that EXPIRES during the exchange is terminal and audited WITHOUT any sweep',
+  },
+  {
+    id: 'mfa_certification_tenant_not_held',
+    control:
+      'the MFA-certification tenant check HOLDS the tenant row through the ' +
+      'certification, so a concurrent suspension cannot be raced into a certified connection',
+    file: 'packages/identity-access/src/mutations.ts',
+    from:
+      '      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}\n' +
+      '        FOR SHARE`,',
+    to: '      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}`,',
+    testFile: 'tests/mfa-certification-concurrency.test.ts',
+    testName:
+      'TENANT SUSPENSION cannot race MFA certification into a certified connection (R6 §2.6)',
+  },
+  {
+    id: 'session_establishment_failure_left_pending',
+    // FBL-020-R6 §4.2. This exit was EXPRESSLY UNTESTED: the route wrote the reason and
+    // no assertion anywhere read it, so deleting this line changed nothing any gate
+    // could see. It is registered here so the coverage cannot quietly disappear again.
+    control:
+      'a login whose LOCAL SESSION could not be established TERMINALIZES its transaction ' +
+      'with session_establishment_failed instead of leaving it at `consuming`',
+    file: 'apps/api/src/routes/auth.ts',
+    from:
+      "      await failLoginTransaction(claimed.loginTxnId, 'session_establishment_failed');\n" +
+      '      throw err;',
+    to: '      throw err;',
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a login whose LOCAL SESSION cannot be established is terminal, with ONE audit event',
+  },
+  {
+    id: 'worker_once_swallows_a_failed_sweep',
+    control:
+      'a worker pass reports which registered sweeps failed, and --once refuses to ' +
+      'report success when any did',
+    file: 'apps/worker/src/main.ts',
+    // The END-TO-END proof is the EXIT STATUS of `apps/worker/dist/main.js`, in
+    // `tests/worker-entrypoint.test.ts`. That battery cannot run here — the isolated
+    // copy carries no `dist/` — so the control is killed at the level this runner can
+    // reach: the same `main(['--once'])` the compiled entry point calls must REJECT.
+    from: '      failed.push(job.name);',
+    to: '      void job.name;',
+    testFile: 'tests/worker-jobs.test.ts',
+    testName:
+      'a pass in which a registered sweep FAILS reports it, and --once refuses to report success',
   },
 ];
 

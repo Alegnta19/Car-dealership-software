@@ -67,6 +67,51 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * 573 → 577 when the R5 verification pass added four: the census absence-versus-silence
  * test (S1), the §3.6 uncommitted-working-tree class check (S3), and the two that pin the
  * inventory key's shape and refuse a credential-shaped literal under `architecture/` (S5).
+ * It moved 577 → 589 / 59 → 60 under FBL-020-R6 §1, which added twelve: five in
+ * `tests/migration-ledger.test.ts` for the checksum-only fixture admission that replaced
+ * filename-only and single-statement-deletion admission (§1.4), four in
+ * `tests/migration-census.test.ts` for the completeness rule, the runner-authority reading
+ * and the source-head provenance (§1.1/§1.3), two in
+ * `tests/delivery-documentation.test.ts` refusing a runner census and requiring the
+ * operator census to be committed rather than read out of the gitignored `artifacts/`
+ * (§1.2), and one new SUITE of two in `tests/ci-gates.test.ts` for the workflow assertions
+ * that carry §1.2.
+ * It moved 589 → 605 / 60 → 62 under FBL-020-R6 §2, the runtime-lifecycle closure, which
+ * added sixteen across five batteries: seven in `tests/login-admission.test.ts` (five
+ * callback-binding refusals routed through the lifecycle service instead of being refused
+ * by the route, the slow exchange that crosses expiry with NO sweep, and the fault-injected
+ * login-success audit that must leave no custody); a new SUITE of four in
+ * `tests/reauth-callback-lifecycle.test.ts` (the control, the state-less step-up callback,
+ * the wrong active user and the no-sweep step-up expiry, all through the real HTTP routes);
+ * a new SUITE of three in `tests/mfa-certification-concurrency.test.ts` (the control and
+ * the two barrier-controlled tenant races); and one each in `tests/worker-jobs.test.ts` and
+ * `tests/worker-entrypoint.test.ts` for the failing-sweep exit status, in process and
+ * through the compiled artifact.
+ * It moved 605 → 625 / 62 → 63 under FBL-020-R6 §3, the database-reconstructable-evidence
+ * closure, which added twenty: a new SUITE of nineteen in
+ * `tests/identity-evidence-reconstruction.test.ts` — the direct-SQL adversarial cases §3.5
+ * enumerates, every one built out of cross-wired REAL rows rather than random UUIDs (an
+ * invented authentication instant and another real session's; a superseded binding version;
+ * revoked, windowed-out, wrong-tenant, platform-scope and wrong-resource bindings; an extra
+ * normalized row and a repeated ordinality, both with the writer guard's marker forged; a
+ * platform-support tenant allow carrying no delegation; and unapproved, over-broad, revoked
+ * and lapsed support evidence) — plus one in `tests/ci-gates.test.ts` pinning the
+ * database-control mutation gate into the workflow. `tests/identity-evidence.test.ts` kept
+ * its own count: §3.1 replaced one arbitrary `new Date()` in its fixture rather than adding
+ * a case.
+ * It moved 625 → 642 / 63 → 64 under FBL-020-R6 §4, which added seventeen: fifteen in
+ * `tests/delivery-documentation.test.ts` — a new SUITE driving `scripts/check-final-state.ts`
+ * in both directions (the record as shipped; every withdrawn sentence reintroduced into every
+ * governed document; the withdrawal marker permitting a quotation and only a quotation; the
+ * exemption counted and bounded; every required sentence removed from every document that owns
+ * it; the sentences shown to DERIVE from the record; a commit dropped from the recorded range,
+ * which is the R5 undercount itself; an invented commit and a wrong subject; a run whose
+ * head_sha is not the commit it is attributed to; a run painted success over a failed job; the
+ * head relation decided by git in both directions; a softened budget verdict; the submission
+ * status forced by an OPEN §3.1; the withdrawal list held to the refusal list in both
+ * directions; and the whole gate re-run with `artifacts/` MOVED ASIDE) — plus one in
+ * `tests/login-admission.test.ts` for the §4.2 route-level `session_establishment_failed`
+ * closure, and one in `tests/ci-gates.test.ts` pinning the final-state gate into the workflow.
  * Each of these numbers was MEASURED before it was written here.
  *
  * A floor is raised only AFTER a measured run, never to a number nobody has seen run.
@@ -77,8 +122,42 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * shipped when the requirement map published `MINIMUM_TESTS = 554` against a source
  * holding 567.
  */
-export const MINIMUM_TESTS = 577;
-export const MINIMUM_SUITES = 59;
+/*
+ * FBL-020-R6 gate findings C1, C2 and C7 add FOUR tests to the battery:
+ *
+ *   * three in `tests/identity-evidence-reconstruction.test.ts` for C7's scope hierarchy —
+ *     a rooftop binding cited for its SIBLING rooftop, the same binding cited for the WHOLE
+ *     TENANT (with the department beneath it accepted, so the rule is not simply always
+ *     red), and a tenant-scope binding naming a DIFFERENT tenant;
+ *   * one in `tests/delivery-documentation.test.ts` for C2, which makes a REAL
+ *     `git clone --depth 1` and runs the real final-state gate against it.
+ *
+ * C1's proof is not a new test: it is the retained fixture gaining four ordinary ALLOWs with
+ * non-empty matched-binding arrays, plus new assertions inside the existing upgrade-drill
+ * verifier and the existing ci-gates fixture test.
+ *
+ * ── THE FLOOR IS THE MEASURED TOTAL, WITH NO SLACK ────────────────────────────
+ *
+ * THIS REVISION, and this block replaces one that named the discipline while the constant
+ * broke it. The rule is the one stated above: a floor is raised only AFTER a measured run,
+ * and it is raised TO what that run reported. `artifacts/test-summary.json` reports 652 tests
+ * and 64 suites on this tree, so the constants below are 652 and 64.
+ *
+ * THE CONSTANT SAT AT 646 — SIX BELOW THE MEASURED BATTERY — INSIDE A COMMENT THAT SAID IT
+ * WAS PINNED TO THE MEASUREMENT. 646 was right when it was written: 642 plus the four tests
+ * above. The corrective waves that followed added SIX more tests to the batteries they
+ * touched — finding F4's three named direct-SQL adversarial tests for the `dealer_group`,
+ * `legal_entity` and `department` scope levels among them — and nobody moved the constant.
+ * Six tests of slack still catches a suite that collapses, but it silently permits six tests
+ * to be DELETED, which is precisely what a floor exists to refuse, and a constant that
+ * contradicts its own docstring teaches the next reader to disbelieve the docstring. Raised
+ * rather than explained away.
+ *
+ * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
+ * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
+ */
+export const MINIMUM_TESTS = 652;
+export const MINIMUM_SUITES = 64;
 
 /**
  * The order's own floor.

@@ -9,3 +9,9 @@ quality-baselines.json
 # Byte-identical mandate (FBL-000-R1 order D): the retained f76a27a fixtures must never
 # be touched by any tool.
 tests/fixtures/
+
+# FBL-020-R6 1.1: the committed operator census is GENERATED EVIDENCE, written by
+# scripts/migration-census.ts. Reformatting it would make the committed artifact differ from
+# what the script emitted, which is the one thing an evidence file may not do.
+docs/evidence/FBL-020-R6-operator-environment-census.json
+docs/evidence/FBL-020-R6-operator-environment-census.txt

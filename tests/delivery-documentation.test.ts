@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { loadRequirementMap, type BlueprintFacts } from '../scripts/check-requirement-map';
@@ -17,7 +28,7 @@ import {
   type CensusClaim,
   type MapRow,
 } from '../scripts/check-census-prose';
-import { BRANCH_SENTENCE } from '../scripts/migration-census';
+import { BRANCH_SENTENCE, type CensusPosition } from '../scripts/migration-census';
 import {
   FIGURES,
   GOVERNED,
@@ -25,12 +36,31 @@ import {
   REPORT as REPORT_PATH,
   UNCHECKABLE,
   figureProblems,
+  isArtifactSourced,
   readFigures,
+  unreadableProblems,
 } from '../scripts/check-published-figures';
+import {
+  FORBIDDEN,
+  GOVERNED as FINAL_STATE_GOVERNED,
+  HISTORY_DEPENDENT_CHECKS,
+  RECORD as FINAL_STATE_RECORD,
+  WITHDRAWN_END,
+  WITHDRAWN_START,
+  finalStateProblems,
+  maskDocument,
+  normalize as normalizeFinalState,
+  readDocuments as readFinalStateDocuments,
+  readFinalState,
+  readGitFacts,
+  requiredStatements,
+  type FinalState,
+  type GitFacts,
+} from '../scripts/check-final-state';
 
 /**
- * FBL-020-R5 §3 — THE DOCUMENTATION TESTS INSPECT THE DELIVERY DOCUMENTS, AND THE
- * DOCUMENT THE REVIEWER ACTUALLY HOLDS.
+ * FBL-020-R5 §3 — THE DOCUMENTATION TESTS INSPECT THE DELIVERY DOCUMENTS, AND BOTH
+ * BLUEPRINT DOCUMENTS, FROM THEIR OWN BYTES.
  *
  * `tests/docs.test.ts` compares the PHASE-248 architecture reference against the code it
  * describes, which is worth having and is kept. It is not a check on the DELIVERY
@@ -45,12 +75,14 @@ import {
  * between two blueprints whose §14.3 are DIFFERENT ORDERS — Version 1.0 reads FBL-000
  * there, Version 2.0 reads FBL-020-R2 — and nothing could see it.
  *
- * So §3.4 requires the anchor to be the document itself. `docs/orders/` holds the
- * blueprint a reviewer of this project actually has — the Version 1.0 document — and the
- * first two tests below read its BYTES: digest, byte length, title lines, version line and
- * §14 headings. The governing Version 2.0 document is NOT in this repository and is not
- * part of the project record; the record says so, and the test verifies it the moment a
- * file appears at its declared path, so attaching the wrong file fails rather than passing.
+ * So §3.4 requires the anchor to be the document itself. `docs/orders/` holds BOTH
+ * blueprints, and the first two tests below read the BYTES of each: digest, byte length,
+ * title lines, version line and §14 headings. THIS PARAGRAPH USED TO SAY THE GOVERNING
+ * VERSION 2.0 DOCUMENT WAS NOT IN THIS REPOSITORY and that the test verified it "the moment
+ * a file appears at its declared path"; the operator committed those bytes under
+ * FBL-020-R6, the conditional limb became the ordinary path, and the sentence was left
+ * standing over a file in the tree. Both documents are verified unconditionally, so
+ * attaching the wrong file fails rather than passing.
  *
  * The remaining tests hold the delivery documents to ONE current state (§3.3), to the
  * checked-in order text (§3.2), to the requirement map's clause inventory (§3.5), and to
@@ -72,16 +104,34 @@ const WORKFLOW = read('.github', 'workflows', 'ci.yml');
 /** The one phrase every delivery document must use for the undischarged live gate. */
 const LIVE_GATE_PHRASE = 'LIVE WORKOS CERTIFICATION IS NOT DISCHARGED';
 
-/** The two mutually exclusive statements the report may make about CI. */
-const CI_NO_RUN = 'NO CI RUN EXISTS FOR THIS TREE';
+/**
+ * The two mutually exclusive statements the report may make about the CI gate.
+ *
+ * FBL-020-R6 §4.4 REPLACED THE OLD PAIR, AND THE REASON IS THE REJECTION ITSELF. The pair
+ * used to be "NO CI RUN EXISTS FOR THIS TREE" against "THE R5 CI GATE IS DISCHARGED", which
+ * treated one tree as the only subject a CI claim could have. That is what made the stale
+ * state expressible: at `174c789` a green exact-SHA run existed AND the corrections on top
+ * of it were unrun, and the report could satisfy the old dichotomy while being wrong about
+ * both. The subjects are now separated — a COMMIT is measured by a run, a WORKING TREE is
+ * not — and `scripts/check-final-state.ts` requires the R6 working-tree sentence
+ * unconditionally, because it is true whichever way this dichotomy falls.
+ */
+const CI_NO_RUN = 'NO EXACT-SHA CI RUN EXISTS FOR ANY CODE-BEARING COMMIT';
 const CI_DISCHARGED = /THE R5 CI GATE IS DISCHARGED/;
 
 /** The two mutually exclusive statements the report may make about the commit. */
 const COMMIT_NONE = 'NOTHING IS COMMITTED AND NOTHING IS PUSHED';
-const COMMIT_MADE = /R5 CODE-BEARING COMMIT: `[0-9a-f]{40}`/;
+const COMMIT_MADE = /THE FINAL CODE-BEARING COMMIT IS `[0-9a-f]{40}`/;
 
-/** The census is a report, not a ratification, and the report must keep saying so. */
-const CENSUS_PHRASE = 'THE R5 §0 CENSUS IS REPORTED, NOT ACCEPTED';
+/**
+ * The census is a report, not a ratification, and the report must keep saying so.
+ *
+ * FBL-020-R6 §1.3 dropped the "R5 §0" qualifier: the census that governs is the R6 operator
+ * one, and the sentence has to be about THAT census rather than about a superseded artifact.
+ * What the phrase is FOR is unchanged — no revision may quietly upgrade a finding into an
+ * acceptance — and it is still required verbatim.
+ */
+const CENSUS_PHRASE = 'THE CENSUS IS REPORTED, NOT ACCEPTED';
 
 /**
  * Sentences R4 shipped that were not true of the repository. They are BANNED outright
@@ -98,7 +148,7 @@ const BANNED_CLAIMS = [
   'R4 is an uncommitted working tree',
 ] as const;
 
-/** The nine documents §3.6 requires to be reconciled with one another. */
+/** The TEN reconciled documents: the nine §3.6 names, plus the requirement map (R6 §4.4). */
 const RECONCILED_DOCUMENTS: Array<[string, string]> = [
   ['README.md', 'README.md'],
   ['ADR-001', join('docs', 'adr', 'ADR-001-modular-monolith.md')],
@@ -108,6 +158,9 @@ const RECONCILED_DOCUMENTS: Array<[string, string]> = [
   ['the threat model', join('docs', 'architecture', 'THREAT-MODEL-DELTA-FBL-020.md')],
   ['MODULE-OWNERSHIP', join('docs', 'architecture', 'MODULE-OWNERSHIP.md')],
   ['the delivery report', join('docs', 'FBL-020-DELIVERY-REPORT.md')],
+  // FBL-020-R6 §4.4 added the map: it was one of the four documents rejected for a stale
+  // final state, so leaving it out of the reconciliation list was itself part of the gap.
+  ['the requirement map', join('docs', 'FBL-020-R5-REQUIREMENT-MAP.json')],
   ['the project-copy provenance record', join('docs', 'orders', 'BLUEPRINT-PROVENANCE.md')],
 ];
 
@@ -183,13 +236,13 @@ function publishedFigureValue(documents: Record<string, string>, id: string): nu
   return Number.NaN;
 }
 
-describe('the supplied blueprint, and the one that is absent (FBL-020-R5 §3.1/§3.4)', () => {
+describe('both blueprints, each verified from its own bytes (FBL-020-R5 §3.1/§3.4)', () => {
   test('the SUPPLIED blueprint in this repository is the document the record describes', () => {
     const facts: BlueprintFacts = loadRequirementMap().governing_document.superseded;
     assert.equal(
       facts.present_in_repository,
       true,
-      'the superseded document is the one a reviewer holds; it must be in the repository',
+      'the superseded document is the second anchor that makes the §14 ambiguity visible; it must be in the repository',
     );
     const path = join(ROOT, facts.repository_path);
     assert.ok(existsSync(path), `${facts.repository_path} must be committed`);
@@ -228,7 +281,7 @@ describe('the supplied blueprint, and the one that is absent (FBL-020-R5 §3.1/�
     assert.match(
       facts.section_14_headings['14.3'] ?? '',
       /FBL-000/,
-      'the Version 1.0 §14.3 a reviewer holds is FBL-000 — which is why a bare section number is ambiguous',
+      'the Version 1.0 §14.3 is FBL-000 — which is why a bare section number is ambiguous',
     );
     assert.match(
       facts.section_14_headings[facts.section_governing_fbl_020] ?? '',
@@ -250,53 +303,81 @@ describe('the supplied blueprint, and the one that is absent (FBL-020-R5 §3.1/�
       /Version 1\.0[\s\S]{0,4000}?quality ceilings|ceilings[\s\S]{0,600}?not readable in Version 1\.0/i.test(
         PROVENANCE,
       ),
-      'the provenance record must say the ceilings are not readable in the reviewer copy',
+      'the provenance record must say the ceilings are not readable in the Version 1.0 document',
     );
   });
 
-  test('the GOVERNING blueprint is recorded as ABSENT, and is verified the moment it is attached', () => {
+  test('the GOVERNING blueprint is IN the repository, and every recorded fact is read from its bytes', () => {
+    /*
+     * FBL-020-R6. This test used to assert the OPPOSITE — that the governing document was
+     * absent and its facts were an attestation — with a conditional limb that would verify it
+     * "the moment it is attached". That moment arrived: three sends through the attachment
+     * channel left nothing this repository could observe, so the operator committed the
+     * bytes into the repository instead. The conditional limb is now unconditional, which is
+     * the whole point of having written it that way: attaching the WRONG file fails here
+     * rather than passing quietly.
+     *
+     * What this closes is narrow and worth stating exactly. The repository can now be READ to
+     * confirm which document governs and what Version 2.0 §14.3 says in it. It still cannot
+     * write to, or observe, the reviewer's own project copies — so whether those two copies
+     * have been replaced is not something this or any other gate here can assert.
+     */
     const facts: BlueprintFacts = loadRequirementMap().governing_document.governing;
     assert.equal(
       facts.present_in_repository,
-      false,
-      'the governing document is not part of the project record and must not be recorded as if it were',
+      true,
+      'the governing document is committed here and the record must say so',
     );
     assert.equal(
       facts.verification,
-      'attested-not-in-repository',
-      'its facts are an attestation transcribed from the order, and must be labelled as one',
+      'verified-from-repository-bytes',
+      'its facts are measured from the file, not transcribed from the order text',
     );
     assert.ok(
-      typeof facts.attested_by === 'string' && facts.attested_by.includes('FBL-020-R5.md'),
-      'the attestation must name where it comes from',
+      facts.attested_by === undefined,
+      'an attestation field must not survive alongside a measurement — one or the other is the truth',
     );
-    for (const [name, doc] of [
-      ['the provenance record', PROVENANCE],
-      ['the delivery report', REPORT],
+
+    const path = join(ROOT, facts.repository_path);
+    assert.ok(existsSync(path), `${facts.repository_path} must be committed`);
+    assert.equal(fileSha256(path), facts.file_sha256, 'the governing document digest');
+    assert.equal(fileBytes(path), facts.bytes, 'the governing document byte length');
+
+    const lines = docxLines(path);
+    for (const [label, value] of [
+      ['title, first line', facts.title_line_1],
+      ['title, second line', facts.title_line_2],
+      ['version line', facts.version_line],
     ] as const) {
-      assert.ok(
-        /NOT in this repository|not in the project record|is NOT in this repository/i.test(doc),
-        `${name} must state plainly that the governing document is not in the project record`,
-      );
+      assert.ok(lines.includes(value), `${label}: ${value}`);
     }
 
-    // If it is ever attached, it is verified — the record cannot describe a different file.
-    const path = join(ROOT, facts.repository_path);
-    if (!existsSync(path)) return;
-    assert.equal(fileSha256(path), facts.file_sha256, 'the attached governing document');
-    assert.equal(fileBytes(path), facts.bytes, 'the attached governing document byte length');
-    const lines = docxLines(path);
-    assert.ok(lines.includes(facts.version_line), 'its version line');
     const headings = docxHeadings(path).map((h) => h.text);
     for (const expected of Object.values(facts.section_14_headings)) {
       assert.ok(headings.includes(expected), `§14 heading: ${expected}`);
     }
+
+    /*
+     * The requirement a Version 1.0 reader could NOT check from anything in this repository —
+     * now checkable, because these are the bytes that carry it. It occurs exactly once.
+     */
+    const ceilings = lines.filter((l) => /ceiling/i.test(l));
+    assert.equal(
+      ceilings.length,
+      1,
+      'the ceilings sentence occurs exactly once in the governing document',
+    );
+    assert.match(
+      ceilings[0] as string,
+      /tsc-strict <=\s*59.*eslint <=\s*136.*format <=\s*23/,
+      'and it states 59 / 136 / 23',
+    );
   });
 
   test('every blueprint citation in the delivery documents names its version, file or digest', () => {
     /*
-     * The R3 defect, made mechanical. "§14.3" alone names FBL-000 in the Version 1.0
-     * document the reviewer holds and FBL-020-R2 in the Version 2.0 governing one. A citation is only a citation if
+     * The R3 defect, made mechanical. "§14.3" alone names FBL-000 in the superseded
+     * Version 1.0 document and FBL-020-R2 in the governing Version 2.0 one. A citation is only a citation if
      * the reader can tell which document it means, so every occurrence must carry a version
      * label, a file name or a digest within the same neighbourhood.
      */
@@ -454,6 +535,21 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
       assert.equal(occurrences(REPORT, COMMIT_NONE), 1, 'the commit state is stated exactly once');
       assert.equal(noRun, true, 'a tree with nothing pushed cannot also have a CI run of its own');
     }
+    if (committed) {
+      /*
+       * FBL-020-R6 §4.4. The commit the report names must be the commit the committed
+       * record names — one final state, in one place, restated everywhere else. Naming a
+       * 40-character SHA is no longer enough on its own: R5 named one, and it was the
+       * wrong one.
+       */
+      const named = /THE FINAL CODE-BEARING COMMIT IS `([0-9a-f]{40})`/.exec(REPORT);
+      assert.ok(named, 'the report must name its final code-bearing commit');
+      assert.equal(
+        named[1],
+        readFinalState().evidence_commit_sha,
+        'the report must name the commit docs/evidence/FBL-020-FINAL-STATE.json records',
+      );
+    }
 
     assert.ok(REPORT.includes(CENSUS_PHRASE), `the report must carry: ${CENSUS_PHRASE}`);
   });
@@ -474,31 +570,54 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
       requirements?: MapRow[];
     };
 
-    // 1. As shipped, against the real artifact, when the census has been taken.
-    if (existsSync(CENSUS)) {
-      const real = readCensusClaim();
-      assert.deepEqual(
-        proseProblems(real, REPORT, mapDoc),
-        [],
-        'the report and the map must state exactly what the census artifact concluded',
-      );
-      assert.equal(
-        real.branch_sentence,
-        BRANCH_SENTENCE[real.position],
-        "the artifact's branch sentence must be the one its own position defines",
-      );
-    }
+    /*
+     * 1. As shipped, against the real artifact.
+     *
+     * FBL-020-R6 §1.1: this comparison used to be wrapped in `if (existsSync(CENSUS))`,
+     * because the census lived under the GITIGNORED `artifacts/`. So the gate ran on a
+     * developer machine that had taken a census and silently did nothing on a fresh
+     * checkout — which is where the delivery documents are actually read. The operator
+     * census is committed now, and the comparison is unconditional.
+     */
+    assert.ok(existsSync(CENSUS), `the operator census must be COMMITTED, at ${CENSUS}`);
+    const real = readCensusClaim();
+    assert.deepEqual(
+      proseProblems(real, REPORT, mapDoc),
+      [],
+      'the report and the map must state exactly what the census artifact concluded',
+    );
+    assert.equal(
+      real.branch_sentence,
+      BRANCH_SENTENCE[real.position],
+      "the artifact's branch sentence must be the one its own position defines",
+    );
 
-    // 2. THE REVERT PROOF. Flip the artifact's verdict and leave the prose alone: the
-    //    gate must fail, naming the disagreement. This is the exact R5 situation.
+    /*
+     * 2. THE REVERT PROOF. Flip the artifact's verdict and leave the prose alone: the gate
+     *    must fail, naming the disagreement. This is the exact R5 situation.
+     *
+     *    THE FLIP IS DERIVED FROM THE REAL POSITION, NOT TYPED. FBL-020-R6: this control
+     *    used to hard-code `FREEZE_057_AND_ADD_058` as "the other one", which was true only
+     *    while the committed artifact concluded something else. When the census was re-taken
+     *    and landed on FREEZE, the "flip" became the position the prose already stated, the
+     *    gate correctly reported no disagreement, and the control failed — having proved
+     *    nothing about the rule for as long as the two happened to differ. Picking any
+     *    position OTHER than the real one keeps the control a control whatever the artifact
+     *    concludes.
+     */
+    const otherPosition = (Object.keys(BRANCH_SENTENCE) as CensusPosition[]).find(
+      (position) => position !== real.position,
+    );
+    assert.ok(otherPosition !== undefined, 'there must be more than one census position');
     const flipped: CensusClaim = {
-      position: 'FREEZE_057_AND_ADD_058',
-      branch_sentence: BRANCH_SENTENCE.FREEZE_057_AND_ADD_058,
+      position: otherPosition,
+      branch_sentence: BRANCH_SENTENCE[otherPosition],
+      role: 'OPERATOR_CONTROLLED_HOST',
     };
     const whenArtifactSaysFreeze = proseProblems(flipped, REPORT, mapDoc);
     assert.ok(
-      whenArtifactSaysFreeze.some((p) => p.includes('does not name FREEZE_057_AND_ADD_058')),
-      `a census concluding FREEZE against prose saying otherwise must fail: ${whenArtifactSaysFreeze.join('; ')}`,
+      whenArtifactSaysFreeze.some((p) => p.includes(`does not name ${otherPosition}`)),
+      `a census concluding ${otherPosition} against prose saying otherwise must fail: ${whenArtifactSaysFreeze.join('; ')}`,
     );
     for (const id of POSITION_BEARING_ROWS)
       assert.ok(
@@ -506,16 +625,24 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
         `${id} must be reported as disagreeing with the artifact`,
       );
 
-    // 3. And the other direction: flip the PROSE and leave the artifact alone.
+    /*
+     * 3. And the other direction: flip the PROSE and leave the artifact alone.
+     *
+     *    Both halves are DERIVED from the shipped position for the reason above — this
+     *    replacement named `INCOMPLETE_CENSUS_REQUIRES_058` literally, so when the re-taken
+     *    census moved the token the string was no longer in the report, the `replace` was a
+     *    no-op, and the control asserted nothing.
+     */
     const shipped: CensusClaim = {
-      position: 'EDIT_057_IN_PLACE',
-      branch_sentence: BRANCH_SENTENCE.EDIT_057_IN_PLACE,
+      position: real.position,
+      branch_sentence: BRANCH_SENTENCE[real.position],
+      role: 'OPERATOR_CONTROLLED_HOST',
     };
-    const flippedReport = REPORT.replace('**EDIT_057_IN_PLACE.**', '**FREEZE_057_AND_ADD_058.**');
+    const flippedReport = REPORT.replace(`**${real.position}.**`, '**EDIT_057_IN_PLACE.**');
     assert.notEqual(flippedReport, REPORT, 'the report must state its position in one place');
     assert.ok(
       proseProblems(shipped, flippedReport, mapDoc).some((p) =>
-        p.includes('asserts FREEZE_057_AND_ADD_058'),
+        p.includes('asserts EDIT_057_IN_PLACE'),
       ),
       'a report asserting the branch the artifact did not take must fail',
     );
@@ -523,13 +650,13 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
     const flippedMap = {
       requirements: (mapDoc.requirements ?? []).map((r) =>
         POSITION_BEARING_ROWS.includes(r.id as (typeof POSITION_BEARING_ROWS)[number])
-          ? { ...r, census_position: 'FREEZE_057_AND_ADD_058' }
+          ? { ...r, census_position: 'EDIT_057_IN_PLACE' }
           : r,
       ),
     };
     assert.ok(
       proseProblems(shipped, REPORT, flippedMap).some((p) =>
-        p.includes('declares census_position FREEZE_057_AND_ADD_058'),
+        p.includes('declares census_position EDIT_057_IN_PLACE'),
       ),
       'a requirement-map row asserting the other branch must fail',
     );
@@ -557,16 +684,129 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
       ),
     );
 
-    // 6. The block must QUOTE the artifact, not merely agree with its token.
-    const unquoted = REPORT.replace(
-      'NO PERSISTENT ENVIRONMENT HAS APPLIED ANY FORM OF 057, on the evidence above.',
-      'No persistent environment has applied 057, roughly speaking.',
-    );
-    assert.notEqual(unquoted, REPORT);
+    /*
+     * 6. The block must QUOTE the artifact, not merely agree with its token. The sentence
+     *    to damage is taken from the SHIPPED position for the same reason as controls 2
+     *    and 3: naming one position's opening words literally made this a no-op the moment
+     *    the census landed on another.
+     */
+    const opening = (BRANCH_SENTENCE[real.position] as string).split(/(?<=\.)\s/)[0] as string;
+    const unquoted = REPORT.replace(opening, 'This census is roughly complete, give or take.');
+    assert.notEqual(unquoted, REPORT, `the report must quote ${JSON.stringify(opening)}`);
     assert.ok(
       proseProblems(shipped, unquoted, mapDoc).some((p) => p.includes('branch sentence')),
       "a paraphrase is not the artifact's own words",
     );
+  });
+
+  test('a CI-RUNNER census is REFUSED as the census the branch rests on', () => {
+    /*
+     * FBL-020-R6 §1.2. R5 substituted the CI-runner census for the census of the operator's
+     * actual persistent environments, and the review rejected it. A runner is created for
+     * one job and destroyed after it: it can observe none of the environments the order
+     * asks about, so an artifact taken there declares
+     * `authority.may_decide_the_057_058_branch: false` and this gate refuses to read a
+     * position out of it — rather than comparing the delivery prose against a machine that
+     * knows nothing.
+     */
+    const dir = mkdtempSync(join(tmpdir(), 'census-authority-'));
+    try {
+      const operator = JSON.parse(readFileSync(CENSUS, 'utf8')) as {
+        authority: { role: string; may_decide_the_057_058_branch: boolean };
+        conclusion: { position: string };
+      };
+      assert.equal(
+        operator.authority.role,
+        'OPERATOR_CONTROLLED_HOST',
+        'the committed census must be the operator one',
+      );
+      assert.equal(operator.authority.may_decide_the_057_058_branch, true);
+
+      // The same artifact, relabelled as a runner census, is refused.
+      const runner = join(dir, 'runner-census.json');
+      writeFileSync(
+        runner,
+        JSON.stringify({
+          ...operator,
+          authority: {
+            role: 'CI_RUNNER',
+            may_decide_the_057_058_branch: false,
+            statement: 'evidence about this runner and nothing else',
+            detected_from: ['GITHUB_ACTIONS'],
+          },
+        }),
+        'utf8',
+      );
+      assert.throws(
+        () => readCensusClaim(runner),
+        /MAY NOT DECIDE THE 057\/058 BRANCH/,
+        'a runner census must not be readable as the census the branch rests on',
+      );
+
+      // …and one that states no authority at all is refused too, so silence is not consent.
+      const silent = join(dir, 'silent-census.json');
+      const withoutAuthority: Record<string, unknown> = { ...operator };
+      delete withoutAuthority.authority;
+      writeFileSync(silent, JSON.stringify(withoutAuthority), 'utf8');
+      assert.throws(
+        () => readCensusClaim(silent),
+        /carries no authority\.may_decide_the_057_058_branch/,
+      );
+
+      // The committed operator census IS readable, so the checks above are not simply
+      // refusing everything.
+      assert.equal(readCensusClaim(CENSUS).role, 'OPERATOR_CONTROLLED_HOST');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    }
+  });
+
+  test('the census the gate reads is COMMITTED, so a fresh checkout compares the same bytes', () => {
+    /*
+     * FBL-020-R6 §1.1, and the asymmetry that has now caused four separate failures:
+     * `artifacts/` is gitignored, so a developer tree carries it and a CI checkout does
+     * not. A gate that reads its evidence from there checks a different thing depending on
+     * where it runs — and in CI it read the RUNNER census, which §1.2 forbids from deciding
+     * anything.
+     */
+    assert.ok(
+      !CENSUS.split('\\').join('/').includes('/artifacts/'),
+      `the census this gate reads must not live under the gitignored artifacts/: ${CENSUS}`,
+    );
+    assert.ok(existsSync(CENSUS), 'and it must be present in the checkout');
+
+    /*
+     * IGNORED, not TRACKED, is the property that matters and the only one that can be
+     * checked before the delivery is committed. `git ls-files` would answer "no" for a file
+     * that is about to be committed and for a file that can never be, which is the
+     * distinction this test exists to make.
+     *
+     * The git call is guarded for the same reason the uncommitted-migrations test above
+     * guards its own: `scripts/mutation-kill.ts` runs this battery inside an isolated copy
+     * of the tree with no `.git`, and a test that threw there would turn a killed mutation
+     * into a reported survivor. The path assertion above is unconditional; this one runs
+     * wherever git can answer, and the branch taken is asserted rather than passed over.
+     */
+    let ignored: boolean | undefined;
+    try {
+      execFileSync('git', ['check-ignore', '--quiet', CENSUS], { cwd: join(__dirname, '..') });
+      ignored = true;
+    } catch (err) {
+      // `check-ignore` exits 1 for a path that is NOT ignored. Any other failure means git
+      // could not answer at all.
+      ignored = (err as { status?: number }).status === 1 ? false : undefined;
+    }
+    assert.ok(
+      ignored === false || ignored === undefined,
+      'the operator census must not be gitignored: a gate cannot read evidence a checkout ' +
+        'does not carry',
+    );
+    if (ignored === undefined)
+      assert.ok(
+        !existsSync(join(__dirname, '..', '.git')),
+        'git declined to answer in a tree that HAS a .git directory, which is not a copy ' +
+          'this guard is meant to excuse',
+      );
   });
 
   test('the census-prose gate is wired into CI', () => {
@@ -717,7 +957,7 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
     );
   });
 
-  test('the nine documents §3.6 names exist and all speak of this revision', () => {
+  test('the ten reconciled documents exist and all speak of this revision', () => {
     for (const [name, path] of RECONCILED_DOCUMENTS) {
       const full = join(ROOT, path);
       assert.ok(existsSync(full), `${name} (${path}) must exist`);
@@ -743,7 +983,7 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
      *
      * This test checks it against git. The premise is measured first — so the test fails
      * loudly if the repository ever genuinely does carry uncommitted migrations, rather
-     * than silently enforcing a stale rule — and only then are the nine documents scanned.
+     * than silently enforcing a stale rule — and only then are the ten documents scanned.
      *
      * WHY THE PREMISE IS CONDITIONAL AND THE DOCUMENT SCAN IS NOT. `scripts/mutation-kill.ts`
      * runs this battery inside an ISOLATED COPY of the tree, and that copy deliberately
@@ -774,20 +1014,58 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
     }
 
     if (insideWorkTree) {
-      assert.equal(
-        git('status', '--porcelain', '--', 'migrations').trim(),
-        '',
-        'PREMISE: every migration is committed. If this fails the documents are not the problem.',
+      /*
+       * FBL-020-R6 §3 — THE PREMISE NAMES THE PROPERTY IT ALWAYS MEANT.
+       *
+       * It used to require `git status --porcelain -- migrations` to be EMPTY, which
+       * says two things at once: no migration HEAD carries has been edited here, and
+       * no new migration is being authored. Only the first is the property the false
+       * sentence was about, and only the first is a rule this repository can keep —
+       * the second is false for the whole of any order that adds a migration, which
+       * FBL-020-R6 §3 does (`058_policy_evidence_reconstructable.sql`, uncommitted by
+       * instruction while it is under review).
+       *
+       * So the premise now refuses exactly the shape that matters — a MODIFIED,
+       * DELETED or RENAMED migration — and admits an ADDED one, whose body cannot
+       * disagree with a HEAD blob because there is no HEAD blob to disagree with. The
+       * byte-immutability of the frozen chain is checked BELOW, file by file, against
+       * HEAD, and `057` is still named outright. Nothing that could catch an edited
+       * migration was given up.
+       */
+      const status = git('status', '--porcelain', '--', 'migrations').trim();
+      const entries = status === '' ? [] : status.split(/\r?\n/);
+      const notNew = entries.filter((line) => !/^(\?\?|A[ M]|[ ]A)/.test(line));
+      assert.deepEqual(
+        notNew,
+        [],
+        'PREMISE: no migration that HEAD carries may be modified, deleted or renamed in ' +
+          'this tree; only a NEW file may be uncommitted. If this fails the documents are ' +
+          'not the problem.',
       );
 
       const migrations = readdirSync(join(ROOT, 'migrations'))
         .filter((f) => f.endsWith('.sql'))
         .sort();
       assert.ok(migrations.length >= 10, 'sanity: the migration chain was found');
+      const inHead = new Set(
+        git('ls-tree', '--name-only', 'HEAD', 'migrations/')
+          .split(/\r?\n/)
+          .filter((p) => p.endsWith('.sql'))
+          .map((p) => p.slice('migrations/'.length)),
+      );
+      // The added file is asserted about rather than passed over: a premise that
+      // admits new files must show which ones it admitted.
+      const added = migrations.filter((f) => !inHead.has(f));
+      assert.deepEqual(
+        added.filter((f) => !entries.some((line) => line.includes(f))),
+        [],
+        `a migration absent from HEAD must appear in git status as a new file: ${added.join(', ')}`,
+      );
       const differing = migrations.filter(
         (f) =>
+          inHead.has(f) &&
           canonical(git('show', `HEAD:migrations/${f}`)) !==
-          canonical(readFileSync(join(ROOT, 'migrations', f), 'utf8')),
+            canonical(readFileSync(join(ROOT, 'migrations', f), 'utf8')),
       );
       assert.deepEqual(
         differing,
@@ -824,7 +1102,17 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
      */
     const offenders: string[] = [];
     for (const [name, path] of RECONCILED_DOCUMENTS) {
-      const doc = readFileSync(join(ROOT, path), 'utf8');
+      /*
+       * FBL-020-R6 §4.4 added the requirement map to this list, and the map CITES TEST
+       * NAMES — including this test's own name, which contains the very phrase. A citation
+       * of a test is not a claim about the tree, so `"name": "…"` values are blanked before
+       * the scan. Nothing else in a JSON document is exempt, and the Markdown documents are
+       * scanned whole.
+       */
+      const doc = readFileSync(join(ROOT, path), 'utf8').replace(
+        path.endsWith('.json') ? /"name": "[^"]*"/g : /(?!)/g,
+        '"name": ""',
+      );
       for (const m of doc.matchAll(
         /uncommitted working tree|digest taken from `?HEAD`? would describe a different body/gi,
       ) as IterableIterator<RegExpMatchArray>) {
@@ -1063,19 +1351,93 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
 
     // 5. AN UNCHECKABLE FIGURE PUBLISHED WITHOUT ITS LABEL. The order requires a figure no
     //    gate can check to be labelled as such WHERE IT APPEARS.
-    for (const figure of UNCHECKABLE) {
-      const file = figure.files[0] as string;
-      // Every occurrence, not the first: a document may carry the label in two places and
-      // stripping one of them would leave the gate satisfied and prove nothing.
-      const unlabelled = (docs[file] as string).split(figure.label).join('x');
-      assert.notEqual(unlabelled, docs[file], `${file} must carry the ${figure.id} label`);
-      assert.ok(
-        figureProblems(values, { ...docs, [file]: unlabelled }).problems.some(
-          (p) => p.includes(figure.id) && p.includes('does not carry the label'),
-        ),
-        `${figure.id} published without its label must be reported`,
+    //
+    //    FBL-020-R6: THIS LIMB USED TO ITERATE `UNCHECKABLE`, AND THAT IS NOW A BUG SHAPE
+    //    RATHER THAN A TEST. The registry became EMPTY when the governing Version 2.0
+    //    blueprint was committed — its byte length and the three quality ceilings are read
+    //    from that file's own bytes now, so neither may carry a "no gate can check this"
+    //    label any more. A `for` loop over an empty array asserts nothing and reports
+    //    green, which is precisely the failure this order was opened over. So the rule is
+    //    driven with a STAGED entry, and the registry's emptiness is asserted separately.
+    assert.deepEqual(
+      UNCHECKABLE,
+      [],
+      'both former entries derive from the committed blueprint now; re-adding one is a ' +
+        'claim that this repository cannot derive a figure it publishes',
+    );
+
+    const staged = {
+      id: 'staged_uncheckable_figure',
+      what: 'a figure no gate in this repository can derive',
+      why: 'staged by this test so the missing-label refusal is exercised on an empty registry',
+      label: 'NOT GATE-CHECKED: staged by tests/delivery-documentation.test.ts',
+      files: [REPORT_PATH],
+    };
+    // The label is absent from the real report, so the rule must fire on the document as
+    // it stands — no mutation of the text needed to make the refusal true.
+    assert.ok(
+      !(docs[REPORT_PATH] as string).includes(staged.label),
+      'the staged label must not already appear, or this limb would prove nothing',
+    );
+    assert.ok(
+      figureProblems(values, docs, [staged]).problems.some(
+        (p) => p.includes(staged.id) && p.includes('does not carry the label'),
+      ),
+      'a figure declared uncheckable and published without its label must be reported',
+    );
+    // …and the same call with the label present must NOT report it, so the rule is keyed to
+    // the label rather than to the entry merely existing.
+    const labelled = `${docs[REPORT_PATH] as string}\n\n${staged.label}\n`;
+    assert.ok(
+      !figureProblems(values, { ...docs, [REPORT_PATH]: labelled }, [staged]).problems.some((p) =>
+        p.includes(staged.id),
+      ),
+      'and carrying the label must clear it',
+    );
+  });
+
+  test('an unreadable COMMITTED source fails, while an unreadable ARTIFACT is skipped', () => {
+    /*
+     * FBL-020-R6, and this hole was found by staging the defect rather than by reading the
+     * code. `readFigures` reports what it cannot read as `unreadable`, and the gate skips
+     * those because `artifacts/` is gitignored and absent on a clean checkout. When the
+     * governing Version 2.0 blueprint was committed, three figures — the quality ceilings —
+     * started deriving from a `.docx` IN THIS TREE. Copying the Version 1.0 document over
+     * that path then made all three unreadable, and the gate still printed "Every published
+     * figure agrees with its source": the wrong document was caught only incidentally, by
+     * the byte-length figure.
+     *
+     * A committed source is readable on any checkout. Failing to read one is a defect, not
+     * an excuse, and the two cases are now separated.
+     */
+    const ceilings = FIGURES.filter((f) => f.id.startsWith('ceiling_'));
+    assert.equal(ceilings.length, 3, 'the three ceiling figures must be registered');
+    for (const figure of ceilings)
+      assert.equal(
+        isArtifactSourced(figure),
+        false,
+        `${figure.id} derives from a committed document, not from artifacts/`,
       );
-    }
+
+    // THE COMMITTED SOURCE: unreadable must be REPORTED, and the message must say why.
+    const committed = unreadableProblems({
+      ceiling_tsc_strict: 'docs/orders/…docx states no /tsc-strict <=\\s*(\\d+)/',
+    });
+    assert.equal(committed.length, 1, 'an unreadable committed source must be reported');
+    assert.match(committed[0] as string, /ceiling_tsc_strict/);
+    assert.match(committed[0] as string, /COMMITTED, not a gitignored artifact/);
+
+    // THE ARTIFACT SOURCE: unreadable is the ordinary clean-checkout state and must be silent.
+    const fromArtifact = FIGURES.find((f) => isArtifactSourced(f));
+    assert.ok(fromArtifact !== undefined, 'at least one figure must be artifact-sourced');
+    assert.deepEqual(
+      unreadableProblems({ [fromArtifact.id]: 'artifacts/… does not exist' }),
+      [],
+      'a gitignored artifact that has not been produced yet is skipped, not failed',
+    );
+
+    // …and an id that names no registered figure is not invented into a problem.
+    assert.deepEqual(unreadableProblems({ not_a_figure: 'whatever' }), []);
   });
 
   test('two documents cannot publish one figure at two values, artifact or no artifact', () => {
@@ -1264,5 +1626,476 @@ describe('published figures derive from their sources (FBL-020-R5 §3.3/§3.6)',
       figureProblems(survivorSlipped, docs).problems.some((p) => p.includes('mutations_survived')),
       'a surviving mutation published as zero must be reported',
     );
+  });
+});
+
+/**
+ * FBL-020-R6 §4.5 — THE FINAL STATE, INCLUDING ITS PROSE.
+ *
+ * The battery above proves the FIGURE gate can fail. It cannot prove anything about the
+ * sentences, and the sentences are what FBL-020-R5 was rejected for: a delivery report
+ * naming a red `HEAD` that was no longer `HEAD`, a KNOWN-LIMITATIONS repeating that no CI
+ * run existed, a requirement map still awaiting a run that had already happened, and no
+ * file anywhere recording the final commit or the run at all. Every figure gate was green
+ * throughout, necessarily — none of those claims is a number.
+ *
+ * These tests drive `scripts/check-final-state.ts` in both directions: as shipped against
+ * the real record, the real git history and the real documents; and against staged inputs
+ * in which each class of defect is reintroduced one at a time, so every limb is shown able
+ * to fail. The stale-sentence test is the one the order asks for by name.
+ */
+describe('the final state is ONE record, and the documents restate it (FBL-020-R6 §4.5)', () => {
+  /**
+   * WHY THIS IS CONDITIONAL, AND WHAT STAYS UNCONDITIONAL.
+   *
+   * `scripts/mutation-kill.ts` runs this battery inside an ISOLATED COPY of the tree, and
+   * that copy deliberately excludes `.git`. A gate that shells out to git unconditionally
+   * would therefore throw at collection time there, take the whole battery down, and be
+   * reported as a SURVIVING mutation — the same trap the "uncommitted working tree" test
+   * above already documents.
+   *
+   * So the GIT limbs are measured only in a real checkout. Everything else — the prose,
+   * the record's internal arithmetic, the run data, the head-relation logic — runs in both
+   * places against facts SYNTHESISED from the record, and the two tests that can only be
+   * meaningful against a real history say so out loud rather than passing quietly.
+   */
+  const IN_GIT_CHECKOUT = existsSync(join(ROOT, '.git'));
+
+  const state = readFinalState();
+  const asRecorded = (s: FinalState): GitFacts => {
+    const subject: Record<string, string | undefined> = {};
+    const ancestorOfHead: Record<string, boolean> = {};
+    for (const c of [s.r5_baseline, ...s.code_bearing_commits]) {
+      subject[c.sha] = c.subject;
+      ancestorOfHead[c.sha] = true;
+    }
+    return {
+      head: s.evidence_commit_sha,
+      shallow: false,
+      subject,
+      ancestorOfHead,
+      baselineToEvidence: s.code_bearing_commits.map((c) => c.sha).reverse(),
+      aheadOfEvidence: [],
+    };
+  };
+  const factsFor = (s: FinalState): GitFacts => (IN_GIT_CHECKOUT ? readGitFacts(s) : asRecorded(s));
+
+  const facts = factsFor(state);
+  const docs = readFinalStateDocuments();
+
+  /** A deep copy, so a staged defect cannot leak into the next test. */
+  const clone = (): FinalState => JSON.parse(JSON.stringify(state)) as FinalState;
+  const cloneFacts = (): GitFacts => JSON.parse(JSON.stringify(facts)) as GitFacts;
+
+  test('as shipped: the record describes this repository and every document restates it', () => {
+    assert.ok(
+      existsSync(join(ROOT, FINAL_STATE_RECORD)),
+      `${FINAL_STATE_RECORD} must be COMMITTED`,
+    );
+    assert.deepEqual(
+      finalStateProblems(state, facts, docs),
+      [],
+      'the delivery documents must state ONE final state, and it must be this repository’s',
+    );
+  });
+
+  test('a STALE SENTENCE reintroduced into a delivery document is REPORTED', () => {
+    /*
+     * THE PROOF THE ORDER ASKS FOR BY NAME. Each withdrawn sentence is put back into each
+     * governed document, one at a time, OUTSIDE any withdrawal region — which is exactly
+     * how it lived in the tree that was rejected — and the gate must name it every time.
+     */
+    for (const forbidden of FORBIDDEN) {
+      for (const file of FINAL_STATE_GOVERNED) {
+        const staged = { ...docs, [file]: `${docs[file] as string}\n\n${forbidden.sentence}\n` };
+        const problems = finalStateProblems(state, facts, staged);
+        assert.ok(
+          problems.some((p) => p.includes(forbidden.id) && p.includes(file)),
+          `reintroducing "${forbidden.id}" into ${file} must be reported`,
+        );
+      }
+    }
+  });
+
+  test('a withdrawn sentence is permitted INSIDE a marked withdrawal region, and nowhere else', () => {
+    const first = FORBIDDEN[0];
+    assert.ok(first);
+    const quoted = `${docs[REPORT_PATH] as string}\n\n${WITHDRAWN_START}\n${first.sentence}\n${WITHDRAWN_END}\n`;
+    assert.deepEqual(
+      finalStateProblems(state, facts, { ...docs, [REPORT_PATH]: quoted }),
+      [],
+      'withdrawing a claim means quoting it; a quotation inside the marker is not an assertion',
+    );
+
+    const bare = `${docs[REPORT_PATH] as string}\n\n${first.sentence}\n`;
+    assert.ok(
+      finalStateProblems(state, facts, { ...docs, [REPORT_PATH]: bare }).some((p) =>
+        p.includes(first.id),
+      ),
+      'and the same sentence without the marker is an assertion, and is refused',
+    );
+  });
+
+  test('the exemption is BOUNDED: every withdrawal region in every governed document is counted', () => {
+    /*
+     * An exemption nobody counts is an exemption that grows. The regions are few, they are
+     * counted here, and a document that started masking half of itself would fail this.
+     */
+    let total = 0;
+    for (const file of FINAL_STATE_GOVERNED) {
+      const { regions } = maskDocument(file, docs[file] as string);
+      total += regions;
+      assert.ok(regions <= 4, `${file} declares ${regions} withdrawal regions, which is too many`);
+    }
+    assert.ok(total > 0, 'the corrections must be recorded by quotation, not by deletion');
+    assert.ok(total <= 12, `${total} withdrawal regions across five documents is too many`);
+  });
+
+  test('a REQUIRED statement missing from a document is REPORTED, document by document', () => {
+    /*
+     * The staging is done on the NORMALIZED text, because that is the form the gate
+     * compares: Markdown wraps a required sentence across lines and decorates it with
+     * backticks and asterisks, so removing the raw string would remove nothing at all and
+     * the test would pass without having staged anything. Handing the gate normalized text
+     * is legitimate — normalizing is idempotent — and it is the only way to be sure the
+     * sentence really left the document.
+     */
+    for (const statement of requiredStatements(state)) {
+      for (const file of statement.documents) {
+        const flat = normalizeFinalState(docs[file] as string);
+        const stripped = flat.split(normalizeFinalState(statement.sentence)).join('[removed]');
+        assert.notEqual(stripped, flat, `${file} must really carry ${statement.id}`);
+        assert.ok(
+          finalStateProblems(state, facts, { ...docs, [file]: stripped }).some(
+            (p) => p.includes(statement.id) && p.includes(file),
+          ),
+          `removing ${statement.id} from ${file} must be reported`,
+        );
+      }
+    }
+  });
+
+  test('the required sentences are DERIVED from the record, so the record cannot drift from them', () => {
+    const moved = clone();
+    const green = moved.code_bearing_commits[moved.code_bearing_commits.length - 1];
+    assert.ok(green);
+    green.run.run_id = 99999999999;
+    const sentence = requiredStatements(moved).find((s) => s.id === 'final_head_and_run')?.sentence;
+    assert.ok(sentence?.includes('99999999999'), 'the sentence must follow the record');
+    assert.ok(
+      finalStateProblems(moved, facts, docs).some((p) => p.includes('final_head_and_run')),
+      'so changing the record without changing the documents fails, in every document',
+    );
+  });
+
+  test('a commit MISSING from the recorded range is REPORTED — the R5 undercount', () => {
+    /*
+     * This is the defect itself. The report published TWO code-bearing commits over a
+     * range that held THREE, and no gate compared the list with the history.
+     */
+    const undercount = clone();
+    const dropped = undercount.code_bearing_commits.shift();
+    assert.ok(dropped);
+    // The R5 shape exactly: the record's own arithmetic is made self-consistent at the
+    // WRONG number, which is what let the published count stay green.
+    undercount.commit_budget.used = undercount.code_bearing_commits.length;
+    undercount.commit_budget.failed_ci = undercount.code_bearing_commits.filter(
+      (c) => c.run.conclusion !== 'success',
+    ).length;
+    const problems = finalStateProblems(undercount, facts, docs);
+    assert.ok(
+      problems.some((p) => p.includes('are NOT recorded') && p.includes(dropped.sha)),
+      'a commit in the range that the record does not list must be named',
+    );
+    assert.ok(
+      problems.some((p) => p.includes('commit_budget.used')),
+      'and git — not the record — decides how many code-bearing commits there are',
+    );
+  });
+
+  test('a commit the repository does not have, or a subject it does not carry, is REPORTED', () => {
+    if (!IN_GIT_CHECKOUT) {
+      // Not a silent skip: what is recorded is WHY this limb could not be measured.
+      assert.ok(
+        !existsSync(join(ROOT, '.git')),
+        'the git limbs were skipped, so this must genuinely not be a checkout',
+      );
+      assert.ok(existsSync(join(ROOT, FINAL_STATE_RECORD)), 'sanity: the record is still here');
+      return;
+    }
+    const invented = clone();
+    const first = invented.code_bearing_commits[0];
+    assert.ok(first);
+    first.sha = 'f'.repeat(40);
+    first.short = 'fffffff';
+    assert.ok(
+      finalStateProblems(invented, readGitFacts(invented), docs).some((p) =>
+        p.includes('is not a commit in this repository'),
+      ),
+      'the record may not name a commit that does not exist',
+    );
+
+    const relabelled = clone();
+    const head = relabelled.code_bearing_commits[0];
+    assert.ok(head);
+    head.subject = 'FBL-020-R5: something else entirely';
+    assert.ok(
+      finalStateProblems(relabelled, facts, docs).some((p) => p.includes('but git says')),
+      'nor may it record a subject the commit does not carry',
+    );
+  });
+
+  test('a run whose head_sha is not the commit it is attributed to is REPORTED', () => {
+    const branchRun = clone();
+    const green = branchRun.code_bearing_commits[branchRun.code_bearing_commits.length - 1];
+    const first = branchRun.code_bearing_commits[0];
+    assert.ok(green && first);
+    green.run.head_sha = first.sha;
+    assert.ok(
+      finalStateProblems(branchRun, facts, docs).some((p) =>
+        p.includes('is NOT the commit it is attributed to'),
+      ),
+      'a run of a different tree is not an exact-SHA run, and may not be published as one',
+    );
+  });
+
+  test('a run published as success with a non-success job in it is REPORTED', () => {
+    const painted = clone();
+    const green = painted.code_bearing_commits[painted.code_bearing_commits.length - 1];
+    assert.ok(green);
+    const job = green.run.jobs[1];
+    assert.ok(job);
+    job.conclusion = 'failure';
+    const problems = finalStateProblems(painted, facts, docs);
+    assert.ok(
+      problems.some((p) => p.includes('concludes success while')),
+      'the run-level conclusion must agree with the per-job conclusions',
+    );
+    assert.ok(
+      problems.some((p) => p.includes('non-success jobs and lists')),
+      'and the declared non-success count must agree with the list',
+    );
+  });
+
+  test('the HEAD relation is decided by git, not by the record', () => {
+    /*
+     * The check that would have caught R5 the moment `174c789` was pushed. The record is
+     * left declaring that the evidence commit is the tip; git is told that a commit sits
+     * on top of it; and the gate must refuse the declaration rather than the history.
+     */
+    const ahead = cloneFacts();
+    ahead.aheadOfEvidence = ['a'.repeat(40)];
+    assert.ok(
+      finalStateProblems(state, ahead, docs).some((p) =>
+        p.includes('commit(s) sit on top of the evidence commit'),
+      ),
+      'a record claiming the evidence commit is the tip must fail once it is not',
+    );
+
+    const behind = clone();
+    behind.repository_head_relation = 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT';
+    assert.ok(
+      finalStateProblems(behind, facts, docs).some((p) =>
+        p.includes('is empty — the evidence commit IS the tip'),
+      ),
+      'and the declaration is checked in BOTH directions',
+    );
+  });
+
+  test('the gate SURVIVES a real --depth 1 clone, and says which limbs did not run', (t) => {
+    /*
+     * FBL-020-R6 gate finding C2, proved rather than reasoned about.
+     *
+     * `actions/checkout` without `fetch-depth` produces a `--depth 1` checkout, and this
+     * gate exited 1 on one: every history limb asked git for an object the checkout had
+     * not fetched. Four earlier failures in this order came from the same shape of
+     * assumption about what a CI checkout has, so this test does not simulate shallowness
+     * — it makes a REAL shallow clone with git and runs the REAL gate against it.
+     *
+     * The clone carries the commit's tree, and the FBL-020-R6 documents are uncommitted by
+     * order, so the working tree's governed documents are staged into the clone. That is
+     * the CI condition once this work is committed: a shallow checkout whose files are the
+     * ones under test.
+     */
+    if (!IN_GIT_CHECKOUT) {
+      t.skip('no .git here — mutation-kill copies the tree without it');
+      return;
+    }
+    const branch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    }).trim();
+    assert.notEqual(branch, '', 'a detached HEAD cannot be cloned by branch name');
+
+    const scratch = mkdtempSync(join(tmpdir(), 'fbl020-shallow-'));
+    const clone_ = join(scratch, 'checkout');
+    try {
+      execFileSync(
+        'git',
+        ['clone', '--quiet', '--depth', '1', '--branch', branch, `file://${ROOT}`, clone_],
+        { cwd: ROOT, encoding: 'utf8', stdio: 'pipe' },
+      );
+
+      // The premise, asserted rather than assumed: git really did make this shallow, and
+      // it really does hold ONE commit. A test that ran against a full clone by accident
+      // would prove nothing at all.
+      assert.equal(
+        execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
+          cwd: clone_,
+          encoding: 'utf8',
+        }).trim(),
+        'true',
+        'the clone must be shallow',
+      );
+      assert.equal(
+        execFileSync('git', ['rev-list', '--count', 'HEAD'], {
+          cwd: clone_,
+          encoding: 'utf8',
+        }).trim(),
+        '1',
+        'a --depth 1 clone holds exactly one commit',
+      );
+
+      for (const file of [...FINAL_STATE_GOVERNED, FINAL_STATE_RECORD]) {
+        mkdirSync(join(clone_, file, '..'), { recursive: true });
+        copyFileSync(join(ROOT, file), join(clone_, file));
+      }
+
+      const output = execFileSync(
+        'npx',
+        ['tsx', join(ROOT, 'scripts', 'check-final-state.ts'), '--root', clone_],
+        { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32' },
+      );
+
+      assert.ok(
+        output.includes('git history: SHALLOW'),
+        `the gate must SAY the clone is shallow, got:\n${output}`,
+      );
+      for (const check of HISTORY_DEPENDENT_CHECKS) {
+        assert.ok(
+          output.includes(`not run: ${check.id}`),
+          `a limb that could not run must be named, not dropped: ${check.id}`,
+        );
+      }
+      assert.ok(
+        output.includes('The delivery documents state ONE final state'),
+        'and the gate must PASS: a fetch depth is not a finding about the delivery',
+      );
+      // The limb R5 was rejected over is DERIVED from HEAD alone, so it still runs here.
+      assert.ok(
+        output.includes('HEAD_IS_THE_EVIDENCE_COMMIT'),
+        'the head relation must still be decided on a shallow clone',
+      );
+      assert.ok(
+        !HISTORY_DEPENDENT_CHECKS.some((c) => c.id === 'head_relation'),
+        'the head relation must never be listed as a limb a shallow clone cannot run',
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  test('a budget breach cannot be recorded as anything but a VIOLATION', () => {
+    const softened = clone();
+    softened.commit_budget.verdict = 'DISCLOSED';
+    assert.ok(
+      finalStateProblems(softened, facts, docs).some((p) =>
+        p.includes('is a VIOLATION; the record says'),
+      ),
+      'three commits against a budget of one is a violation, whatever the record calls it',
+    );
+
+    const cured = clone();
+    cured.commit_budget.disclosure_does_not_cure_the_violation = false;
+    assert.ok(
+      finalStateProblems(cured, facts, docs).some((p) => p.includes('disclosure does not cure')),
+      'and the record must carry the ruling that disclosure does not cure it',
+    );
+  });
+
+  test('§3.1 being OPEN forces the submission status, and the status vocabulary is closed', () => {
+    const claimed = clone();
+    claimed.submission.status = 'SUBMITTABLE AS COMPLETE';
+    claimed.submission.blocking = [];
+    assert.ok(
+      finalStateProblems(claimed, facts, docs).some((p) =>
+        p.includes('while §3.1 is OPEN the revision MAY NOT be submitted as complete'),
+      ),
+      'FBL-020-R6 §4.6: an OPEN §3.1 forbids a complete submission',
+    );
+
+    const invented = clone();
+    invented.submission.status = 'MOSTLY DONE' as FinalState['submission']['status'];
+    assert.ok(
+      finalStateProblems(invented, facts, docs).some((p) => p.includes('which is not one of')),
+      'the status vocabulary is closed',
+    );
+
+    const silent = clone();
+    silent.submission.blocking = [];
+    assert.ok(
+      finalStateProblems(silent, facts, docs).some((p) => p.includes('must name what blocks it')),
+      'a NOT SUBMITTABLE status must say what blocks it',
+    );
+  });
+
+  test('the record must QUOTE every sentence the gate refuses, and refuse every one it quotes', () => {
+    /*
+     * withdrawn_claims is where the corrections stay legible: deleting a false sentence
+     * leaves a reviewer holding the old document with nothing to match. The list is held
+     * to FORBIDDEN in both directions, so it can neither go quiet nor claim a withdrawal
+     * that nothing enforces.
+     */
+    const dropped = clone();
+    dropped.withdrawn_claims = dropped.withdrawn_claims.slice(1);
+    assert.ok(
+      finalStateProblems(dropped, facts, docs).some((p) => p.includes('among withdrawn_claims')),
+      'a refused sentence that is nowhere quoted must be reported',
+    );
+
+    const invented = clone();
+    invented.withdrawn_claims = [
+      ...invented.withdrawn_claims,
+      'a claim nothing in the gate refuses',
+    ];
+    assert.ok(
+      finalStateProblems(invented, facts, docs).some((p) =>
+        p.includes('which no FORBIDDEN rule refuses'),
+      ),
+      'and a recorded withdrawal with no rule behind it must be reported',
+    );
+  });
+  test('the gate reads NO artifact, and runs correctly with artifacts/ ABSENT', () => {
+    /*
+     * THE ASYMMETRY THAT HAS NOW COST THIS ORDER FOUR FAILURES. `artifacts/` is gitignored,
+     * so a developer tree has it and a fresh CI checkout does not. Anything reading it
+     * checks a different thing depending on where it runs.
+     *
+     * Two independent assertions, because either alone is weak: the SOURCE names no path
+     * under `artifacts/`, and the whole pipeline — record, git facts and documents — is
+     * re-read and re-checked with the directory MOVED ASIDE and restored afterwards.
+     */
+    const source = readFileSync(join(ROOT, 'scripts', 'check-final-state.ts'), 'utf8');
+    const reads = source
+      .split('\n')
+      .filter((line) => /artifacts\//.test(line) && !line.trimStart().startsWith('*'));
+    assert.deepEqual(reads, [], 'the final-state gate must name no path under artifacts/');
+
+    const live = join(ROOT, 'artifacts');
+    const parked = join(ROOT, `artifacts-parked-${process.pid}`);
+    const wasPresent = existsSync(live);
+    if (wasPresent) renameSync(live, parked);
+    try {
+      assert.equal(existsSync(live), false, 'the directory must really be absent for this check');
+      const reread = readFinalState();
+      assert.deepEqual(
+        finalStateProblems(reread, factsFor(reread), readFinalStateDocuments()),
+        [],
+        'the gate must reach the same verdict with artifacts/ absent',
+      );
+    } finally {
+      if (wasPresent) renameSync(parked, live);
+    }
+    assert.equal(existsSync(live), wasPresent, 'and the directory must be put back');
   });
 });

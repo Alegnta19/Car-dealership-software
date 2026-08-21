@@ -1,20 +1,18 @@
 /**
- * FBL-020-R5 §0.4 — THE PARTIAL-CHAIN FIXTURE MODE, AND ITS ALLOWLIST.
+ * FBL-020-R6 §1.4 — THE PARTIAL-CHAIN FIXTURE MODE, AND ITS CHECKSUM ALLOWLIST.
  *
  * `scripts/migrate.ts` applies `migrations/`. Handing it any other directory is the one
- * way a partial, reordered or altered chain could reach a database, and until this order
- * that redirection was UNGUARDED: `MIGRATIONS_DIR` was read straight out of the
- * environment, and the runner's response to a ledger row it could not find a body for was
- * a warning followed by carrying on.
- *
- * So the redirection is now an OPT-IN mode with three properties, and the third is the
- * one that matters:
+ * way a partial, reordered or altered chain could reach a database, so that redirection is
+ * an OPT-IN mode with three properties, and the third is the one that matters:
  *
  *   1. THE CALLER NAMES THE CHAIN. `MIGRATION_FIXTURE_CHAIN` must hold the id of a chain
  *      declared in `architecture/migration-fixture-chains.json`. An unset variable, or a
  *      name that is not declared, refuses.
- *   2. THE DIRECTORY MUST MATCH THE DECLARATION EXACTLY — the set of filenames, and each
- *      file's canonical-LF digest. An extra file, a missing file or a changed body refuses.
+ *   2. EVERY BODY IS ADMITTED BY CHECKSUM, NEVER BY NAME. The directory must carry only
+ *      files the chain declares, every declared file marked `required` must be present,
+ *      and each file present must hash — canonical-LF sha256 — to one of the digests
+ *      declared for THAT filename. A file whose name is right and whose body is not on the
+ *      list is refused exactly as hard as a file nobody declared.
  *   3. IT WEAKENS NO CHECK. A fixture mode whose effect is to switch off the ledger
  *      refusals would be worthless, and would make the tests that exercise those refusals
  *      unfalsifiable. Every refusal applies identically in both modes; what a chain grants
@@ -24,6 +22,28 @@
  * Also refused: naming a chain while pointed at the real `migrations/` directory. Somebody
  * who asks for fixture behavior in production has misunderstood something, and the safe
  * response to that is to stop.
+ *
+ * ── WHAT R6 §1.4 REMOVED, AND WHY ───────────────────────────────────────────
+ *
+ * Two admission rules used to live here beside the checksum one, and both are gone from
+ * this module — not disabled, not guarded by a flag, DELETED — because both admitted
+ * bodies nobody had ever read:
+ *
+ *   * `reserved-probe-filenames` admitted ANY body under a declared FILENAME, on the
+ *     reasoning that the ledger-probe fixtures must be free to change because changing
+ *     them is how the drift refusal is fired. True, and it does not require open
+ *     admission: the probe bodies are a handful of one-line `CREATE TABLE`s and the drift
+ *     variant is one of them, so all of them are now declared, each by its own digest,
+ *     under the filename it may occupy.
+ *   * `single-statement-deletion` admitted any body reachable from canonical `057` by
+ *     deleting one contiguous span holding one `;`. That is a large set — every statement
+ *     in the file, and every span that happens to hold exactly one terminator — and
+ *     membership of it was COMPUTED, not reviewed. The twelve deletions the negative
+ *     controls actually perform are deterministic, so all twelve are now declared by the
+ *     canonical digest of the RESULTING body, and a thirteenth is a refusal.
+ *
+ * `loadFixtureChains` refuses a declaration carrying either rule's keys, so neither can
+ * come back as data while this file stays as it is.
  */
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, readdirSync } from 'fs';
@@ -45,47 +65,101 @@ export const FIXTURE_CHAINS_FILE =
 /** The environment variable that opts in. Named once, here. */
 export const FIXTURE_CHAIN_ENV = 'MIGRATION_FIXTURE_CHAIN';
 
-/** A chain whose every file is pinned to a fixed canonical-LF digest. */
-export interface PinnedChain {
-  kind: 'pinned';
-  reason: string;
-  files: Record<string, string>;
+/** One admitted body of one file: a canonical-LF digest, and what that body is. */
+export interface ChainVariant {
+  sha256: string;
+  /** Why this body exists — the committed migration, a probe fixture, one control's deletion. */
+  note: string;
 }
 
 /**
- * A chain that is `migrations/` with ONE statement deleted from ONE named file. Its other
- * files are digest-pinned; the mutated file is admitted only if it is the canonical text
- * with a single contiguous span removed, and that span holds exactly one statement
- * terminator.
+ * One filename a chain may carry, with the complete list of bodies admitted under it.
+ *
+ * `variants` may never be empty: a filename with no digest IS filename-only admission, and
+ * that is the rule R6 §1.4 removed. `loadFixtureChains` refuses such a declaration.
  */
-export interface SingleStatementDeletionChain {
-  kind: 'single-statement-deletion';
-  reason: string;
-  mutated_file: string;
-  mutated_file_canonical_sha256: string;
-  files: Record<string, string>;
+export interface ChainFile {
+  /** Whether the directory must carry it. An optional file is still checksum-pinned. */
+  required: boolean;
+  variants: ChainVariant[];
 }
 
-/**
- * A chain pinned by FILENAME ONLY, in a namespace reserved for probes. Used by the battery
- * that exercises the runner's refusals, whose fixtures must be free to change because
- * changing them is how the refusals are fired.
- */
-export interface ReservedProbeChain {
-  kind: 'reserved-probe-filenames';
+export interface FixtureChain {
   reason: string;
-  filename_pattern: string;
-  filenames: string[];
+  files: Record<string, ChainFile>;
 }
-
-export type FixtureChain = PinnedChain | SingleStatementDeletionChain | ReservedProbeChain;
 
 interface ChainsFile {
-  chains: Record<string, FixtureChain>;
+  chains: Record<string, unknown>;
 }
 
+/** Keys that belonged to the two admission rules R6 §1.4 removed. */
+export const WITHDRAWN_CHAIN_KEYS = [
+  'kind',
+  'filename_pattern',
+  'filenames',
+  'mutated_file',
+  'mutated_file_canonical_sha256',
+] as const;
+
+const DIGEST = /^[0-9a-f]{64}$/;
+
+/**
+ * Reads the allowlist AND checks its shape, because the shape is the control. A chain that
+ * declared a filename with no digests would be filename-only admission wearing the new
+ * type's clothes, and a chain carrying `filename_pattern` or `mutated_file` would be one of
+ * the withdrawn rules coming back as data. Both throw here, at load, before any directory
+ * is compared against anything.
+ */
 export function loadFixtureChains(file = FIXTURE_CHAINS_FILE): Record<string, FixtureChain> {
-  return (JSON.parse(readFileSync(file, 'utf8')) as ChainsFile).chains;
+  const parsed = (JSON.parse(readFileSync(file, 'utf8')) as ChainsFile).chains;
+  const problems: string[] = [];
+  const chains: Record<string, FixtureChain> = {};
+
+  for (const [id, raw] of Object.entries(parsed)) {
+    const chain = raw as Partial<FixtureChain> & Record<string, unknown>;
+    for (const withdrawn of WITHDRAWN_CHAIN_KEYS)
+      if (chain[withdrawn] !== undefined)
+        problems.push(
+          `chain '${id}' declares '${withdrawn}', which belonged to an admission rule ` +
+            'FBL-020-R6 §1.4 REMOVED. Every body is admitted by exact filename AND canonical ' +
+            'checksum, and by nothing else.',
+        );
+    if (typeof chain.reason !== 'string' || chain.reason.trim() === '')
+      problems.push(`chain '${id}' states no reason, so nobody can review why it exists`);
+    if (chain.files === undefined || Object.keys(chain.files).length === 0) {
+      problems.push(`chain '${id}' declares no files`);
+      continue;
+    }
+    for (const [filename, entry] of Object.entries(chain.files)) {
+      if (typeof entry?.required !== 'boolean')
+        problems.push(`chain '${id}': ${filename} does not say whether it is required`);
+      const variants = entry?.variants;
+      if (!Array.isArray(variants) || variants.length === 0) {
+        problems.push(
+          `chain '${id}': ${filename} declares no admitted checksum. A filename with no ` +
+            'digest is FILENAME-ONLY ADMISSION, which is what this allowlist exists to stop.',
+        );
+        continue;
+      }
+      for (const variant of variants) {
+        if (typeof variant?.sha256 !== 'string' || !DIGEST.test(variant.sha256))
+          problems.push(
+            `chain '${id}': ${filename} declares ${JSON.stringify(variant?.sha256)}, which is ` +
+              'not a canonical-LF sha256',
+          );
+        if (typeof variant?.note !== 'string' || variant.note.trim() === '')
+          problems.push(
+            `chain '${id}': ${filename} declares a digest with no note saying what body it is`,
+          );
+      }
+    }
+    chains[id] = chain as FixtureChain;
+  }
+
+  if (problems.length > 0)
+    throw new Error(`${file} is not a valid fixture-chain allowlist:\n  ${problems.join('\n  ')}`);
+  return chains;
 }
 
 /** The canonical-LF text of a migration: what is hashed AND what is executed. */
@@ -95,56 +169,6 @@ export function canonicalText(raw: Buffer | string): string {
 
 export function canonicalDigest(raw: Buffer | string): string {
   return createHash('sha256').update(canonicalText(raw), 'utf8').digest('hex');
-}
-
-/**
- * Is `mutated` exactly `canonical` with ONE contiguous span deleted?
- *
- * The greedy common prefix and the greedy common suffix (bounded so they cannot overlap)
- * must together account for the whole of `mutated`. That is not a heuristic — it holds if
- * and only if a single contiguous deletion produces `mutated`:
- *
- *   * two separate deletions leave a middle stretch that neither the prefix nor the suffix
- *     reaches, so their lengths fall short;
- *   * a SUBSTITUTION of equal length is rejected by the length comparison, and a
- *     substitution that also shortens leaves a changed character between the two runs, so
- *     the lengths fall short again;
- *   * an INSERTION cannot make the text shorter.
- *
- * `tests/migration-ledger.test.ts` drives all four cases.
- */
-export function singleSpanDeletion(
-  canonical: string,
-  mutated: string,
-): { ok: boolean; deleted: string; reason: string } {
-  if (mutated.length >= canonical.length)
-    return {
-      ok: false,
-      deleted: '',
-      reason: 'the file is not shorter than the canonical text, so nothing was deleted from it',
-    };
-  let prefix = 0;
-  while (prefix < mutated.length && canonical[prefix] === mutated[prefix]) prefix += 1;
-  let suffix = 0;
-  while (
-    suffix < mutated.length - prefix &&
-    canonical[canonical.length - 1 - suffix] === mutated[mutated.length - 1 - suffix]
-  )
-    suffix += 1;
-  if (prefix + suffix !== mutated.length)
-    return {
-      ok: false,
-      deleted: '',
-      reason:
-        'the file is not the canonical text with one contiguous span removed — a common ' +
-        `prefix of ${prefix} and a common suffix of ${suffix} do not account for its ` +
-        `${mutated.length} characters`,
-    };
-  return {
-    ok: true,
-    deleted: canonical.slice(prefix, canonical.length - suffix),
-    reason: '',
-  };
 }
 
 export interface ChainValidation {
@@ -163,7 +187,6 @@ export function validateChainDirectory(
   chainId: string,
   dir: string,
   chains: Record<string, FixtureChain> = loadFixtureChains(),
-  canonicalMigrationsDir?: string,
 ): ChainValidation {
   const problems: string[] = [];
   const chain = chains[chainId];
@@ -195,72 +218,26 @@ export function validateChainDirectory(
     sha256: canonicalDigest(readFileSync(join(dir, f))),
   }));
 
-  if (chain.kind === 'reserved-probe-filenames') {
-    const pattern = new RegExp(chain.filename_pattern);
-    const declared = new Set(chain.filenames);
-    for (const f of present) {
-      if (!pattern.test(f))
-        problems.push(
-          `${f} is not in the reserved probe namespace ${chain.filename_pattern} — a probe ` +
-            'chain may only carry files no real migration could ever be named',
-        );
-      else if (!declared.has(f))
-        problems.push(`${f} matches the reserved pattern but is not one of the declared filenames`);
-    }
-    if (present.length === 0) problems.push('the probe chain directory holds no .sql file at all');
-    return { ok: problems.length === 0, chain: chainId, problems, observed };
-  }
+  for (const [filename, entry] of Object.entries(chain.files))
+    if (entry.required && !present.includes(filename))
+      problems.push(`${filename} is declared REQUIRED by the chain but is not present`);
 
-  const pinned = chain.files;
-  const expectedNames = new Set(Object.keys(pinned));
-  const mutatedFile = chain.kind === 'single-statement-deletion' ? chain.mutated_file : undefined;
-  if (mutatedFile !== undefined) expectedNames.add(mutatedFile);
-
-  for (const f of present)
-    if (!expectedNames.has(f))
-      problems.push(`${f} is present in the fixture directory but the chain does not declare it`);
-  for (const f of expectedNames)
-    if (!present.includes(f)) problems.push(`${f} is declared by the chain but is not present`);
-
-  for (const [file, expected] of Object.entries(pinned)) {
-    const found = observed.find((o) => o.file === file);
-    if (found === undefined) continue; // already reported as missing
-    if (found.sha256 !== expected)
+  for (const found of observed) {
+    const entry = chain.files[found.file];
+    if (entry === undefined) {
       problems.push(
-        `${file}: expected canonical-LF sha256 ${expected}, found ${found.sha256} — the chain ` +
-          'pins a fixed digest, so a changed body is a refusal and not a new baseline',
+        `${found.file} is present in the fixture directory but the chain does not declare it`,
       );
-  }
-
-  if (chain.kind === 'single-statement-deletion' && present.includes(chain.mutated_file)) {
-    const canonicalDir = canonicalMigrationsDir ?? join(__dirname, '..', 'migrations');
-    const canonicalPath = join(canonicalDir, chain.mutated_file);
-    if (!existsSync(canonicalPath)) {
-      problems.push(
-        `${chain.mutated_file}: the canonical body is not present at ${canonicalPath}, so the ` +
-          'mutation cannot be checked against it',
-      );
-    } else {
-      const canonical = canonicalText(readFileSync(canonicalPath));
-      const canonicalSha = canonicalDigest(canonical);
-      if (canonicalSha !== chain.mutated_file_canonical_sha256)
-        problems.push(
-          `${chain.mutated_file}: the chain pins the canonical digest ` +
-            `${chain.mutated_file_canonical_sha256} but migrations/ now holds ${canonicalSha}. ` +
-            'The pin must be updated deliberately when the migration is corrected.',
-        );
-      const mutated = canonicalText(readFileSync(join(dir, chain.mutated_file)));
-      const span = singleSpanDeletion(canonical, mutated);
-      if (!span.ok) problems.push(`${chain.mutated_file}: ${span.reason}`);
-      else {
-        const terminators = (span.deleted.match(/;/g) ?? []).length;
-        if (terminators !== 1)
-          problems.push(
-            `${chain.mutated_file}: the removed span holds ${terminators} statement ` +
-              'terminator(s), so it is not exactly one statement',
-          );
-      }
+      continue;
     }
+    if (!entry.variants.some((v) => v.sha256 === found.sha256))
+      problems.push(
+        `${found.file}: canonical-LF sha256 ${found.sha256} is not an admitted variant of this ` +
+          `file. The chain admits ${entry.variants.length}: ` +
+          `${entry.variants.map((v) => `${v.sha256} (${v.note})`).join('; ')}. A body is ` +
+          'admitted by its CHECKSUM and never by its name, so an undeclared body is a refusal ' +
+          'and not a new baseline.',
+      );
   }
 
   return { ok: problems.length === 0, chain: chainId, problems, observed };
@@ -336,11 +313,6 @@ export function decideMode(
       ],
     };
 
-  const validation = validateChainDirectory(
-    chainFromEnv,
-    migrationsDir,
-    chains,
-    canonicalMigrationsDir,
-  );
+  const validation = validateChainDirectory(chainFromEnv, migrationsDir, chains);
   return { mode: 'fixture', chain: chainFromEnv, problems: validation.problems };
 }

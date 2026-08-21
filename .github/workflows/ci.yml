@@ -40,7 +40,23 @@ jobs:
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_ci_test
       REQUIRE_DB_TESTS: '1'
     steps:
+      # FBL-020-R6 gate finding C2 — THIS `fetch-depth` IS LOAD-BEARING.
+      #
+      # Without it `actions/checkout` produces a `--depth 1` checkout: `.git` exists, HEAD
+      # resolves, and no other commit object does. `scripts/check-final-state.ts` compares
+      # the checked-in final state against GIT — the recorded subjects, the ancestry, and
+      # `git rev-list <r5_baseline>..<evidence_commit>` — so on a shallow checkout it exited
+      # 1, in the very job it was written for, and took the in-suite test that drives the
+      # same code with it.
+      #
+      # The gate is ALSO correct without this line (it detects the shallow repository and
+      # reports the limbs it cannot run, and `tests/delivery-documentation.test.ts` proves
+      # that on a real `git clone --depth 1`). This setting is what makes those limbs
+      # actually RUN here rather than be reported as unrun. Removing it does not break the
+      # job; it silently narrows what the job checks, which is worse.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -115,31 +131,44 @@ jobs:
       # or declared, with its reason, in architecture/reconciliation-inventory-057.json. The
       # control coverage is COMPUTED from each control's anchors, so it cannot be overstated
       # the way R4's prose was. An unaccounted reconciliation fails this step.
-      # FBL-020-R5 §0.1 — THE CENSUS RUNS HERE TOO, AND WHAT THAT DOES AND DOES NOT SHOW.
+      # FBL-020-R6 §1.2 — A CI-RUNNER CENSUS MAY NOT DECIDE THE BRANCH.
       #
-      # A census is a statement about the machine it runs on, so THIS run reports the RUNNER:
-      # it proves the script executes on a clean host and records that the runner holds no
-      # persistent PostgreSQL of its own. The §0.2 decision rests on the census taken on the
-      # implementer's machine, which is delivered as its own artifact and quoted in
-      # docs/FBL-020-DELIVERY-REPORT.md §0. This step is therefore EVIDENCE, NOT A GATE: it
-      # asserts the artifact exists and is non-empty and nothing else, because a runner cannot
-      # observe the environments the order asks about.
-      - name: Persistent-environment census (this runner; evidence, not a gate)
+      # A census is a statement about the machine it runs on, so THIS run reports the RUNNER
+      # and nothing else: it proves the script executes on a clean host and records that the
+      # runner holds no persistent PostgreSQL of its own. A hosted runner is created for one
+      # job and destroyed after it, so it can observe none of the operator-controlled
+      # environments the order asks about.
+      #
+      # R5 offered this artifact where the order asked for those environments, and the review
+      # rejected it. The refusal is now MECHANICAL rather than a matter of reading this
+      # comment: the artifact declares authority.may_decide_the_057_058_branch, this step
+      # ASSERTS that it is false here, and scripts/check-census-prose.ts throws on any census
+      # whose value is false. The 057/058 branch rests on the COMMITTED operator census at
+      # docs/evidence/FBL-020-R6-operator-environment-census.json, which the next step reads.
+      #
+      # This step is therefore EVIDENCE, NOT A GATE on the branch.
+      - name: Persistent-environment census (this runner only; MAY NOT decide the branch)
         run: |
           set -o pipefail
           npx tsx scripts/migration-census.ts --out artifacts/migration-census.json \
             --log artifacts/migration-census.txt
           grep -q '"acceptance": "NOT_REVIEWED"' artifacts/migration-census.json
+          grep -q '"role": "CI_RUNNER"' artifacts/migration-census.json
+          grep -q '"may_decide_the_057_058_branch": false' artifacts/migration-census.json
 
-      # FBL-020-R5 gate finding G5 — THIS ONE IS A GATE.
+      # FBL-020-R5 gate finding G5, tightened by FBL-020-R6 §1.1/§1.2 — THIS ONE IS A GATE.
       #
-      # The census above is evidence about the runner and cannot decide §0.2. What CAN be
-      # decided anywhere, on any host, is whether the delivery documents state the position
-      # the census artifact in front of them actually carries. R5 shipped an artifact
-      # concluding FREEZE 057 alongside a report and a requirement map asserting the
-      # opposite branch, with 057 edited in place and no 058 — and nothing compared them.
-      # This step compares them, and fails the run when they disagree.
-      - name: Census position vs delivery prose (the artifact and the documents must agree)
+      # The census above is evidence about the runner and cannot decide the branch. What CAN
+      # be decided anywhere, on any host, is whether the delivery documents state the
+      # position the OPERATOR census actually carries. R5 shipped an artifact concluding
+      # FREEZE 057 alongside a report and a requirement map asserting the opposite branch,
+      # with 057 edited in place and no 058 — and nothing compared them.
+      #
+      # This step compares them and fails the run when they disagree. It reads the COMMITTED
+      # operator census, not artifacts/: that file is gitignored, so a gate reading it would
+      # check a different thing on a developer machine than on this runner, and here it would
+      # be checking the prose against the runner census §1.2 forbids from deciding anything.
+      - name: Census position vs delivery prose (the committed OPERATOR census and the documents must agree)
         run: npx tsx scripts/check-census-prose.ts
 
       - name: Reconciliation inventory of 057 (every reconciliation accounted for)
@@ -190,6 +219,21 @@ jobs:
             --log artifacts/mutation-kill.txt
           grep -q '"mutations_survived": 0' artifacts/mutation-kill.json
 
+      # FBL-020-R6 §4.1: the SAME discipline for the §3 controls, which live in the
+      # DATABASE rather than in a TypeScript source. Mutating migration 058 would prove
+      # nothing here — the suite runs against a database where 058 has already been
+      # applied — so each control is DROPPED from a copy of that database and its named
+      # test must die, then be restored and pass again. `controls_filtered` is asserted
+      # false so a narrowed diagnostic run can never stand in for the gate.
+      - name: Database-control mutations (each §3 control dropped, its named test must die)
+        run: |
+          set -o pipefail
+          npx tsx scripts/database-control-mutations.ts \
+            --out artifacts/database-control-mutations.json \
+            --log artifacts/database-control-mutations.txt
+          grep -q '"survivors": 0' artifacts/database-control-mutations.json
+          grep -q '"controls_filtered": false' artifacts/database-control-mutations.json
+
       # FBL-020-R5 §3.3: no delivery document may publish a figure that disagrees with the
       # run or the constant producing it. This step runs AFTER the summary parser and the
       # mutation runner precisely because it reads their artifacts; the same comparison
@@ -199,6 +243,30 @@ jobs:
           set -o pipefail
           npx tsx scripts/check-published-figures.ts | tee artifacts/published-figures.txt
           npx tsx scripts/check-published-figures.ts --list > artifacts/published-figures.tsv
+
+      # FBL-020-R6 §4.5 — THE FINAL STATE, INCLUDING ITS PROSE.
+      #
+      # The step above compares FIGURES with the artifacts that produce them, and R5 shipped a
+      # materially stale final state straight through it: a delivery report naming a red HEAD
+      # that was no longer HEAD, a KNOWN-LIMITATIONS repeating that no CI run existed, and a
+      # requirement map still awaiting a run that had already happened. None of those sentences
+      # is a number, so nothing compared them with anything.
+      #
+      # This gate reads the COMMITTED record docs/evidence/FBL-020-FINAL-STATE.json and checks
+      # it against GIT (the commits exist, their subjects match, and the recorded list is
+      # exactly the commits in the recorded range), against the run data (each run's head_sha
+      # is the commit it is attributed to, and the per-job conclusions agree with the run-level
+      # one), and then sentence by sentence against the five delivery documents. It reads no
+      # artifact — deliberately, because artifacts/ is gitignored and this order has already
+      # been bitten four times by a gate that checked a different thing on a runner.
+      #
+      # It therefore runs BEFORE the artifact-producing steps as happily as after them, and is
+      # placed here only to keep the evidence files together.
+      - name: Final state (head SHA, exact-SHA run, submission status and CI-state prose)
+        run: |
+          set -o pipefail
+          npx tsx scripts/check-final-state.ts | tee artifacts/final-state.txt
+          npx tsx scripts/check-final-state.ts --list > artifacts/final-state.tsv
 
       - name: Schema fingerprint (fresh chain)
         run: |
@@ -219,7 +287,9 @@ jobs:
                    worker-smoke.txt worker-expiry-pass.txt \
                    test-output.log test-summary.json schema-fingerprint.json schema-fingerprint.txt \
                    requirement-map-check.txt mutation-kill.json mutation-kill.txt \
+                   database-control-mutations.json database-control-mutations.txt \
                    published-figures.txt published-figures.tsv \
+                   final-state.txt final-state.tsv \
                    reconciliation-inventory-057.json reconciliation-inventory-057.txt \
                    migration-census.json migration-census.txt \
                    npm-audit.json sbom.cdx.json; do
@@ -248,7 +318,17 @@ jobs:
   # at the point where it is true), seeds NONEMPTY legacy identity data, asserts that
   # fixture is really there, runs the NEGATIVE CONTROLS on isolated copies, applies 057,
   # and asserts the exact reconciled state of every seeded row plus nonzero and
-  # unchanged before/after counts. Then it compares fresh and upgraded fingerprints.
+  # unchanged before/after counts.
+  #
+  # FBL-020-R6-R6 §D1b — AND THEN IT USES THE DATABASE BEFORE APPLYING 058. The seeded
+  # fixture is PRE-057 by construction, so it can express nothing about the columns 057
+  # adds and 058 constrains; applying both migrations in one command made 058's §3.1
+  # pre-check a query over zero rows, and it shipped aborting on one ordinary version-2
+  # ALLOW plus one provider re-authentication. So 057 is applied alone, realistic
+  # activity is generated through the PRODUCTION code paths, 058 is applied on the used
+  # database, the SHIPPED engine writes version-3 evidence against it, and a post-058
+  # phase asserts the exemption is real and the floor moved. Then it compares fresh and
+  # upgraded fingerprints.
   migration-upgrade:
     name: populated upgrade drill + reconciliation negative controls
     runs-on: ubuntu-latest
@@ -313,19 +393,28 @@ jobs:
       # (the retained two-file fixture above uses it), the copies are byte-identical, so
       # the checksum ledger verifies them against migrations/ on the next full run.
       #
-      # The file count is ASSERTED. When a migration 058 is added this step FAILS, which
-      # forces a decision about which side of the boundary it belongs on instead of
-      # silently seeding against the wrong schema.
+      # The file count is ASSERTED, and the boundary is now stated by NUMBER rather than
+      # by naming one file. FBL-020-R6 §3 added `058`, and the old form — copy
+      # everything, delete 057 — would have carried 058 into a directory that is
+      # supposed to hold the schema as it stood BEFORE 057, seeding the identity fixture
+      # against constraints that did not exist yet. Everything numbered 057 or above is
+      # withheld, and the count still pins the answer at nine, so the next migration
+      # fails this step rather than riding along.
       - name: Stage the pre-057 chain
         run: |
           set -o pipefail
           PRE057="$RUNNER_TEMP/pre057-migrations"
           mkdir -p "$PRE057"
-          cp migrations/*.sql "$PRE057/"
-          rm -f "$PRE057/057_identity_boundary_completion.sql"
+          for f in migrations/*.sql; do
+            n=$(basename "$f")
+            case "$n" in
+              0[0-4]*|05[0-6]*) cp "$f" "$PRE057/" ;;
+              *) echo "withheld from the pre-057 chain: $n" ;;
+            esac
+          done
           ls -1 "$PRE057" | tee artifacts/pre-057-chain.txt
           test "$(ls -1 "$PRE057" | wc -l)" -eq 9
-          ! grep -q '^057_' artifacts/pre-057-chain.txt
+          ! grep -qE '^0(5[7-9]|[6-9])' artifacts/pre-057-chain.txt
           echo "PRE057=$PRE057" >> "$GITHUB_ENV"
 
       - name: Migrate through the last PRE-057 migration (050..056)
@@ -374,13 +463,48 @@ jobs:
           # the gate, so the artifact records that it was narrowed and this asserts it was not.
           grep -q '"controls_filtered": false' artifacts/negative-controls.json
 
-      - name: Apply 057 on top of the populated legacy data
+      # FBL-020-R6-R6 §D1b — 057 AND 058 ARE APPLIED SEPARATELY, WITH REAL USE BETWEEN
+      # THEM.
+      #
+      # This step used to be `npm run migrate`, which applied BOTH 057 and 058 in one
+      # command. That made the drill structurally incapable of putting a row in front of
+      # 058's pre-checks: the identity fixture is PRE-057 by construction — it predates
+      # `policy_decisions.session_id` — so no decision in it can name a session, and 058
+      # §3.1's rule about decisions that name sessions was measured against zero rows.
+      # 058 shipped a pre-check that ABORTED on one ordinary version-2 ALLOW plus one
+      # provider re-authentication, and this job could not see it. A drill that cannot
+      # reach the columns a migration constrains is not evidence for that migration.
+      #
+      # The `pre-058` chain is declared in architecture/migration-fixture-chains.json by
+      # name and digest, exactly like `pre-057`; the boundary is asserted by NUMBER so
+      # migration 059 fails this step rather than riding along.
+      - name: Stage the pre-058 chain (057 included, 058 withheld)
         run: |
           set -o pipefail
-          npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+          PRE058="$RUNNER_TEMP/pre058-migrations"
+          mkdir -p "$PRE058"
+          for f in migrations/*.sql; do
+            n=$(basename "$f")
+            case "$n" in
+              0[0-4]*|05[0-7]*) cp "$f" "$PRE058/" ;;
+              *) echo "withheld from the pre-058 chain: $n" ;;
+            esac
+          done
+          ls -1 "$PRE058" | tee artifacts/pre-058-chain.txt
+          test "$(ls -1 "$PRE058" | wc -l)" -eq 10
+          ! grep -qE '^0(5[89]|[6-9])' artifacts/pre-058-chain.txt
+          echo "PRE058=$PRE058" >> "$GITHUB_ENV"
+
+      - name: Apply 057 ONLY, on top of the populated legacy data
+        run: |
+          set -o pipefail
+          MIGRATIONS_DIR="$PRE058" MIGRATION_FIXTURE_CHAIN=pre-058 \
+            npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
 
       # The reconciled state, row by row, plus nonzero and UNCHANGED before/after counts:
       # 057 reconciles by changing state, never by deleting the evidence of a problem.
+      # The floor it installs is 2, and this phase requires version 2 to be ACCEPTED as
+      # well as version 1 refused — so a floor that had already moved would fail here.
       - name: Verify the reconciled state and before/after counts (phase=post-057)
         run: |
           set -o pipefail
@@ -388,6 +512,52 @@ jobs:
             --before artifacts/identity-pre-057.json \
             --out artifacts/identity-post-057.json | tee artifacts/constraint-state.txt
           grep -q '"result": "OK"' artifacts/identity-post-057.json
+
+      # THE STAGE THE DRILL WAS MISSING. Realistic post-057 activity, through the
+      # production code paths: the sanctioned identity bootstrap, a refreshable session,
+      # version-2 ALLOWs naming that live session, a PROVIDER RE-AUTHENTICATION that
+      # advances the session's auth_time, an ALLOW recorded against a binding that is
+      # then REVOKED, and a re-granted one. The script FAILS unless it leaves BOTH states
+      # 058 must tolerate: at least one decision whose recorded authentication time is no
+      # longer its session's (§3.1), and at least one stored authority row naming a
+      # binding version that binding has since advanced past (§3.3). So this can never
+      # again go green on a database where either rule is unreachable.
+      - name: Generate REALISTIC POST-057 ACTIVITY (production code paths)
+        run: |
+          set -o pipefail
+          npx tsx scripts/upgrade-post-057-activity.ts \
+            --out artifacts/post-057-activity.json --log artifacts/post-057-activity.txt
+          grep -q '"result": "OK"' artifacts/post-057-activity.json
+
+      - name: Apply 058 on top of the USED database
+        run: |
+          set -o pipefail
+          npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+          grep -q '058_policy_evidence_reconstructable.sql' artifacts/upgrade-log.txt
+
+      # …and the SHIPPED policy engine, against the upgraded database, on the very
+      # session whose auth_time advanced. It must ALLOW, write evidence_version 3, and
+      # record that session's CURRENT authentication instant — so the version 058 raises
+      # the floor to is the version production actually writes, and §3.1 is satisfied by
+      # the real writer rather than only by a probe.
+      - name: The shipped engine writes version-3 evidence after the upgrade
+        run: |
+          set -o pipefail
+          npx tsx scripts/upgrade-post-057-activity.ts --stage=after-058 \
+            --out artifacts/after-058-activity.json --log artifacts/after-058-activity.txt
+          grep -q '"result": "OK"' artifacts/after-058-activity.json
+
+      # The 058 half: its reconciliation landed, every decision's normalized evidence
+      # equals its own array, the §3.1 EXEMPTION is real and nonzero, the exempt rows are
+      # all below version 3 and unrewritten, §3.3's history-tolerance rows SURVIVED the
+      # migration with none of them at version 3, and the floor has moved to 3.
+      - name: Verify the 058 state and the §3.1 exemption (phase=post-058)
+        run: |
+          set -o pipefail
+          npx tsx scripts/verify-upgrade-state.ts --phase=post-058 \
+            --before artifacts/identity-post-057.json \
+            --out artifacts/identity-post-058.json | tee -a artifacts/constraint-state.txt
+          grep -q '"result": "OK"' artifacts/identity-post-058.json
 
       # FBL-020-R5 §0.3 and §0.4, exercised against the very database this job just built:
       # the refusals have to hold on a real migrated schema, not only on the probe fixtures the
@@ -438,6 +608,9 @@ jobs:
           for f in fixture-checksums.json upgrade-log.txt constraint-state.txt \
                    pre-057-chain.txt upgrade-backfill.txt upgrade-backfill.json \
                    identity-pre-057.txt identity-pre-057.json identity-post-057.json \
+                   pre-058-chain.txt post-057-activity.json post-057-activity.txt \
+                   after-058-activity.json after-058-activity.txt \
+                   identity-post-058.json \
                    negative-controls.txt negative-controls.json \
                    refusal-probes.txt refusal-probes.json \
                    upgraded-schema-fingerprint.json fresh-schema-fingerprint.json \

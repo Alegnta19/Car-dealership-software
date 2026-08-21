@@ -71,23 +71,34 @@ export function compareToChain(
       `--expect-chain ${chainId} names no declared chain. Declared: ` +
         `${Object.keys(chains).sort().join(', ')}`,
     ];
-  if (chain.kind !== 'pinned')
+  /*
+   * FBL-020-R6 §1.4: a chain declares, per filename, the complete list of bodies admitted
+   * under it. A retained fixture is compared against a chain that admits exactly ONE body
+   * per file — against a file with several admitted variants this would report a pass that
+   * means nothing, because "it is one of the several" is not "it is the historical schema".
+   * So the multi-variant case is refused here rather than approximated.
+   */
+  const multi = Object.entries(chain.files)
+    .filter(([, entry]) => entry.variants.length !== 1)
+    .map(([file, entry]) => `${file} (${entry.variants.length})`);
+  if (multi.length > 0)
     return [
-      `--expect-chain ${chainId} is a '${chain.kind}' chain, whose file bodies are ` +
-        'deliberately not pinned to fixed digests. Only a `pinned` chain can be compared ' +
-        'this way, and pretending otherwise would report a pass that means nothing.',
+      `--expect-chain ${chainId} admits more than one body for: ${multi.join(', ')}. A ` +
+        'retained fixture is compared against a chain that pins exactly one body per file; ' +
+        'a chain with alternatives cannot answer "is this the historical schema".',
     ];
 
   const problems: string[] = [];
   const found = new Map(entries.map((e) => [e.file, e.sha256_canonical_lf]));
-  for (const [file, expected] of Object.entries(chain.files)) {
+  for (const [file, entry] of Object.entries(chain.files)) {
+    const expected = entry.variants[0]?.sha256;
     const actual = found.get(file);
     if (actual === undefined) problems.push(`${file}: declared by the chain but NOT PRESENT`);
     else if (actual !== expected)
       problems.push(
-        `${file}: expected canonical-LF sha256 ${expected}, found ${actual} — the retained ` +
-          'fixture has CHANGED. The pinned value is not a baseline to refresh; the drill ' +
-          'reproduces a historical schema and a different file is a different schema.',
+        `${file}: expected canonical-LF sha256 ${String(expected)}, found ${actual} — the ` +
+          'retained fixture has CHANGED. The pinned value is not a baseline to refresh; the ' +
+          'drill reproduces a historical schema and a different file is a different schema.',
       );
   }
   for (const e of entries)

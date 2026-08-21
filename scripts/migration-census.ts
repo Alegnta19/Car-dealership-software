@@ -2005,13 +2005,187 @@ export const COUNT_IS_POINT_IN_TIME =
   '§0.2 turns on and what the delivery documents quote. Do not read the count as a ' +
   'measurement of anything.';
 
+/**
+ * FBL-020-R6 1.2 - WHO IS ALLOWED TO DECIDE THE BRANCH.
+ *
+ * A census is a statement about the machine it ran on. A hosted CI runner is created for
+ * one job and destroyed after it: it holds no operator state and can observe none, so a
+ * census taken there is evidence ABOUT THE RUNNER and about nothing else. R5 offered the
+ * runner census where the order asked for the operator-controlled environments, and the
+ * review rejected it.
+ *
+ * So the artifact now says, in a field rather than in a paragraph, which kind of census it
+ * is and whether it may decide anything. `scripts/check-census-prose.ts` REFUSES a census
+ * whose `may_decide_the_057_058_branch` is false, so a runner artifact cannot stand in for
+ * the operator one even by accident.
+ *
+ * The detection is FAIL-CLOSED: anything that looks like an automation environment is a
+ * runner. A genuine operator machine with `CI` set in its environment therefore produces a
+ * census that refuses to decide - a loud failure, which is the safe direction.
+ */
+export type CensusRole = 'OPERATOR_CONTROLLED_HOST' | 'CI_RUNNER';
+
+export interface CensusAuthority {
+  role: CensusRole;
+  may_decide_the_057_058_branch: boolean;
+  statement: string;
+  /** The environment variables the role was read from, so the reading can be re-checked. */
+  detected_from: string[];
+}
+
+export const RUNNER_ENV_MARKERS = ['GITHUB_ACTIONS', 'GITHUB_RUN_ID', 'RUNNER_NAME', 'CI'] as const;
+
+export function censusAuthority(env: NodeJS.ProcessEnv = process.env): CensusAuthority {
+  const seen = RUNNER_ENV_MARKERS.filter((k) => {
+    const v = env[k];
+    return v !== undefined && v !== '' && v.toLowerCase() !== 'false';
+  });
+  if (seen.length > 0)
+    return {
+      role: 'CI_RUNNER',
+      may_decide_the_057_058_branch: false,
+      statement:
+        'THIS CENSUS INSPECTED AN AUTOMATION RUNNER, NOT AN OPERATOR-CONTROLLED HOST. A ' +
+        'hosted runner is created for one job and destroyed after it, so it keeps no state ' +
+        'anybody depends on and it can observe none of the environments the order asks ' +
+        'about. This artifact is evidence ABOUT THIS RUNNER and about nothing else. It MUST ' +
+        'NOT be used to decide whether migration 057 is frozen, and ' +
+        'scripts/check-census-prose.ts refuses it if anything tries.',
+      detected_from: [...seen],
+    };
+  return {
+    role: 'OPERATOR_CONTROLLED_HOST',
+    may_decide_the_057_058_branch: true,
+    statement:
+      'This census inspected an operator-controlled host: a machine that keeps state across ' +
+      'restarts and is not created and destroyed by a job. Its scope is that one host and ' +
+      'nothing beyond it - see census_scope.out_of_scope. It states a position and the ' +
+      "evidence for it; that is the implementer's reading offered for review, and " +
+      '`acceptance` is NOT_REVIEWED.',
+    detected_from: [],
+  };
+}
+
+/**
+ * FBL-020-R6 1.1 - WHAT THIS CENSUS COVERED, AND WHAT IT COULD NOT.
+ *
+ * A census with no stated scope cannot be read: "no environment holds 057" means nothing
+ * until you know which environments were looked at. Both halves are published.
+ */
+export interface CensusScope {
+  host: { platform: string; arch: string; node: string };
+  /** The classes of target enumerated on this host. */
+  enumerated_classes: string[];
+  /** What this census is NOT evidence about, stated so it cannot be over-read. */
+  out_of_scope: string[];
+}
+
+export const OUT_OF_SCOPE = [
+  'Any environment not reachable from this host. A managed database, a colleague machine, ' +
+    'a customer deployment and a cloud environment nobody on this machine has credentials ' +
+    'for are all outside this census, and nothing here is evidence about them.',
+  'Any host on the network. Only 127.0.0.1 is probed, and only for the local drill port.',
+  'Any cluster whose data directory this account cannot read. Such a cluster is reported ' +
+    '`indeterminate`, never `no`.',
+  'The future. Every verdict is a reading at `generated_at`; an environment migrated a ' +
+    'minute later is not described here.',
+] as const;
+
+export function censusScope(): CensusScope {
+  return {
+    host: { platform: process.platform, arch: process.arch, node: process.version },
+    enumerated_classes: [
+      'the GitHub Actions workflows declared in .github/workflows, read as source',
+      'registered Windows services whose image is a PostgreSQL server',
+      'every PostgreSQL data directory discoverable on this host',
+      "the named volume backing docker-compose.yml's postgres service",
+      'the PostgreSQL clusters inside each WSL distribution',
+      'the local drill cluster on 127.0.0.1:55434',
+    ],
+    out_of_scope: [...OUT_OF_SCOPE],
+  };
+}
+
+/**
+ * FBL-020-R6 1.1 - SOURCE-HEAD PROVENANCE.
+ *
+ * The commit the census was taken at, and whether the tree it ran from carried changes on
+ * top of that commit. A census whose provenance is a bare commit id is not checkable: the
+ * markers it searches for are derived from `migrations/`, so a modified tree can search for
+ * a different set of names than the commit does.
+ */
+export interface SourceHeadProvenance {
+  head: string;
+  tree_state: 'clean' | 'modified';
+  modified_paths: number;
+  /**
+   * Whether `migrations/` ITSELF differs from the commit. It is called out separately
+   * because the markers this census searches for are derived from that directory: a tree
+   * with an edited migration searches for a different set of names than the commit does,
+   * and that is the one modification that changes what the census means.
+   */
+  migrations_match_head: boolean;
+  statement: string;
+}
+
+/**
+ * The reading, as a PURE function of the three things git reports.
+ *
+ * It is separated from the git calls so both branches can be driven from a test: this
+ * repository's `migrations/` is byte-immutable, so a test that could only observe the tree
+ * it runs in could never exercise the MODIFIED-migrations branch — and a version of this
+ * function that hard-coded `migrations_match_head: true` would pass every such test while
+ * describing a tree nobody had looked at. `tests/migration-census.test.ts` drives both.
+ *
+ * `-1` for either count means git could not answer; that is reported as `modified`, never
+ * as `clean`, because an unreadable tree is not a tree that has been shown unchanged.
+ */
+export function provenanceFrom(
+  head: string,
+  changedPaths: number,
+  changedMigrationPaths: number,
+): SourceHeadProvenance {
+  const state: SourceHeadProvenance['tree_state'] = changedPaths === 0 ? 'clean' : 'modified';
+  return {
+    head: head === '' ? 'unknown' : head,
+    tree_state: state,
+    modified_paths: changedPaths,
+    migrations_match_head: changedMigrationPaths === 0,
+    statement:
+      state === 'clean'
+        ? 'Taken from a working tree identical to the commit above.'
+        : `Taken from a working tree carrying ${changedPaths} changed path(s) on top of the ` +
+          `commit above; migrations/ carries ${changedMigrationPaths} of them. The markers ` +
+          'this census searched for are derived from migrations/, so that number is the one ' +
+          'that decides whether this census asked the same question the commit would have ' +
+          'asked.',
+  };
+}
+
+export function sourceHeadProvenance(): SourceHeadProvenance {
+  const head = exec('git', ['rev-parse', 'HEAD'], 20_000).stdout.trim();
+  const count = (args: string[]): number => {
+    const r = exec('git', args, 20_000);
+    return r.ok ? r.stdout.split(/\r?\n/).filter((l) => l.trim() !== '').length : -1;
+  };
+  return provenanceFrom(
+    head,
+    count(['status', '--porcelain']),
+    count(['status', '--porcelain', '--', 'migrations']),
+  );
+}
+
 interface Census {
   order: string;
   acceptance: string;
   disclaimer: string;
+  /** See `censusAuthority`: whether this census may decide anything at all. */
+  authority: CensusAuthority;
   /** See `COUNT_IS_POINT_IN_TIME`: the position is the claim, the count is a reading. */
   counts_are_point_in_time: string;
   generated_at: string;
+  census_scope: CensusScope;
+  source_head_provenance: SourceHeadProvenance;
   host: { platform: string; node: string };
   repository: { head: string; markers_searched_for: string[] };
   environments: Finding[];
@@ -2028,7 +2202,10 @@ interface Census {
  * delivery document that asserts a different one.
  */
 export type CensusPosition =
-  'FREEZE_057_AND_ADD_058' | 'EDIT_057_IN_PLACE' | 'BLOCKED_INDETERMINATE';
+  | 'FREEZE_057_AND_ADD_058'
+  | 'EDIT_057_IN_PLACE'
+  | 'BLOCKED_INDETERMINATE'
+  | 'INCOMPLETE_CENSUS_REQUIRES_058';
 
 /**
  * The one sentence that states the branch, WITHOUT any count that varies by host, so
@@ -2039,6 +2216,14 @@ export const BRANCH_SENTENCE: Record<CensusPosition, string> = {
   FREEZE_057_AND_ADD_058:
     'AT LEAST ONE PERSISTENT ENVIRONMENT HAS APPLIED A FORM OF 057. Under §0.2 that freezes ' +
     '057 and sends every further schema correction to 058.',
+  INCOMPLETE_CENSUS_REQUIRES_058:
+    'THIS CENSUS IS NOT COMPLETE. No environment counted as persistent reported that a form ' +
+    'of 057 is present, and every probe answered. But one or more environments could not be ' +
+    'CLASSIFIED at all, and an environment nobody could place is not one that has been shown ' +
+    'clean — so the negative FBL-020-R6 §1.3 requires, that NO persistent environment has ' +
+    'applied any form of 057, is NOT PROVEN by this census. §1.3 permits editing 057 in place ' +
+    'only on a complete census that proves that negative, so 057 is FROZEN and every further ' +
+    'schema change goes in 058.',
   BLOCKED_INDETERMINATE:
     'NO PERSISTENT ENVIRONMENT WAS SHOWN TO HAVE APPLIED 057, BUT ONE OR MORE COULD NOT BE ' +
     'INSPECTED. An uninspected environment is not a clean one; the §0.2 branch cannot be ' +
@@ -2055,6 +2240,14 @@ export interface CensusConclusion {
   persistent_environments_indeterminate: string[];
   disposability_indeterminate: string[];
   disposable_or_ephemeral_with_057: string[];
+  /**
+   * FBL-020-R6 §1.3: whether EVERY environment was both classified and answered for. Only a
+   * complete census can prove the negative the "unless" clause needs.
+   */
+  census_is_complete: boolean;
+  /** Derived from the position, so the branch is a field and not a reading of a paragraph. */
+  permits_editing_057_in_place: boolean;
+  requires_058: boolean;
   position: CensusPosition;
   branch_sentence: string;
   implementer_reading: string;
@@ -2096,12 +2289,31 @@ export function summarize(environments: Finding[]): CensusConclusion {
       : ` ${unclassifiable.length} cluster(s) whose disposability could not be established are ` +
         'COUNTED WITH THE PERSISTENT ONES above rather than assumed to be drill clusters.';
 
+  /*
+   * FBL-020-R6 §1.3 — AN INCOMPLETE CENSUS CANNOT PROVE A NEGATIVE.
+   *
+   * §1.3 permits editing 057 in place ONLY IF a COMPLETE census proves that no persistent
+   * environment has applied any form of it. R5 read that as "did anything report `yes`",
+   * which is a different and weaker question: a cluster whose DISPOSABILITY could not be
+   * established is not an environment that has been shown clean, it is an environment
+   * nobody could place, and a census carrying one has not enumerated the operator's
+   * persistent environments at all. The fourth position exists so that state has its own
+   * honest sentence rather than borrowing FREEZE's — which would assert that a persistent
+   * environment holds 057, a claim this evidence does not support — or EDIT's, which would
+   * assert the estate is clean, a claim it does not support either.
+   *
+   * All three of the non-clean positions land on the same branch: 058.
+   */
+  const complete = unknown.length === 0 && unclassifiable.length === 0;
+
   const position: CensusPosition =
     withIt.length > 0
       ? 'FREEZE_057_AND_ADD_058'
       : unknown.length > 0
         ? 'BLOCKED_INDETERMINATE'
-        : 'EDIT_057_IN_PLACE';
+        : unclassifiable.length > 0
+          ? 'INCOMPLETE_CENSUS_REQUIRES_058'
+          : 'EDIT_057_IN_PLACE';
 
   const closing =
     position === 'EDIT_057_IN_PLACE'
@@ -2114,6 +2326,9 @@ export function summarize(environments: Finding[]): CensusConclusion {
     persistent_environments_indeterminate: unknown,
     disposability_indeterminate: unclassifiable,
     disposable_or_ephemeral_with_057: elsewhere,
+    census_is_complete: complete,
+    permits_editing_057_in_place: position === 'EDIT_057_IN_PLACE',
+    requires_058: position !== 'EDIT_057_IN_PLACE',
     position,
     branch_sentence: BRANCH_SENTENCE[position],
     implementer_reading: BRANCH_SENTENCE[position] + closing + conservative,
@@ -2216,18 +2431,21 @@ async function main(): Promise<void> {
   // (E) The local drill cluster.
   environments.push(await localClusterFinding(localPort, markers, policy, services));
 
-  const head = exec('git', ['rev-parse', 'HEAD'], 20_000).stdout.trim();
+  const provenance = sourceHeadProvenance();
   const census: Census = {
-    order: 'FBL-020-R5 §0.1',
+    order: 'FBL-020-R6 §1.1',
     acceptance: 'NOT_REVIEWED',
+    authority: censusAuthority(),
     disclaimer:
       'This document REPORTS a finding and states the implementer’s reading of it. It is NOT ' +
       'an acceptance, ratification or discharge by the architect or by anyone else, and it ' +
       'must not be cited as one.',
     counts_are_point_in_time: COUNT_IS_POINT_IN_TIME,
     generated_at: new Date().toISOString(),
+    census_scope: censusScope(),
+    source_head_provenance: provenance,
     host: { platform: process.platform, node: process.version },
-    repository: { head: head === '' ? 'unknown' : head, markers_searched_for: markers },
+    repository: { head: provenance.head, markers_searched_for: markers },
     environments,
     totals: {
       environments: environments.length,
@@ -2252,6 +2470,19 @@ async function main(): Promise<void> {
 
   const lines: string[] = [
     `order=${census.order} acceptance=${census.acceptance}`,
+    `role=${census.authority.role} ` +
+      `may_decide_the_057_058_branch=${String(census.authority.may_decide_the_057_058_branch)}`,
+    census.authority.statement,
+    '',
+    `head=${census.source_head_provenance.head} ` +
+      `tree_state=${census.source_head_provenance.tree_state} ` +
+      `modified_paths=${census.source_head_provenance.modified_paths} ` +
+      `migrations_match_head=${String(census.source_head_provenance.migrations_match_head)}`,
+    census.source_head_provenance.statement,
+    '',
+    `scope=${census.census_scope.enumerated_classes.join(' | ')}`,
+    ...census.census_scope.out_of_scope.map((o) => `out-of-scope: ${o}`),
+    '',
     census.disclaimer,
     '',
     census.counts_are_point_in_time,
@@ -2278,7 +2509,10 @@ async function main(): Promise<void> {
     `persistent_with_057=${census.conclusion.persistent_environments_with_057.join(', ') || 'none'}`,
     `persistent_indeterminate=${census.conclusion.persistent_environments_indeterminate.join(', ') || 'none'}`,
     `disposability_indeterminate=${census.conclusion.disposability_indeterminate.join(', ') || 'none'}`,
+    `census_is_complete=${String(census.conclusion.census_is_complete)}`,
     `position=${census.conclusion.position}`,
+    `permits_editing_057_in_place=${String(census.conclusion.permits_editing_057_in_place)} ` +
+      `requires_058=${String(census.conclusion.requires_058)}`,
     `disposable_or_ephemeral_with_057=${census.conclusion.disposable_or_ephemeral_with_057.join(', ') || 'none'}`,
     '',
     census.conclusion.implementer_reading,

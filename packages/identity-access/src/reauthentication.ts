@@ -102,6 +102,27 @@ export type ReauthenticationTerminalReason =
    */
   | 'provider_error_callback'
   | 'authorization_code_missing'
+  /**
+   * FBL-020-R6 §2.1 — the sealed cookie presented a purpose that is not this leg's.
+   * Its own terminal reason rather than a route-level 401, for the same reason as
+   * every other binding failure: a callback that named a real transaction must end
+   * that transaction rather than leave it claimable.
+   */
+  | 'callback_purpose_mismatch'
+  /**
+   * FBL-020-R6 §2.4 — the completion named a DIFFERENT person from the one this
+   * step-up was started for. R5 put `user_link_id` in the lookup predicate, so a
+   * wrong-subject callback found no row, returned `null`, terminalized nothing and
+   * audited nothing: the step-up stayed `started` with its nonce claimable, and the
+   * single most interesting thing that can happen to a step-up left no trace.
+   */
+  | 'wrong_subject'
+  /**
+   * FBL-020-R6 §2.4 — a completion reached a transaction that had never been
+   * claimed. R5 filtered `claimed_at IS NOT NULL` in the lookup, which made an
+   * unclaimed completion indistinguishable from an unknown handle.
+   */
+  | 'completion_without_claim'
   | 'replayed'
   | 'expired';
 
@@ -527,13 +548,20 @@ export async function startReauthentication(input: {
  */
 export async function claimReauthentication(input: {
   nonce: string;
-  state: string;
-  codeVerifier: string;
+  /**
+   * FBL-020-R6 §2.1 — the values the CALLBACK presented, each `null`-able because
+   * "the callback did not carry this" is a fact this service classifies rather than
+   * a reason for a route to refuse before the row has been consulted.
+   */
+  state: string | null;
+  codeVerifier: string | null;
+  /** The purpose the sealed cookie carried. Omitted, it is taken to have said `reauth`. */
+  presentedPurpose?: string | null;
   callbackUri: string;
 }): Promise<{ reauthTxnId: string; tenantId: string } | null> {
   return withTransaction(async (executor) => {
     const found = await executor.query(
-      `SELECT * FROM reauthentication_transactions
+      `SELECT *, (expires_at <= NOW()) AS is_expired FROM reauthentication_transactions
         WHERE nonce_hash = $1 FOR UPDATE`,
       [sha256hex(input.nonce)],
     );
@@ -558,7 +586,16 @@ export async function claimReauthentication(input: {
     if (row.claimed_at !== null || String(row.state) !== 'started') {
       return terminate('replayed');
     }
-    if (ts(row.expires_at).getTime() <= Date.now()) return terminate('expired');
+    // FBL-020-R6 §2.3's rule, applied here too: expiry is DATABASE TIME, computed by
+    // the same statement that locked the row, never this process's `Date.now()`
+    // compared against a timestamp that travelled through JavaScript.
+    if (row.is_expired === true) return terminate('expired');
+    // FBL-020-R6 §2.1 — the purpose the sealed cookie presented must be this leg's.
+    // Omitted means "the cookie agreed"; a disagreement is terminal here rather than
+    // a route-level refusal that left the row claimable.
+    if ((input.presentedPurpose ?? 'reauth') !== 'reauth') {
+      return terminate('callback_purpose_mismatch');
+    }
     // Handle, state, PKCE and the exact callback: every one required, every one
     // compared against what the START stored. A missing stored digest cannot be
     // satisfied by a missing presented value — the schema forbids the NULL, and
@@ -571,6 +608,8 @@ export async function claimReauthentication(input: {
     // proven here and the identity is proven there — both required, neither
     // standing in for the other.
     if (
+      input.state === null ||
+      input.codeVerifier === null ||
       typeof row.state_hash !== 'string' ||
       typeof row.code_verifier_hash !== 'string' ||
       typeof row.callback_uri !== 'string' ||
@@ -651,16 +690,35 @@ export async function completeReauthentication(input: {
 }): Promise<CompletedReauthentication | null> {
   const skewMs = (input.clockSkewSeconds ?? 60) * 1000;
   return withTransaction(async (executor) => {
-    // FBL-020-R4 section 3: the leg must have been CLAIMED. The claim is where
-    // the server judged its own callback state, so a completion that could run
-    // without one would make the claim optional — and R3's completion could,
-    // because no claim existed at all.
+    /*
+     * ── FBL-020-R6 §2.4: FIND AND LOCK BY THE SERVER HANDLE, THEN CLASSIFY ────
+     *
+     * R5 put four things in this predicate — `user_link_id = $2`, `state =
+     * 'started'`, `claimed_at IS NOT NULL` and `expires_at > NOW()` — so a step-up
+     * that failed any of them SELECTED NOTHING, and the function returned `null`
+     * with no terminalization and no audit row at all. Two of those are exactly the
+     * cases an operator most needs to see:
+     *
+     *   * WRONG SUBJECT. A callback that verifies as somebody else — the browser
+     *     signed in as a different person mid-round-trip, or a deliberate attempt to
+     *     complete another person's step-up — found no row, so the transaction it
+     *     targeted stayed `started` with its nonce still claimable, and the attempt
+     *     was invisible.
+     *   * EXPIRY DURING THE EXCHANGE. A leg claimed just before `expires_at` and
+     *     completed after it fell out of the predicate the same way, and the step-up
+     *     sat `started` until a SWEEP eventually aged it — under a reason and at a
+     *     time that had nothing to do with what actually happened.
+     *
+     * The lookup is now the HANDLE ALONE, under `FOR UPDATE`, and every one of the
+     * four conditions is classified below with its own terminal reason and its own
+     * single audit event. `is_expired` is computed by this statement, so the clock
+     * is the database's.
+     */
     const found = await executor.query(
-      `SELECT * FROM reauthentication_transactions
-        WHERE nonce_hash = $1 AND user_link_id = $2 AND state = 'started'
-          AND claimed_at IS NOT NULL AND expires_at > NOW()
+      `SELECT *, (expires_at <= NOW()) AS is_expired FROM reauthentication_transactions
+        WHERE nonce_hash = $1
         FOR UPDATE`,
-      [sha256hex(input.nonce), input.userLinkId],
+      [sha256hex(input.nonce)],
     );
     if (found.rows.length === 0) return null;
     const startRow = found.rows[0] as Row;
@@ -674,12 +732,27 @@ export async function completeReauthentication(input: {
       await terminateWithin(executor, {
         reauthTxnId: txn.reauthTxnId,
         tenantId: txn.tenantId,
+        // The TRUE owner of the transaction, read from the row. On a wrong-subject
+        // refusal this is deliberately NOT the identity the callback presented: the
+        // audit row belongs to the step-up, and naming the caller's link would
+        // attribute a transaction to somebody it was never opened for.
         userLinkId: txn.userLinkId,
         reason,
-        state: 'failed',
+        state: reason === 'expired' ? 'expired' : 'failed',
       });
       return null;
     };
+
+    // A leg that is already terminal is a REPLAY, and `terminateWithin` records the
+    // ATTEMPT even though it changes nothing — the first terminal fact still wins.
+    if (String(startRow.state) !== 'started') return fail('replayed');
+    // The claim is where the server judged its own callback state, so a completion
+    // that could run without one would make the claim optional — and R3's completion
+    // could, because no claim existed at all.
+    if (startRow.claimed_at === null) return fail('completion_without_claim');
+    if (startRow.is_expired === true) return fail('expired');
+    // THE SUBJECT, compared rather than filtered.
+    if (txn.userLinkId !== input.userLinkId) return fail('wrong_subject');
 
     // stale authentication — the person did NOT freshly re-authenticate
     if (input.verifiedAuthTime.getTime() < txn.startedAt.getTime() - skewMs) {

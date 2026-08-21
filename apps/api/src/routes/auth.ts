@@ -46,7 +46,6 @@ import {
   sealCookiePayload,
   startLoginTransaction,
   startReauthentication,
-  succeedLoginTransaction,
   supportAccessHeaderValue,
   type AccessTokenVerifier,
   type IdentityProviderPort,
@@ -270,52 +269,61 @@ router.get(
     const sealed = readCookie(req, AUTH_TXN_COOKIE);
     const txn = sealed === undefined ? null : openTxnCookie(sealed, s);
     const code = req.query.code;
-    // ── FBL-020-R5 §1.5: WHAT COUNTS AS A REAL TRANSACTION ────────────────
+    // ── FBL-020-R6 §2.1: THE ROUTE DECIDES EXACTLY ONE THING ──────────────
     //
-    // The guard below is now exactly the set of callbacks that name NO claimable
-    // transaction: no sealed cookie, a cookie that does not open, the wrong
-    // purpose, no state, or a state that disagrees with the sealed one. There is
-    // no server row this request can be shown to own, so there is nothing to
-    // terminalize and nothing to attribute an audit event to — inventing one
-    // would be fabricating evidence.
+    // Is there a valid sealed cookie naming a SERVER TRANSACTION HANDLE? That is
+    // the only question this leg is entitled to answer for itself, because it is
+    // the only one that can be answered without the row: no cookie, a cookie that
+    // does not open under the server key, or a cookie carrying no handle names no
+    // claimable transaction at all, so there is nothing to terminalize and nothing
+    // to attribute an audit event to — inventing one would be fabricating evidence.
     //
-    // WHAT MOVED OUT OF IT, and why: `typeof code !== 'string'` used to be here.
-    // A provider `error` callback (`access_denied`, `login_required`, a
-    // misconfigured client) redirects to this route with the ORIGINAL state and
-    // NO code, and so it was refused right here — before the claim — which left
-    // its transaction sitting at `pending` until the expiry sweep eventually aged
-    // it. The order requires every real transaction to finish with ONE explained
-    // terminal state and ONE terminal audit event, and "expired, hours later, for
-    // the wrong reason" is neither. Such a callback carries a valid sealed handle
-    // and the matching state, so it IS a real transaction: it is claimed below
-    // and terminalized with its own reason.
-    if (
-      txn === null ||
-      txn.purpose !== 'login' ||
-      typeof req.query.state !== 'string' ||
-      req.query.state !== txn.state
-    ) {
-      clearCookie(res, AUTH_TXN_COOKIE, '/auth');
-      throw new UnauthorizedError('Authentication failed');
-    }
+    // WHAT MOVED OUT OF THIS GUARD, and why. R5 also refused here when the query
+    // `state` was missing or disagreed with the SEALED copy — even for a valid
+    // handle naming a live `pending` row. That refusal spent nothing: the row stayed
+    // `pending` with its state unburned and no audit event, so the transaction the
+    // callback named survived the callback that named it. The authority for `state`
+    // is the digest ON THE ROW, not a copy in the browser, and the same is true of
+    // the PKCE verifier, the OIDC nonce, the purpose and the registered redirect.
+    // Every one of them is now PRESENTED to the lifecycle service and classified
+    // there, with the row locked, in one transaction that ends terminally.
+    //
+    // (R5 §1.5 had already moved `typeof code !== 'string'` out for the same
+    // reason: a provider `error` callback carries the original state and no code,
+    // and refusing it here left its transaction pending until the sweep aged it.)
     clearCookie(res, AUTH_TXN_COOKIE, '/auth');
+    if (txn === null) throw new UnauthorizedError('Authentication failed');
+    const handle = typeof txn.login_txn_id === 'string' ? txn.login_txn_id : null;
+    if (handle === null) throw new UnauthorizedError('Authentication failed');
 
     // Atomically claim the SERVER transaction: pending -> consuming. A replay
-    // at any stage, an expired row, an unknown state and a tampered cookie are
+    // at any stage, an expired row, an unknown handle and a tampered cookie are
     // one indistinguishable failure. Nothing is declared succeeded here — the
     // claim only says the state is spent and this request owns it.
     //
-    // FBL-020-R4 §1: the claim now names the OPAQUE TRANSACTION HANDLE and the
-    // EXACT registered redirect this leg was opened for, on top of purpose,
-    // state, nonce and the PKCE binding. R3 claimed by state alone, so nothing
-    // proved the callback presenting a state was the callback that had been
-    // handed the transaction, and nothing tied the leg to its own redirect.
+    // FBL-020-R4 §1: the claim names the OPAQUE TRANSACTION HANDLE and the EXACT
+    // registered redirect this leg was opened for, on top of purpose, state, nonce
+    // and the PKCE binding. R3 claimed by state alone, so nothing proved the
+    // callback presenting a state was the callback that had been handed the
+    // transaction, and nothing tied the leg to its own redirect.
+    //
+    // FBL-020-R6 §2.1: each presented value may be `null` — "the callback did not
+    // carry this" — and the service classifies that as the mismatch it is. The
+    // route does not pre-screen any of them.
+    const presented = (name: string): string | null => {
+      const value = txn[name];
+      return typeof value === 'string' ? value : null;
+    };
     const claimed = await claimLoginTransactionAtomically({
-      loginTxnId: String(txn.login_txn_id),
-      state: String(txn.state),
+      loginTxnId: handle,
+      // The state the PROVIDER returned, compared against the digest the START
+      // stored. The sealed copy is not consulted: a value the browser carries
+      // cannot be one side of its own comparison.
+      state: typeof req.query.state === 'string' ? req.query.state : null,
       purpose: 'login',
-      nonce: String(txn.oidc_nonce),
-      codeVerifier: String(txn.code_verifier),
+      presentedPurpose: presented('purpose'),
+      nonce: presented('oidc_nonce'),
+      codeVerifier: presented('code_verifier'),
       redirectUri: s.redirectUri,
     });
     if (claimed === null) throw new UnauthorizedError('Authentication failed');
@@ -402,6 +410,10 @@ router.get(
         trustedIssuer: s.issuer,
         exchanged,
         verified,
+        // FBL-020-R6 §2.5: the CLAIMED transaction goes in, because the success
+        // transition is part of the same commit as the custody. The route no longer
+        // records it afterwards — it has no afterwards to record it in.
+        loginTxnId: claimed.loginTxnId,
         session: {
           ttlSeconds: SESSION_TTL_SECONDS,
           // R3: the refresh token is stored as SEALED ciphertext (plus its replay
@@ -416,10 +428,20 @@ router.get(
       throw err;
     }
     if (!admission.admitted) {
-      // ONE neutral answer for every condition. The internal reason is recorded
-      // on the transaction row and in the audit trail; nothing distinguishes an
-      // inactive tenant from a pending link, an expired window, an issuer drift
-      // or a carrier mismatch from outside.
+      // FBL-020-R6 §2.3/§2.5 — the transaction could not be completed: it had
+      // expired in DATABASE TIME at the moment of completion, or it was no longer
+      // `consuming`. Nothing survives (the session row and the sealed provider
+      // credential rolled back with the refused transition) and the identity
+      // package has ALREADY recorded the terminal state and its one audit event,
+      // so this leg answers neutrally and writes nothing further. R5 handed the
+      // cookie out here and then tried to compensate with a revocation.
+      if (admission.refusal === 'login_not_completable') {
+        throw new UnauthorizedError('Authentication failed');
+      }
+      // ONE neutral answer for every other condition. The internal reason is
+      // recorded on the transaction row and in the audit trail; nothing
+      // distinguishes an inactive tenant from a pending link, an expired window,
+      // an issuer drift or a carrier mismatch from outside.
       throw await refusal(
         admission.refusal === 'impersonation_detected'
           ? 'impersonation_detected'
@@ -429,26 +451,6 @@ router.get(
       );
     }
     const created = admission.created;
-
-    // ONLY NOW. Identity validation and local-session establishment have both
-    // finished, so `succeeded` is a fact rather than an intention. If the
-    // transaction is no longer `consuming` — an expiry sweep terminated it
-    // underneath us — the login FAILS CLOSED and the session just created is
-    // revoked rather than handed out.
-    // FBL-020-R5 §1.11: the success is recorded AS THE ADMITTED IDENTITY. These
-    // three facts come from the session the admission just established, which is
-    // the first moment in the round trip at which they are known at all.
-    if (
-      !(await succeedLoginTransaction({
-        loginTxnId: claimed.loginTxnId,
-        tenantId: created.session.tenantId,
-        userLinkId: created.session.userLinkId,
-        connectionId: created.session.connectionId,
-      }))
-    ) {
-      await revokeSessionById(created.session.sessionId, 'login_transaction_not_consuming');
-      throw new UnauthorizedError('Authentication failed');
-    }
 
     setCookie(res, SESSION_COOKIE, created.sessionToken, {
       maxAgeSeconds: SESSION_TTL_SECONDS,
@@ -724,21 +726,20 @@ router.get(
     const sealed = readCookie(req, REAUTH_TXN_COOKIE);
     const txn = sealed === undefined ? null : openTxnCookie(sealed, s);
     const code = req.query.code;
-    // FBL-020-R5 §1.5, the step-up leg — same rule, same reason as the login
-    // callback above: only a callback naming NO claimable transaction is refused
-    // before the claim. A provider `error` callback and a callback with no
-    // authorization code both present a valid sealed handle, so both are claimed
-    // and terminalized below rather than left at `started` for the sweep.
-    if (
-      txn === null ||
-      txn.purpose !== 'reauth' ||
-      typeof req.query.state !== 'string' ||
-      req.query.state !== txn.state
-    ) {
-      clearCookie(res, REAUTH_TXN_COOKIE, '/auth');
-      throw new UnauthorizedError('Reauthentication failed');
-    }
+    // FBL-020-R6 §2.1, the step-up leg — same rule, same reason as the login
+    // callback above: the ONLY thing decided here is whether a valid sealed cookie
+    // names a server handle. A missing or disagreeing `state`, a disagreeing PKCE
+    // verifier, a disagreeing purpose and a disagreeing callback URI are all
+    // presented to the claim and classified against the ROW's stored digests, under
+    // its lock, terminally. R5 refused the state cases here and left the row at
+    // `started` with its nonce still claimable.
+    //
+    // (R5 §1.5 had already moved the provider `error` callback and the
+    // missing-`code` callback past this guard, for the same reason.)
     clearCookie(res, REAUTH_TXN_COOKIE, '/auth');
+    if (txn === null) throw new UnauthorizedError('Reauthentication failed');
+    const handle = typeof txn.nonce === 'string' ? txn.nonce : null;
+    if (handle === null) throw new UnauthorizedError('Reauthentication failed');
 
     // ── FBL-020-R4 §3: THE SERVER ROW CLAIMS ITS OWN CALLBACK, ONCE ───────
     //
@@ -748,11 +749,16 @@ router.get(
     // conditional UPDATE. A second callback bearing the same state loses to the
     // database. Every refusal below is one neutral answer and one recorded
     // terminal state — never a row left at `started` for a replay to find.
-    const handle = String(txn.nonce);
+    const presented = (name: string): string | null => {
+      const value = txn[name];
+      return typeof value === 'string' ? value : null;
+    };
     const claim = await claimReauthentication({
       nonce: handle,
-      state: String(txn.state),
-      codeVerifier: String(txn.code_verifier),
+      // The state the PROVIDER returned, never the sealed copy of it.
+      state: typeof req.query.state === 'string' ? req.query.state : null,
+      presentedPurpose: presented('purpose'),
+      codeVerifier: presented('code_verifier'),
       callbackUri: s.reauthRedirectUri,
     });
     if (claim === null) throw new UnauthorizedError('Reauthentication failed');

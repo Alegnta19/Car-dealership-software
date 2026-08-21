@@ -56,11 +56,15 @@
  *    be, so the escape hatch cannot quietly widen.
  *
  * 5. WHAT NO GATE CAN CHECK IS LABELLED. `UNCHECKABLE` holds the figures this repository
- *    publishes but cannot derive — the Version 2.0 blueprint's byte size and the three
- *    quality ceilings, which are readable only in a document that is not in this
- *    repository, and the working-tree changed-path counts, which depend on a git history
- *    the gate is not given. Each declares the exact label that must appear beside it,
- *    and the gate FAILS if the document publishes the figure without the label.
+ *    publishes but cannot derive. Each declares the exact label that must appear beside
+ *    it, and the gate FAILS if a document publishes the figure without the label.
+ *
+ *    IT IS CURRENTLY EMPTY, and the comment on the array says why: its two entries were
+ *    the Version 2.0 blueprint's byte size and the three quality ceilings, both readable
+ *    only in a document this repository did not hold. FBL-020-R6 committed that document,
+ *    so all four figures are now DERIVED from its bytes in `FIGURES` instead. Because a
+ *    rule that iterates an empty array proves nothing, `figureProblems` takes the registry
+ *    as a parameter and the battery drives the refusal with a staged entry.
  *
  * ── ARTIFACTS ARE NOT COMMITTED ─────────────────────────────────────────────
  *
@@ -75,6 +79,7 @@ import { createHash } from 'crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { bareCitationFiles, loadRequirementMap } from './check-requirement-map';
+import { docxLines } from './docx-text';
 
 const ROOT = join(__dirname, '..');
 
@@ -88,6 +93,18 @@ export type FigureSource =
   | { kind: 'count'; file: string; pattern: string }
   /** The first capture group of a pattern in a file. */
   | { kind: 'capture'; file: string; pattern: string }
+  /**
+   * The first capture group of a pattern in the PARAGRAPH TEXT of a `.docx`.
+   *
+   * FBL-020-R6. This kind exists because a figure that was UNCHECKABLE became checkable:
+   * the governing Version 2.0 blueprint is now committed at
+   * `docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, so the
+   * three quality ceilings it states are readable from bytes this repository holds instead
+   * of resting on an attestation. The text is read through `scripts/docx-text.ts`, the same
+   * reader `tests/delivery-documentation.test.ts` verifies both blueprints with, so the
+   * gate and the battery cannot disagree about what the document says.
+   */
+  | { kind: 'docx-capture'; file: string; pattern: string }
   /** How many keys a JSON object has. */
   | { kind: 'keys'; file: string; path: string[] }
   /** The file's byte length. */
@@ -135,10 +152,76 @@ export const README = 'README.md';
 export const PARSER = 'scripts/parse-test-summary.ts';
 export const ORDER = 'docs/orders/FBL-020-R5.md';
 
+/**
+ * The GOVERNING Version 2.0 blueprint, committed at FBL-020-R6 time. Its facts were an
+ * attestation for as long as the file lived outside this repository; they are measurements
+ * now, and the figures below read them from these bytes.
+ */
+export const BLUEPRINT_V2 =
+  'docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx';
+
+/**
+ * FBL-020-R6 §1.3 — the migration-preflight decision record, and the census it rests on.
+ *
+ * The census is COMMITTED rather than written into the gitignored `artifacts/`, so the
+ * counts the decision record publishes are derivable on a clean checkout: they are read
+ * from the artifact by this gate, in CI and locally alike, and a record that restated one
+ * of them wrongly fails here rather than being skipped as unreadable.
+ */
+export const DECISION = 'docs/evidence/FBL-020-R6-MIGRATION-PREFLIGHT.md';
+export const OPERATOR_CENSUS = 'docs/evidence/FBL-020-R6-operator-environment-census.json';
+
 /** The documents this gate governs. A figure outside them is nobody's published figure. */
-export const GOVERNED = [REPORT, MAP, PROVENANCE, LIMITS, README] as const;
+export const GOVERNED = [REPORT, MAP, PROVENANCE, LIMITS, README, DECISION] as const;
 
 export const FIGURES: Figure[] = [
+  /*
+   * ── THE OPERATOR CENSUS, WHICH IS COMMITTED AND THEREFORE ALWAYS READABLE ──────
+   *
+   * The FBL-020-R6 §1.3 decision rests on three counts and one token out of this artifact.
+   * They are declared here with `artifact` unset, because the file is TRACKED: unlike the
+   * battery figures below there is no checkout on which this source is missing, so a
+   * decision record that restated one of them wrongly is a failure rather than a skip.
+   */
+  {
+    id: 'census_environments',
+    what: 'environments the operator census enumerated',
+    source: { kind: 'json', file: OPERATOR_CENSUS, path: ['totals', 'environments'] },
+  },
+  {
+    id: 'census_persistence_indeterminate',
+    what: 'environments the operator census could not CLASSIFY',
+    source: {
+      kind: 'json',
+      file: OPERATOR_CENSUS,
+      path: ['totals', 'persistence_indeterminate'],
+    },
+  },
+  {
+    id: 'census_verdict_yes',
+    what: 'environments the operator census found a form of 057 in',
+    source: { kind: 'json', file: OPERATOR_CENSUS, path: ['totals', 'verdict_yes'] },
+  },
+  {
+    id: 'census_position',
+    what: 'the position token the operator census concluded',
+    source: { kind: 'json', file: OPERATOR_CENSUS, path: ['conclusion', 'position'] },
+  },
+  {
+    id: 'census_head',
+    what: 'the commit the operator census was taken at',
+    source: { kind: 'json', file: OPERATOR_CENSUS, path: ['source_head_provenance', 'head'] },
+  },
+  {
+    id: 'census_modified_paths',
+    what: 'changed paths in the tree the operator census ran from',
+    source: {
+      kind: 'json',
+      file: OPERATOR_CENSUS,
+      path: ['source_head_provenance', 'modified_paths'],
+    },
+  },
+
   // ── the battery, as the summary gate itself recorded it ────────────────────────
   {
     id: 'suite_tests',
@@ -265,6 +348,47 @@ export const FIGURES: Figure[] = [
     id: 'mutations_registered',
     what: 'mutation ids declared in the runner source',
     source: { kind: 'count', file: 'scripts/mutation-kill.ts', pattern: "\\n    id: '" },
+  },
+
+  // ── FBL-020-R6 §4.1: the DATABASE controls, dropped one at a time ──────────────
+  {
+    id: 'db_controls_declared',
+    what: 'database controls and predicates the runner declares',
+    source: {
+      kind: 'json',
+      file: 'artifacts/database-control-mutations.json',
+      path: ['controls_declared'],
+      artifact: true,
+    },
+  },
+  {
+    id: 'db_controls_killed',
+    what: 'database controls killed',
+    source: {
+      kind: 'json',
+      file: 'artifacts/database-control-mutations.json',
+      path: ['killed'],
+      artifact: true,
+    },
+  },
+  {
+    id: 'db_controls_survived',
+    what: 'database controls that survived',
+    source: {
+      kind: 'json',
+      file: 'artifacts/database-control-mutations.json',
+      path: ['survivors'],
+      artifact: true,
+    },
+  },
+  {
+    id: 'db_controls_registered',
+    what: 'database-control and predicate ids declared in the runner source',
+    source: {
+      kind: 'count',
+      file: 'scripts/database-control-mutations.ts',
+      pattern: "\\n    id: '",
+    },
   },
 
   // ── the requirement map, counted the way its own checker counts ────────────────
@@ -404,42 +528,112 @@ export const FIGURES: Figure[] = [
       pattern: 'claimed SHA-256\\s*\\n?\\s*([0-9a-f]{64})',
     },
   },
+
+  /*
+   * ── THE FOUR FIGURES THAT STOPPED BEING ATTESTATIONS ──────────────────────────
+   *
+   * FBL-020-R6. `blueprint_v2_bytes` and the three quality ceilings were the whole of
+   * `UNCHECKABLE`: they were published here but readable only in a document this
+   * repository did not hold. That is no longer true. The operator committed the Version
+   * 2.0 bytes at `BLUEPRINT_V2` — three sends were made and what became of them is not
+   * observable from here — so all four now derive from a file in this tree, and a label saying no
+   * gate can check them would itself be the false statement.
+   *
+   * The byte length is the file's own size, and the ceilings are captured from its
+   * paragraph text. `tests/delivery-documentation.test.ts` independently asserts that the
+   * ceilings sentence occurs EXACTLY ONCE in that document, so a capture here cannot be
+   * satisfied by a second sentence stating different numbers.
+   *
+   * What committing the bytes did NOT settle is whether the reviewer's own two project
+   * copies have been replaced. No figure here claims it, because no figure here could
+   * derive it.
+   */
+  {
+    id: 'blueprint_v2_bytes',
+    what: 'byte length of the Version 2.0 blueprint committed here',
+    source: { kind: 'bytes', file: BLUEPRINT_V2 },
+  },
+  {
+    id: 'ceiling_tsc_strict',
+    what: 'the tsc-strict ceiling the Version 2.0 blueprint states',
+    source: { kind: 'docx-capture', file: BLUEPRINT_V2, pattern: 'tsc-strict <=\\s*(\\d+)' },
+  },
+  {
+    id: 'ceiling_eslint',
+    what: 'the eslint ceiling the Version 2.0 blueprint states',
+    source: { kind: 'docx-capture', file: BLUEPRINT_V2, pattern: 'eslint <=\\s*(\\d+)' },
+  },
+  {
+    id: 'ceiling_format',
+    what: 'the format ceiling the Version 2.0 blueprint states',
+    source: { kind: 'docx-capture', file: BLUEPRINT_V2, pattern: 'format <=\\s*(\\d+)' },
+  },
 ];
 
 export const UNCHECKABLE: UncheckableFigure[] = [
-  {
-    id: 'blueprint_v2_bytes',
-    what: "the Version 2.0 blueprint's byte length, 95,325",
-    why:
-      'the file is not in this repository and the order text does not state its size — only ' +
-      'its SHA-256. The size is the operator\u2019s attestation from a copy this project record ' +
-      'does not contain.',
-    label: 'NOT GATE-CHECKED: attested, and not derivable in this repository',
-    files: [REPORT, PROVENANCE],
-  },
-  {
-    id: 'quality_ceilings',
-    what: 'the quality ceilings tsc-strict <=59, eslint <=136, format <=23',
-    why:
-      'that sentence occurs once, in Version 2.0 §14.3, and the Version 2.0 document is not in ' +
-      'this repository. FBL-020-R5 sets no ceiling and restates none, and no script in this ' +
-      'tree has a ceiling concept.',
-    label: 'NOT GATE-CHECKED: readable only in the Version 2.0 blueprint',
-    files: [REPORT, PROVENANCE, LIMITS],
-  },
-  {
-    id: 'changed_paths',
-    what: 'the changed-path totals against the cumulative acceptance base',
-    why:
-      'they are git measurements over a history this gate is not given, and they move with ' +
-      'every edit to the working tree. The report prints each command with its literal output ' +
-      'instead, so a reader reproduces them rather than trusting them.',
-    label: 'NOT GATE-CHECKED: reproduce with the commands printed above',
-    files: [REPORT],
-  },
+  /*
+   * ── THIS REGISTRY IS EMPTY, AND THAT IS A RESULT RATHER THAN AN OVERSIGHT ──────
+   *
+   * It held two entries until FBL-020-R6: `blueprint_v2_bytes` and `quality_ceilings`,
+   * both labelled unverifiable because they were readable only in the governing Version
+   * 2.0 blueprint and that document was not in this repository. The operator then
+   * COMMITTED those bytes — three sends were made and what became of them is not
+   * observable from here — so both became derivable and both moved into `FIGURES` above: the byte length
+   * from the file's own size, the three ceilings from its paragraph text. Leaving them here
+   * would mean publishing "no gate can check this" beside a figure a gate now checks.
+   *
+   * WHY THE MECHANISM IS STILL PROVEN, because an empty registry is exactly how a negative
+   * control goes quiet. A test that loops over this array now loops over nothing and passes
+   * having asserted nothing — the "green for nothing" shape this order was opened over. So
+   * `figureProblems` takes the registry as a PARAMETER, and
+   * `tests/delivery-documentation.test.ts` drives the missing-label refusal with a STAGED
+   * entry and separately asserts that this array is empty and why. Re-adding a genuinely
+   * underivable figure here therefore lands in a rule that is known to be able to fail.
+   */
+  /*
+   * `changed_paths` USED TO BE THE THIRD ENTRY HERE, AND ITS REMOVAL IS THE FIX.
+   *
+   * The report published a re-measured diffstat as literal command output under the label
+   * this entry declared. The R6 gate's finding C6 ran the command and got a different
+   * answer: the base is fixed but the WORKING TREE is not, so every edit after the number
+   * was typed invalidated it — the same defect the re-measurement had been made to close.
+   *
+   * A label is not a fix for a figure that cannot be true for long. §5.3 now publishes NO
+   * changed-path number at all, only the commands, so there is nothing left here to label
+   * and an entry demanding a label would fail the gate on a document that has done the
+   * right thing. Recorded rather than deleted silently, because the next reader will
+   * otherwise re-add it.
+   */
 ];
 
 export const RESTATEMENTS: Restatement[] = [
+  /*
+   * ── THE CENSUS COUNTS, WHICH DECIDE THE 057/058 BRANCH ────────────────────────
+   *
+   * The R6 gate's finding C5. The delivery report carried the operator census's counts in
+   * MARKED spans in §4.0 and in BARE PROSE in §4.1, describing a superseded take — 184
+   * environments and 178 unclassifiable against a committed artifact holding different
+   * values — and migration 058's header quoted the superseded pair as well. A figure that
+   * decides a branch was published at two values inside the gate built to stop exactly
+   * that, because limb 1 only binds what is inside a span.
+   *
+   * These two rules bind the SHAPES the stale pair was written in, so the same sentence
+   * composed afresh fails too. They are deliberately narrow: a marked span reads as
+   * `…<!--/fig--> whose disposability…`, which neither pattern matches, so a correctly
+   * marked figure is bound by limb 1 and an unmarked one by these.
+   */
+  {
+    id: 'census-unclassifiable',
+    what: '"178 whose disposability could not be established" — the count in bare prose',
+    pattern: '(\\d+) whose disposability could not be established',
+    figures: ['census_persistence_indeterminate'],
+  },
+  {
+    id: 'census-unclassifiable-clusters',
+    what: '"The 178 unclassifiable clusters"',
+    pattern: 'The (\\d+) unclassifiable clusters',
+    figures: ['census_persistence_indeterminate'],
+  },
   {
     id: 'suite-totals',
     what: '"567 tests, 58 suites" — the battery total in prose',
@@ -644,6 +838,14 @@ export function readFigures(root = ROOT): FigureReading {
       } else if (s.kind === 'count') {
         const text = readFileSync(path, 'utf8');
         values[figure.id] = String(text.match(new RegExp(s.pattern, 'g'))?.length ?? 0);
+      } else if (s.kind === 'docx-capture') {
+        const text = docxLines(path).join('\n');
+        const m = new RegExp(s.pattern).exec(text);
+        if (m === null || m[1] === undefined) {
+          unreadable[figure.id] = `${s.file} states no /${s.pattern}/`;
+          continue;
+        }
+        values[figure.id] = m[1];
       } else {
         const text = readFileSync(path, 'utf8');
         const m = new RegExp(s.pattern).exec(text);
@@ -729,6 +931,15 @@ export interface FigureReport {
 export function figureProblems(
   values: Record<string, string>,
   documents: Record<string, string>,
+  /*
+   * FBL-020-R6. The registry is a PARAMETER for the same reason `checkRequirementMap` takes
+   * its map as one: a check that has never been shown to FAIL is not known to be a check.
+   * `UNCHECKABLE` is now empty — both entries became derivable when the governing blueprint
+   * was committed — so a negative control that iterates the live registry would assert
+   * nothing at all and still report green. The battery passes a staged entry here instead,
+   * which keeps the missing-label refusal a rule that is known to be able to fire.
+   */
+  uncheckable: readonly UncheckableFigure[] = UNCHECKABLE,
 ): FigureReport {
   const problems: string[] = [];
   const exemptions: Exemptions = { historical: {}, quoted: {} };
@@ -825,7 +1036,7 @@ export function figureProblems(
   }
 
   // 4. A figure no gate can derive must be labelled where it is published.
-  for (const figure of UNCHECKABLE)
+  for (const figure of uncheckable)
     for (const file of figure.files) {
       const text = documents[file];
       if (text === undefined) continue;
@@ -837,6 +1048,50 @@ export function figureProblems(
     }
 
   return { problems, exemptions, published, occurrences };
+}
+
+/**
+ * Whether a figure's authoritative value lives in `artifacts/` — the gitignored evidence a
+ * clean checkout does not carry.
+ */
+export function isArtifactSourced(figure: Figure): boolean {
+  const s = figure.source;
+  if (s.kind === 'computed') return false;
+  if (s.kind === 'json' && s.artifact === true) return true;
+  return s.file.startsWith('artifacts/');
+}
+
+/**
+ * FBL-020-R6 — AN UNREADABLE SOURCE IS ONLY EXCUSABLE WHEN IT IS A GITIGNORED ARTIFACT.
+ *
+ * `readFigures` reports a figure it cannot read as `unreadable`, and the gate SKIPS those
+ * rather than failing, because `artifacts/` is absent on a clean checkout. That excuse is
+ * correct for an artifact and wrong for everything else, and the difference started to
+ * matter when the governing blueprint was committed: `ceiling_tsc_strict`,
+ * `ceiling_eslint` and `ceiling_format` are captured from a `.docx` IN THIS TREE, so a
+ * document that stopped stating them — or a WRONG file put at that path — made three
+ * figures unreadable and the gate printed "Every published figure agrees with its source".
+ * Measured, not reasoned: copying the Version 1.0 blueprint over the Version 2.0 path
+ * produced exactly that output, and only the byte-length figure objected.
+ *
+ * So a figure whose source is COMMITTED must be readable, and failing to read it is a
+ * problem in its own right. Artifact-sourced figures keep the skip.
+ */
+export function unreadableProblems(
+  unreadable: Record<string, string>,
+  figures: readonly Figure[] = FIGURES,
+): string[] {
+  const problems: string[] = [];
+  for (const [id, why] of Object.entries(unreadable)) {
+    const figure = figures.find((f) => f.id === id);
+    if (figure === undefined || isArtifactSourced(figure)) continue;
+    problems.push(
+      `${id} is published here but its source could not be read: ${why}. That source is ` +
+        'COMMITTED, not a gitignored artifact, so it is readable on any checkout — an ' +
+        'unreadable one means the file moved, was replaced, or no longer states the figure',
+    );
+  }
+  return problems;
 }
 
 /** Rewrites every span in a Markdown document from its source value. */
@@ -887,6 +1142,7 @@ function main(): void {
   }
 
   const { problems, exemptions, published } = figureProblems(values, documents);
+  problems.push(...unreadableProblems(unreadable));
   const spans = Object.values(published).reduce((n, ids) => n + ids.length, 0);
   console.log(
     `figures=${FIGURES.length} readable=${Object.keys(values).length} ` +
@@ -894,8 +1150,16 @@ function main(): void {
       `historical_regions=${Object.values(exemptions.historical).reduce((a, b) => a + b, 0)} ` +
       `quoted_spans=${Object.values(exemptions.quoted).reduce((a, b) => a + b, 0)}`,
   );
-  for (const [id, why] of Object.entries(unreadable))
-    console.log(`  unreadable ${id}: ${why} (artifact-sourced figures need a run first)`);
+  for (const [id, why] of Object.entries(unreadable)) {
+    const figure = FIGURES.find((f) => f.id === id);
+    const excusable = figure !== undefined && isArtifactSourced(figure);
+    console.log(
+      `  unreadable ${id}: ${why}` +
+        (excusable
+          ? ' (artifact-sourced figures need a run first)'
+          : ' (COMMITTED SOURCE — this is a failure, not a skip)'),
+    );
+  }
 
   if (problems.length > 0) {
     console.error('Published figures disagree with the sources they are supposed to derive from:');

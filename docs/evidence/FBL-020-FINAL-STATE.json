@@ -1,0 +1,186 @@
+{
+  "order": "FBL-020-R6 §4.4/§4.5",
+  "purpose": "The ONE EXACT FINAL STATE of this delivery: which commits exist, which exact-SHA ci.yml run measured which of them with what per-job conclusions, what the working tree is, whether the one-commit budget was kept, and whether this revision may be submitted as complete. FBL-020-R5 was rejected because the checked-in documents described a state that had stopped being true: the delivery report named a red HEAD that was no longer HEAD, KNOWN-LIMITATIONS repeated that no CI run existed, the requirement map still awaited a run that had already happened, and no file in the repository recorded the final commit or its run at all. Every figure gate was green throughout, because a figure gate compares numbers and none of those sentences is a number. This file is the single authority the delivery documents restate, and scripts/check-final-state.ts holds them to it — including the prose.",
+  "acceptance": "NOT_REVIEWED",
+  "generated_by": "FBL-020-R6 §4, from the GitHub REST API (/repos/{owner}/{repo}/actions/runs/{id} and /jobs) and from git in this repository",
+  "r5_baseline": {
+    "sha": "e08af42755fb1127d611249ba3175161b06e9682",
+    "subject": "FBL-020-R4: documentation closeout — CI evidence for 2b75d8a",
+    "what_it_is": "the last commit before FBL-020-R5 began. Every commit in e08af42..174c789 is an R5 code-bearing commit and is listed below; scripts/check-final-state.ts recomputes that range from git and fails if the list and the range disagree in either direction. That comparison is what an undercount cannot survive: the delivery report published TWO commits while the range held THREE."
+  },
+  "code_bearing_commits": [
+    {
+      "sha": "52e1567ad67a2ccde30adc4d06ce4009b4762391",
+      "short": "52e1567",
+      "subject": "FBL-020-R5: identity boundary corrective order",
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32162114699,
+        "run_number": 48,
+        "run_attempt": 1,
+        "head_sha": "52e1567ad67a2ccde30adc4d06ce4009b4762391",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 2,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ]
+      }
+    },
+    {
+      "sha": "0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee",
+      "short": "0e99ecd",
+      "subject": "FBL-020-R5: close the two defects the exact-SHA CI run exposed",
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32168154239,
+        "run_number": 49,
+        "run_attempt": 1,
+        "head_sha": "0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 2,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ]
+      }
+    },
+    {
+      "sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
+      "short": "174c789",
+      "subject": "FBL-020-R5: close the six blocking items and the stale suite figure",
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32190154935,
+        "run_number": 50,
+        "run_attempt": 1,
+        "head_sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ]
+      }
+    }
+  ],
+  "evidence_commit_sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
+  "repository_head_relation": "HEAD_IS_THE_EVIDENCE_COMMIT",
+  "repository_head_relation_meaning": "git rev-list <evidence_commit_sha>..HEAD is EMPTY, so the commit the green run measured is the tip of this repository. scripts/check-final-state.ts recomputes that and fails when the declaration and git disagree. This is the check FBL-020-R5 could not survive: once 174c789 was pushed, a report still naming 0e99ecd as HEAD was measurably wrong, and nothing measured it.",
+  "working_tree": {
+    "state": "UNCOMMITTED_ON_TOP_OF_THE_EVIDENCE_COMMIT",
+    "what_is_uncommitted": "FBL-020-R6 §1 through §4",
+    "ci_run_for_this_working_tree": null,
+    "why_nothing_is_committed": "the FBL-020-R6 implementation order instructs the implementation not to commit and not to push. That instruction is followed, and the consequence is stated rather than left for the reviewer to infer: run 32190154935 measured 174c789 and did NOT measure the FBL-020-R6 changes sitting on top of it.",
+    "how_the_r6_work_was_verified_instead": "every gate was executed locally against a real PostgreSQL 16 on 127.0.0.1:55434. That is not a CI run and is not offered as one."
+  },
+  "commit_budget": {
+    "allowed": 1,
+    "used": 3,
+    "failed_ci": 2,
+    "verdict": "VIOLATED",
+    "disclosure_does_not_cure_the_violation": true,
+    "note": "FBL-020-R5 §5 allows ONE code-bearing commit plus an optional documentation-only closeout. Three code-bearing commits exist. Each of the first two was RED in CI and the order forbids submitting a red tree, so each successor exists to close a failure rather than to add scope — that is the explanation, not a defence, and the architect has ruled that disclosing the count does not cure the breach. It is recorded here as a VIOLATION."
+  },
+  "submission": {
+    "status": "NOT SUBMITTABLE AS COMPLETE",
+    "blocking": [
+      "Section 3.1: the supply obligation is DISCHARGED AS FAR AS THIS REPOSITORY CAN DISCHARGE IT. The governing Version 2.0 bytes are committed at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, tracked by git, and filename, byte length, SHA-256, title, version and governing §14.3 are each VERIFIED FROM THOSE BYTES by tests/delivery-documentation.test.ts — so the document is reviewable by anyone who can read this repository, which is what R6 §4.6 conditions closure on. What the two designated project copies outside this repository hold is UNKNOWN HERE, in either direction, and this record will not assert it — including not asserting it against itself. Whether the committed bytes satisfy §4.6 wording about \"both project copies\" is the reviewer decision, not this repository.",
+      "LIVE WORKOS CERTIFICATION IS NOT DISCHARGED: no live provider credentials exist in this environment.",
+      "No CI run covers the FBL-020-R6 working tree, because nothing is committed.",
+      "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
+      "The one-commit budget was VIOLATED — three code-bearing commits where the order allowed one."
+    ],
+    "status_reason": "Live WorkOS certification is undischarged and no CI run covers this tree. Section 3.1 is no longer among the reasons — see blocking[0]."
+  },
+  "blueprint_section_3_1": {
+    "status": "OPEN",
+    "what_changed_under_fbl_020_r6": "The operator COMMITTED the governing Version 2.0 bytes into this repository at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx. Three sends had been made through the attachment channel and what became of them is not observable from this repository; a commit is a transfer this repository can verify. Which document governs, and what Version 2.0 section 14.3 says in it, are therefore checkable from this repository.",
+    "in_this_repository": {
+      "file": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "bytes": 95325,
+      "file_sha256": "556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+      "version_label": "Version 2.0",
+      "section_14_3": "14.3 First active instruction — FBL-020-R2",
+      "verification": "verified-from-repository-bytes",
+      "verified_by": ["tests/delivery-documentation.test.ts", "scripts/check-published-figures.ts"]
+    },
+    "the_second_anchor_still_checked_in": {
+      "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
+      "bytes": 88931,
+      "file_sha256": "d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9",
+      "version_label": "Version 1.0",
+      "section_14_3": "14.3 Work Order FBL-000 — Reproducible Baseline"
+    },
+    "why_it_is_still_open": "Section 3.1 requires the Version 2.0 bytes in BOTH designated project copies. Those copies are not in this repository and cannot be read from it, so the clause is open because it is unobservable from this side — not because it has been answered either way.",
+    "what_must_be_supplied": "the governing Version 2.0 blueprint, into BOTH designated project copies.",
+    "what_must_be_verified_on_arrival": [
+      "filename: Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "byte length: 95,325",
+      "sha256: 556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+      "title line 1: Dealership Management & Sales Cloud",
+      "title line 2: Master Architecture Blueprint and Forward-Only Roadmap",
+      "version line: Version 2.0  |  August 4, 2026  |  Governing management-first baseline",
+      "governing section §14.3, reading: 14.3 First active instruction — FBL-020-R2"
+    ],
+    "what_this_repository_cannot_do": "THIS REPOSITORY CANNOT WRITE TO THE REVIEWER PROJECT RECORD, and it cannot observe what that record contains. It therefore states nothing about what those two copies hold, in either direction, and no gate here may assert it."
+  },
+  "withdrawn_claims": [
+    "NO CI RUN EXISTS FOR THIS TREE",
+    "R5 CODE-BEARING COMMIT: 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee. It is the current HEAD and it is a RED head, not a submission.",
+    "TWO CODE-BEARING COMMITS HAVE BEEN PUSHED AND BOTH FAILED THEIR EXACT-SHA CI RUN.",
+    "THE R5 CI RUN IS NOT DISCHARGED.",
+    "the report's Verification evidence section records local runs on this tree, and no CI run exists for it",
+    "STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT",
+    "The order forbids committing, so no commit exists to measure",
+    "that runner carries no mutation against migration 057 or any policy-evidence constraint",
+    "The operator has supplied the Version 2.0 bytes to the reviewer twice.",
+    "THE VERSION 2.0 BLUEPRINT BYTES WERE NOT MATERIALIZED IN THE REVIEW WORKSPACE, AND THE ONLY ACCESSIBLE PROJECT COPIES REMAIN THE VERSION 1.0 FILE"
+  ]
+}

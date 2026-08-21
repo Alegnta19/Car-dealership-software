@@ -55,7 +55,16 @@ async function fingerprint(): Promise<{ sha256: string; schema: Record<string, u
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
-       ORDER BY p.proname`)
+       -- FBL-020-R6 §3 -- THE SORT MUST BE TOTAL, and on a name alone it is not.
+       -- pgcrypto installs overloads -- pgp_sym_decrypt(bytea,text) and
+       -- pgp_sym_decrypt(bytea,text,text) among them -- which tie on proname, and
+       -- PostgreSQL then returns tied rows in whatever order it finds them: physical
+       -- order, which differs between two databases holding the SAME schema. The
+       -- fresh-versus-upgraded comparison therefore compared a set against a permutation
+       -- of itself, and could fail for a reason that is not a schema difference at all.
+       -- It did, on this order's drill. The identity arguments make the key unique, so
+       -- the comparison is about the schema and nothing else.
+       ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)`)
   ).rows;
 
   // schema_migrations CONTENT is deliberately excluded: a fresh chain and a fixture

@@ -138,6 +138,36 @@ export type LoginTransactionFailureReason =
    * truncated" are different operational facts.
    */
   | 'authorization_code_missing'
+  /**
+   * ── FBL-020-R6 §2.1/§2.2 — THE FIVE CALLBACK-BINDING REFUSALS ─────────────
+   *
+   * R5 refused a missing or disagreeing `state` IN THE ROUTE, before the
+   * authoritative claim, and recorded a disagreeing PKCE verifier, nonce, purpose
+   * or redirect as `identity.login.replayed` while LEAVING THE ROW `pending`. Both
+   * are the same defect wearing two hats: a callback that named a real server
+   * transaction was judged somewhere other than by that transaction, and the
+   * transaction was left claimable — so the state it was supposed to burn survived,
+   * and the only record of the attempt said "replay", which it was not.
+   *
+   * Each of the five is now its own terminal reason, because they are five
+   * different operational facts and an operator reading `failure_reason` must not
+   * have to guess which one happened. NONE of them carries a presented value: the
+   * comparison is between digests, and the vocabulary is the server's own.
+   */
+  | 'callback_purpose_mismatch'
+  | 'callback_state_mismatch'
+  | 'callback_nonce_mismatch'
+  | 'callback_pkce_mismatch'
+  | 'callback_redirect_mismatch'
+  /**
+   * FBL-020-R6 §2.3/§2.5 — the transaction could not reach `succeeded` because it
+   * was no longer `consuming` (another leg or a sweep terminalized it underneath
+   * this one), or because the identity the caller admitted disagreed with the
+   * identity the transaction was opened for. Distinct from `expired`, which is the
+   * third way the success transition can lose and the only one with a clock in it.
+   */
+  | 'login_transaction_not_consuming'
+  | 'login_identity_disagreement'
   | 'expired';
 
 export interface StartedLoginTransaction {
@@ -266,12 +296,27 @@ export interface LoginTransactionClaim {
    * was in the sealed cookie and was simply not part of the predicate, so the
    * claim never proved that the callback naming this state was the callback that
    * had been handed this transaction.
+   *
+   * FBL-020-R6 §2.1 — it is now the ONLY thing a route may decide for itself. A
+   * callback that presents a valid sealed handle is routed HERE whatever else it
+   * carries, and everything else below is `null`-able because "the callback did not
+   * present this at all" is a fact this service must classify rather than a reason
+   * for a route to refuse before the transaction has been consulted.
    */
   readonly loginTxnId: string;
-  readonly state: string;
+  /** The `state` the PROVIDER returned. `null` — none returned — is a mismatch. */
+  readonly state: string | null;
+  /** The purpose of the ROUTE LEG. The row's own purpose must equal it. */
   readonly purpose: 'login' | 'reauth';
-  readonly nonce: string;
-  readonly codeVerifier: string;
+  /**
+   * FBL-020-R6 §2.1 — the purpose the SEALED COOKIE carried, when it differs from
+   * the leg's. Omitted, the cookie is taken to have agreed with the leg, which is
+   * what every caller that has nothing else to say means. It is compared, never
+   * trusted: the row's purpose is the authority and both must equal it.
+   */
+  readonly presentedPurpose?: string | null;
+  readonly nonce: string | null;
+  readonly codeVerifier: string | null;
   /**
    * The EXACT callback/redirect this leg was opened for. Compared against the
    * value the START stored, so a transaction opened for one registered redirect
@@ -280,10 +325,20 @@ export interface LoginTransactionClaim {
   readonly redirectUri: string;
 }
 
+/**
+ * The shape of a login-transaction handle. Checked before the handle reaches a
+ * `uuid` parameter: a sealed cookie can only have been written by this server, but
+ * a value that cannot be a `uuid` would make the lookup RAISE rather than refuse,
+ * and a lifecycle service whose refusal path can throw is not fail-closed.
+ */
+const LOGIN_TXN_HANDLE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 export async function claimLoginTransaction(
   executor: Executor,
   input: LoginTransactionClaim,
 ): Promise<LoginTransactionRecord | null> {
+  if (input.state === null || input.nonce === null || input.codeVerifier === null) return null;
   const result = await executor.query(
     `UPDATE login_transactions
         SET claimed_at = NOW(), status = 'consuming'
@@ -309,12 +364,52 @@ export async function claimLoginTransaction(
 }
 
 /**
- * The application-facing claim: owns its own transaction so no app file ever
- * imports a database primitive (the app-SQL guard forbids it).
+ * THE SERVER-AUTHORITATIVE CALLBACK LIFECYCLE — FBL-020-R6 §2.1 and §2.2.
+ *
+ * The application-facing claim: it owns its own transaction so no app file ever
+ * imports a database primitive (the app-SQL guard forbids it), and it is now the
+ * ONLY place a callback carrying a valid sealed handle is judged.
+ *
+ * ── what §2.1 moved into here, and why the route could not keep it ──────────
+ *
+ * `apps/api/src/routes/auth.ts` used to refuse a missing or disagreeing `state`
+ * BEFORE this call, even when the sealed handle was valid and named a live
+ * `pending` row. That refusal was a 401 and nothing else: the transaction stayed
+ * claimable, its state was NOT burned, and the only record of the attempt was the
+ * absence of one. A route cannot fix that by comparing more carefully, because the
+ * comparison belongs to the row — the digests are here, the lock is here, and the
+ * terminal transition is here. So the route now decides exactly one thing (is there
+ * a sealed handle at all?) and everything else arrives as a nullable presented
+ * value for this function to classify.
+ *
+ * ── what §2.2 changed about the answer ─────────────────────────────────────
+ *
+ * R5 recorded EVERY predicate disagreement as `identity.login.replayed` with
+ * `observed_status = 'claim_predicate_unsatisfied'` and LEFT THE ROW `pending`. A
+ * PKCE or redirect mismatch is not a replay — it is a callback that cannot be the
+ * one this transaction was handed — and leaving it pending meant the state it was
+ * supposed to spend survived for the next attempt. Each disagreement is now its own
+ * TERMINAL state with its own reason and EXACTLY ONE terminal audit event, and a
+ * later correct callback therefore LOSES: it finds a non-`pending` row and takes
+ * the replay branch, which changes nothing.
+ *
+ * The replay branch remains what it always was, and it is deliberately NOT a
+ * terminal transition: a row that is `consuming` may belong to a leg still
+ * legitimately in flight, and the FIRST terminal fact must win.
+ *
+ * ── the clock ──────────────────────────────────────────────────────────────
+ *
+ * Expiry is decided by DATABASE TIME (`expires_at <= NOW()` evaluated in the same
+ * statement that locks the row), never by comparing a returned timestamp against
+ * this process's `Date.now()`. `NOW()` is the transaction timestamp, so every
+ * expiry question asked inside this transaction gets the same answer.
  */
 export async function claimLoginTransactionAtomically(
   input: LoginTransactionClaim,
 ): Promise<LoginTransactionRecord | null> {
+  // A handle that cannot be a `uuid` names no row. Refused here rather than at the
+  // parameter, so the refusal path cannot raise.
+  if (!LOGIN_TXN_HANDLE.test(input.loginTxnId)) return null;
   return withTransaction(async (executor) => {
     // The handle names the row, so the OUTCOME of a refusal is classifiable —
     // and every classification is RECORDED. R3 returned an undifferentiated null
@@ -322,8 +417,10 @@ export async function claimLoginTransactionAtomically(
     // The row is locked first so the classification and the claim cannot
     // straddle another leg's transition.
     const found = await executor.query(
-      `SELECT login_txn_id, tenant_id, user_link_id, purpose, status, expires_at
-         FROM login_transactions WHERE login_txn_id = $1 FOR UPDATE`,
+      `SELECT login_txn_id, tenant_id, user_link_id, purpose, status, redirect_uri,
+              state_hash, nonce_hash, code_verifier_hash,
+              (expires_at <= NOW()) AS is_expired
+         FROM login_transactions WHERE login_txn_id = $1::uuid FOR UPDATE`,
       [input.loginTxnId],
     );
     if (found.rows.length === 0) {
@@ -349,23 +446,60 @@ export async function claimLoginTransactionAtomically(
       });
       return null;
     }
-    if (new Date(String(existing.expires_at)).getTime() <= Date.now()) {
+    if (existing.is_expired === true) {
       await failLoginTransactionWithin(executor, loginTxnId, 'expired');
       return null;
     }
+
+    /*
+     * THE FIVE BINDING COMPARISONS, each with its own terminal reason (§2.2).
+     *
+     * `presentedPurpose` defaults to the leg's own purpose: a caller with nothing
+     * else to say is saying "the cookie agreed with me". Both it and the leg must
+     * equal the ROW's purpose — the row is the authority and neither side of the
+     * comparison is allowed to be the only one consulted.
+     *
+     * A `null` presented value is a MISMATCH, never a skipped comparison: "the
+     * callback did not present this" cannot satisfy "the transaction requires it".
+     */
+    const presentedPurpose = input.presentedPurpose ?? input.purpose;
+    const rowPurpose = String(existing.purpose);
+    const terminal = async (reason: LoginTransactionFailureReason): Promise<null> => {
+      await failLoginTransactionWithin(executor, loginTxnId, reason);
+      return null;
+    };
+    if (rowPurpose !== input.purpose || presentedPurpose !== rowPurpose) {
+      return terminal('callback_purpose_mismatch');
+    }
+    if (input.state === null || sha256hex(input.state) !== String(existing.state_hash)) {
+      return terminal('callback_state_mismatch');
+    }
+    if (input.nonce === null || sha256hex(input.nonce) !== String(existing.nonce_hash)) {
+      return terminal('callback_nonce_mismatch');
+    }
+    if (
+      input.codeVerifier === null ||
+      sha256hex(input.codeVerifier) !== String(existing.code_verifier_hash)
+    ) {
+      return terminal('callback_pkce_mismatch');
+    }
+    if (String(existing.redirect_uri) !== input.redirectUri) {
+      return terminal('callback_redirect_mismatch');
+    }
+
     const claimed = await claimLoginTransaction(executor, input);
     if (claimed === null) {
-      // Pending and unexpired, yet the conditional claim lost: the state, nonce,
-      // PKCE binding or the exact redirect disagreed, or another leg claimed it
-      // between the lock and the write. One neutral answer, one recorded fact.
-      await auditLogin(executor, {
-        loginTxnId,
-        tenantId,
-        userLinkId,
-        eventType: 'identity.login.replayed',
-        details: { purpose: input.purpose, observed_status: 'claim_predicate_unsatisfied' },
-      });
-      return null;
+      /*
+       * UNREACHABLE BY CONSTRUCTION, AND STILL HANDLED. Every clause of the
+       * conditional claim has just been evaluated against this very row while this
+       * transaction holds it under `FOR UPDATE`, and `NOW()` is the transaction
+       * timestamp, so `expires_at > NOW()` cannot have changed its mind. It is kept
+       * as a database-side backstop rather than deleted, because a predicate that
+       * exists only in TypeScript is a predicate a future edit can drop silently —
+       * and a backstop that fires must still leave a terminal row rather than a
+       * pending one.
+       */
+      return terminal('login_transaction_not_consuming');
     }
     await auditLogin(executor, {
       loginTxnId,
@@ -413,38 +547,117 @@ export interface AdmittedLoginIdentity {
   readonly connectionId?: string | null;
 }
 
-export async function succeedLoginTransaction(input: AdmittedLoginIdentity): Promise<boolean> {
+/**
+ * WHY a success transition did not happen. Every value is a
+ * `LoginTransactionFailureReason`, so the caller can terminalize with it directly.
+ */
+export type LoginSuccessRefusal =
+  'expired' | 'login_transaction_not_consuming' | 'login_identity_disagreement';
+
+export type LoginSuccessOutcome =
+  { readonly recorded: true } | { readonly recorded: false; readonly refusal: LoginSuccessRefusal };
+
+/**
+ * The success transition ON THE CALLER'S EXECUTOR — FBL-020-R6 §2.3 and §2.5.
+ *
+ * ── §2.3: THE EXPIRY IS DECIDED BY DATABASE TIME, AT COMPLETION ─────────────
+ *
+ * R5's UPDATE required `status = 'consuming'` and nothing else. A callback claimed
+ * one millisecond before `expires_at` could therefore finish MINUTES later — after a
+ * slow provider exchange, a slow JWKS fetch, a slow admission — and be recorded as a
+ * success, with a session cookie handed out, having spent a transaction that had
+ * expired in the meantime. Nothing swept it, so nothing contradicted it: the sweep
+ * only ages rows nobody is holding, and this one was `consuming`.
+ *
+ * `expires_at > NOW()` is now part of the predicate. `NOW()` is PostgreSQL's
+ * transaction timestamp — the database's clock, not this process's, and not a
+ * timestamp that travelled through JavaScript — so the answer cannot drift with a
+ * host clock and cannot be argued with by a caller.
+ *
+ * ── §2.5: WHY THIS TAKES AN EXECUTOR ───────────────────────────────────────
+ *
+ * The caller is `admitLoginAndEstablishSession`, and it calls this INSIDE the
+ * transaction that inserted the session and sealed the provider refresh credential.
+ * The three writes — custody, success, and both of their audit rows — therefore
+ * commit together or not at all. R5 had them in two transactions with the route in
+ * between, so a success transition (or its audit INSERT) that failed left a live,
+ * refreshable session behind that no login owned.
+ *
+ * The refusal is CLASSIFIED rather than boolean, because "the transaction expired"
+ * and "somebody else terminalized it" are different facts and each has to be
+ * recordable as its own terminal reason.
+ */
+export async function succeedLoginTransactionWithin(
+  executor: Executor,
+  input: AdmittedLoginIdentity,
+): Promise<LoginSuccessOutcome> {
   const { loginTxnId } = input;
-  return withTransaction(async (executor) => {
-    const result = await executor.query(
-      `UPDATE login_transactions
-          SET status = 'succeeded', consumed_at = NOW(), consumed_outcome = 'succeeded',
-              tenant_id = $2::uuid,
-              user_link_id = $3::uuid,
-              connection_id = COALESCE($4::uuid, connection_id)
-        WHERE login_txn_id = $1 AND status = 'consuming'
-          -- A transaction that was OPENED against a known identity — the reauth
-          -- purpose is — may only succeed as THAT identity. A disagreement is a
-          -- refusal, never an overwrite: this statement records who was admitted,
-          -- it does not get to rewrite who the transaction was for.
-          AND (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2::uuid)
-          AND (user_link_id IS NULL OR user_link_id = $3::uuid)
-        RETURNING tenant_id, user_link_id, purpose`,
-      [loginTxnId, input.tenantId, input.userLinkId, input.connectionId ?? null],
+  const result = await executor.query(
+    `UPDATE login_transactions
+        SET status = 'succeeded', consumed_at = NOW(), consumed_outcome = 'succeeded',
+            tenant_id = $2::uuid,
+            user_link_id = $3::uuid,
+            connection_id = COALESCE($4::uuid, connection_id)
+      WHERE login_txn_id = $1 AND status = 'consuming'
+        -- FBL-020-R6 §2.3: LOGIN EXPIRY, ENFORCED AT COMPLETION, IN DATABASE TIME.
+        AND expires_at > NOW()
+        -- A transaction that was OPENED against a known identity — the reauth
+        -- purpose is — may only succeed as THAT identity. A disagreement is a
+        -- refusal, never an overwrite: this statement records who was admitted,
+        -- it does not get to rewrite who the transaction was for.
+        AND (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2::uuid)
+        AND (user_link_id IS NULL OR user_link_id = $3::uuid)
+      RETURNING tenant_id, user_link_id, purpose`,
+    [loginTxnId, input.tenantId, input.userLinkId, input.connectionId ?? null],
+  );
+  if (result.rows.length === 0) {
+    // WHICH clause refused, read back from the row itself so the reason recorded is
+    // the true one rather than the first guess. The row is not locked here because
+    // the caller's transaction has already written to it (the claim) or is about to
+    // terminalize it; a wrong classification would be a mislabelled audit row, and
+    // this read is what stops that.
+    const observed = await executor.query(
+      `SELECT status, (expires_at <= NOW()) AS is_expired,
+              (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2::uuid) AS tenant_ok,
+              (user_link_id IS NULL OR user_link_id = $3::uuid) AS link_ok
+         FROM login_transactions WHERE login_txn_id = $1`,
+      [loginTxnId, input.tenantId, input.userLinkId],
     );
-    if (result.rows.length === 0) return false;
-    const row = result.rows[0] as Row;
-    await auditLogin(executor, {
-      loginTxnId,
-      // Read back from the row the UPDATE just wrote, not from the input: the
-      // evidence names what the database holds.
-      tenantId: row.tenant_id === null ? null : String(row.tenant_id),
-      userLinkId: row.user_link_id === null ? null : String(row.user_link_id),
-      eventType: 'identity.login.succeeded',
-      details: { purpose: String(row.purpose) },
-    });
-    return true;
+    if (observed.rows.length === 0) {
+      return { recorded: false, refusal: 'login_transaction_not_consuming' };
+    }
+    const row = observed.rows[0] as Row;
+    if (String(row.status) === 'consuming' && row.is_expired === true) {
+      return { recorded: false, refusal: 'expired' };
+    }
+    if (String(row.status) === 'consuming' && (row.tenant_ok !== true || row.link_ok !== true)) {
+      return { recorded: false, refusal: 'login_identity_disagreement' };
+    }
+    return { recorded: false, refusal: 'login_transaction_not_consuming' };
+  }
+  const row = result.rows[0] as Row;
+  await auditLogin(executor, {
+    loginTxnId,
+    // Read back from the row the UPDATE just wrote, not from the input: the
+    // evidence names what the database holds.
+    tenantId: row.tenant_id === null ? null : String(row.tenant_id),
+    userLinkId: row.user_link_id === null ? null : String(row.user_link_id),
+    eventType: 'identity.login.succeeded',
+    details: { purpose: String(row.purpose) },
   });
+  return { recorded: true };
+}
+
+/**
+ * The same transition in a transaction of its own, for callers that have no local
+ * session to keep it company. The LOGIN path does not use this — §2.5 requires its
+ * success to share the custody commit — and it is retained because the state machine
+ * is exercised directly by the boundary and lifecycle batteries.
+ */
+export async function succeedLoginTransaction(input: AdmittedLoginIdentity): Promise<boolean> {
+  return withTransaction(
+    async (executor) => (await succeedLoginTransactionWithin(executor, input)).recorded,
+  );
 }
 
 /**

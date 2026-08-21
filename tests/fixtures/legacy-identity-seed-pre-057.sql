@@ -247,6 +247,75 @@ VALUES
    'user', 'fixedops.repair_order.approve', 'deny', 'NO_MATCHING_ROLE_BINDING', 'v1',
    NULL, NULL, NULL, '{}', '{}', 'not_applicable', 'not_applicable', '{}');
 
+-- ── policy decisions: ORDINARY ALLOWS, WITH THE AUTHORITY THEY MATCHED ───────
+-- FBL-020-R6 gate finding C1. D1 and D2 above are the two decisions this fixture
+-- carried for four revisions, and BOTH of them record an EMPTY matched-binding
+-- array: D1 is the deliberately incomplete history, D2 is a deny, and a deny may
+-- not claim a binding at all (`pd_deny_has_no_match`, 056). A fixture whose only
+-- decisions carry `{}` cannot exercise migration 058 §0 AT ALL — the normalized
+-- table it reconciles is derived from that array, and an empty array derives
+-- nothing. The drill was green because it was testing nothing.
+--
+-- Every real ALLOW records a NON-EMPTY array, and migration 057 installed the
+-- normalizer as an AFTER INSERT trigger without a backfill, so on any retained
+-- database every one of these rows has an array and NO normalized rows beside
+-- it. These four are that shape, and between them they cover both outcomes 058
+-- §0 has to produce:
+--
+--   D3 RECONCILABLE, ONE binding. The straightforward case: the array names the
+--      actor's own effective tenant-scope binding at the version it then held.
+--   D4 RECONCILABLE, TWO bindings, DELIBERATELY NOT IN ID ORDER. `90000003`
+--      precedes `90000001` in the array and must keep ordinality 1, so a
+--      reconciliation that sorted instead of preserving position is caught. Both
+--      bindings are INEFFECTIVE today — one aged out, one still tenant-scope —
+--      and that is also deliberate: 058 §0 must NOT re-judge a historic decision
+--      by §3.3's rules for what may be written NOW.
+--   D5 UNRECONCILABLE. It claims binding `90000001` at authorization version 7,
+--      and that binding has only ever reached version 1. R6's C1 names "a binding
+--      it names no longer exists" as the unreconcilable case; that particular one
+--      cannot occur here, because migration 057 §11a ALREADY refuses to migrate a
+--      database holding a matched-binding claim whose binding is absent or is
+--      somebody else's — so 058 never meets it. A version the binding has never
+--      reached is the shape that DOES survive 057 and still cannot be normalized:
+--      057's own `trg_pdmb_version_reachable` refuses the derived child row, the
+--      array cannot be edited (`policy_decisions` is append-only), and so the row
+--      must survive EXACTLY as written, at evidence_version 1, exempt from the
+--      equivalence rule by the version discriminator.
+--   D6 RECONCILABLE, in the OTHER tenant, naming a REVOKED binding that still
+--      exists and still belongs to its actor. Existence and ownership are what
+--      normalization needs; revocation is a fact about today, not about the
+--      decision.
+INSERT INTO policy_decisions
+  (decision_id, occurred_at, tenant_id, actor_user_link_id, actor_type, action,
+   decision, reason_code, policy_version, request_id, correlation_id, scope_level,
+   scope_id, matched_role_binding_ids, matched_authorization_versions,
+   freshness_classification, mfa_assurance_classification, details)
+VALUES
+  ('d0000003-0000-4000-8000-000000000003', '2026-08-06T04:02:00Z',
+   'aaaa0001-0000-4000-8000-000000000001', '10000001-0000-4000-8000-000000000001',
+   'user', 'fixedops.repair_order.read', 'allow', 'ROLE_BINDING_MATCH', 'v1',
+   NULL, NULL, 'tenant', 'aaaa0001-0000-4000-8000-000000000001',
+   '{90000001-0000-4000-8000-000000000001}', '{1}',
+   'not_applicable', 'not_applicable', '{}'),
+  ('d0000004-0000-4000-8000-000000000004', '2026-08-06T04:03:00Z',
+   'aaaa0001-0000-4000-8000-000000000001', '10000001-0000-4000-8000-000000000001',
+   'user', 'fixedops.repair_order.read', 'allow', 'ROLE_BINDING_MATCH', 'v1',
+   NULL, NULL, 'department', 'a4000001-0000-4000-8000-000000000001',
+   '{90000003-0000-4000-8000-000000000003,90000001-0000-4000-8000-000000000001}', '{1,1}',
+   'not_applicable', 'not_applicable', '{}'),
+  ('d0000005-0000-4000-8000-000000000005', '2026-08-06T04:04:00Z',
+   'aaaa0001-0000-4000-8000-000000000001', '10000001-0000-4000-8000-000000000001',
+   'user', 'fixedops.repair_order.read', 'allow', 'ROLE_BINDING_MATCH', 'v1',
+   NULL, NULL, 'tenant', 'aaaa0001-0000-4000-8000-000000000001',
+   '{90000001-0000-4000-8000-000000000001}', '{7}',
+   'not_applicable', 'not_applicable', '{}'),
+  ('d0000006-0000-4000-8000-000000000006', '2026-08-06T04:05:00Z',
+   'bbbb0002-0000-4000-8000-000000000002', '10000003-0000-4000-8000-000000000003',
+   'user', 'fixedops.repair_order.read', 'allow', 'ROLE_BINDING_MATCH', 'v1',
+   NULL, NULL, 'tenant', 'bbbb0002-0000-4000-8000-000000000002',
+   '{90000004-0000-4000-8000-000000000004}', '{1}',
+   'not_applicable', 'not_applicable', '{}');
+
 -- ── support access: one PENDING request, and one APPROVED without a grant ────
 INSERT INTO support_access_requests
   (request_id, tenant_id, requester_user_link_id, requested_actions, scope_level,

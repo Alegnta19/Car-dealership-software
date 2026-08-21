@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
   MARKER_SCAN_LIMITS,
+  OUT_OF_SCOPE,
+  RUNNER_ENV_MARKERS,
   analyzeAllWorkflows,
   analyzeWorkflow,
   assessDisposability,
+  censusAuthority,
+  censusScope,
   ciFinding,
   composeNamedVolumes,
   composeVolumeCandidates,
@@ -17,9 +22,11 @@ import {
   loadDisposableClusterPolicy,
   migration057Markers,
   persistenceFrom,
+  provenanceFrom,
   readLaunchDeclaration,
   runningDataDirectoryForPort,
   scanForMarker,
+  sourceHeadProvenance,
   summarize,
   toWslPath,
   verdictFromInspection,
@@ -418,10 +425,216 @@ describe('the migration census (FBL-020-R5 §0.1)', () => {
     assert.equal(blocked.position, 'FREEZE_057_AND_ADD_058');
     assert.match(blocked.implementer_reading, /COUNTED WITH THE PERSISTENT ONES/);
 
-    // A `no` verdict on such a cluster does not block — but it is still disclosed.
+    /*
+     * FBL-020-R6 §1.3 CHANGED THIS ANSWER, AND THE OLD ONE IS RECORDED SO THE CHANGE IS
+     * VISIBLE. R5 concluded EDIT_057_IN_PLACE here: the cluster reported `no`, so nothing
+     * had been shown to hold 057. But §1.3 permits editing 057 only on a COMPLETE census
+     * that PROVES no persistent environment has applied it, and a cluster nobody could
+     * classify is not an environment that has been shown anything — it is one that was not
+     * enumerated. So the census is incomplete, the negative is unproven, and the branch is
+     * 058.
+     */
     const clean = summarize([{ ...unclassifiable, migration_057_applied: 'no' }]);
-    assert.equal(clean.position, 'EDIT_057_IN_PLACE');
+    assert.equal(clean.position, 'INCOMPLETE_CENSUS_REQUIRES_058');
+    assert.equal(clean.census_is_complete, false);
+    assert.equal(clean.permits_editing_057_in_place, false);
+    assert.equal(clean.requires_058, true);
     assert.deepEqual(clean.disposability_indeterminate, ['env-unclassifiable']);
+    // …and it must NOT borrow the FREEZE sentence, which asserts something this evidence
+    // does not support: that a persistent environment HAS applied 057.
+    assert.match(clean.branch_sentence, /THIS CENSUS IS NOT COMPLETE/);
+    assert.doesNotMatch(clean.branch_sentence, /AT LEAST ONE PERSISTENT ENVIRONMENT/);
+  });
+
+  test('only a COMPLETE census permits editing 057 in place', () => {
+    /*
+     * FBL-020-R6 §1.3, as a truth table over the three things that can be wrong. The
+     * clause is "unless a complete census proves the negative", so three distinct failures
+     * all land on 058 and exactly one shape does not.
+     */
+    const env = (over: Partial<Finding>): Finding => ({
+      id: 'env',
+      what_it_is: 'an environment',
+      persistence: 'persistent',
+      inspected: true,
+      inspection_method: 'filesystem',
+      evidence: [],
+      migration_057_applied: 'no',
+      basis: 'inspected',
+      limits: [],
+      ...over,
+    });
+
+    const clean = summarize([env({})]);
+    assert.equal(clean.position, 'EDIT_057_IN_PLACE');
+    assert.equal(clean.census_is_complete, true);
+    assert.equal(clean.permits_editing_057_in_place, true);
+    assert.equal(clean.requires_058, false);
+
+    // 1. a positive hit.
+    const hit = summarize([env({ migration_057_applied: 'yes' })]);
+    assert.equal(hit.position, 'FREEZE_057_AND_ADD_058');
+    assert.equal(hit.requires_058, true);
+
+    // 2. a probe that could not answer.
+    const unanswered = summarize([env({ migration_057_applied: 'indeterminate' })]);
+    assert.equal(unanswered.position, 'BLOCKED_INDETERMINATE');
+    assert.equal(unanswered.census_is_complete, false);
+    assert.equal(unanswered.requires_058, true);
+
+    // 3. an environment that could not be CLASSIFIED, though its probe answered.
+    const unclassified = summarize([env({ persistence: 'indeterminate' })]);
+    assert.equal(unclassified.position, 'INCOMPLETE_CENSUS_REQUIRES_058');
+    assert.equal(unclassified.census_is_complete, false);
+    assert.equal(unclassified.requires_058, true);
+
+    // Exactly one of the four positions permits the in-place branch.
+    const permitting = (
+      [clean, hit, unanswered, unclassified] as Array<ReturnType<typeof summarize>>
+    ).filter((c) => c.permits_editing_057_in_place);
+    assert.equal(permitting.length, 1);
+  });
+
+  test('a census taken on a CI runner declares that it MAY NOT decide the 057/058 branch', () => {
+    /*
+     * FBL-020-R6 §1.2. R5 offered the runner census where the order asked for the
+     * operator-controlled environments. A runner cannot observe them, so the artifact now
+     * says so in a field — and `scripts/check-census-prose.ts` refuses such an artifact
+     * rather than reading a position out of it.
+     *
+     * The detection is fail-closed, so every marker is driven individually: a future runner
+     * that sets only one of them must still be recognised.
+     */
+    const operator = censusAuthority({});
+    assert.equal(operator.role, 'OPERATOR_CONTROLLED_HOST');
+    assert.equal(operator.may_decide_the_057_058_branch, true);
+    assert.deepEqual(operator.detected_from, []);
+
+    for (const marker of RUNNER_ENV_MARKERS) {
+      const runner = censusAuthority({ [marker]: 'true' });
+      assert.equal(runner.role, 'CI_RUNNER', `${marker} must be recognised`);
+      assert.equal(runner.may_decide_the_057_058_branch, false);
+      assert.deepEqual(runner.detected_from, [marker]);
+      assert.match(runner.statement, /MUST\s+NOT be used to decide|MUST NOT be used to decide/);
+    }
+
+    // An UNSET or empty marker is not a runner: a variable that is present and empty is how
+    // a shell exports "no value", and reading it as a runner would make every local census
+    // undecidable for no reason.
+    assert.equal(censusAuthority({ CI: '' }).role, 'OPERATOR_CONTROLLED_HOST');
+    assert.equal(censusAuthority({ CI: 'false' }).role, 'OPERATOR_CONTROLLED_HOST');
+  });
+
+  test('the census states its host scope, what it did not cover, and the head it was taken at', () => {
+    /*
+     * FBL-020-R6 §1.1. "No environment holds 057" means nothing until a reader knows which
+     * environments were looked at, and a bare commit id is not provenance when the markers
+     * are derived from a directory the working tree can change.
+     */
+    const scope = censusScope();
+    assert.equal(scope.host.platform, process.platform);
+    assert.ok(scope.enumerated_classes.length >= 6, 'every class of target is named');
+    assert.deepEqual(scope.out_of_scope, [...OUT_OF_SCOPE]);
+    assert.ok(
+      scope.out_of_scope.some((o) => /not reachable from this host/.test(o)),
+      'the census must say it is evidence about ONE host',
+    );
+
+    /*
+     * THE GIT COMPARISONS ARE GUARDED, AND THE GUARD IS ASSERTED ABOUT.
+     * `scripts/mutation-kill.ts` runs this battery inside an isolated copy of the tree with
+     * no `.git`, where every git call throws; a test that called git unconditionally would
+     * go red there and turn a killed mutation into a reported survivor. So the comparisons
+     * run wherever git can answer, and where it cannot the test requires the tree to really
+     * be such a copy rather than silently skipping.
+     */
+    const gitAnswers = existsSync(join(ROOT, '.git'));
+    const git = (...args: string[]): string =>
+      execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+
+    const provenance = sourceHeadProvenance();
+    if (!gitAnswers) {
+      assert.equal(
+        provenance.head,
+        'unknown',
+        'with no git, provenance says so rather than guessing',
+      );
+      assert.ok(provenance.statement.length > 0);
+      return;
+    }
+    assert.equal(provenance.head, git('rev-parse', 'HEAD').trim(), 'the commit it was taken at');
+    assert.match(provenance.head, /^[0-9a-f]{40}$/);
+
+    /*
+     * `migrations_match_head` is computed here INDEPENDENTLY rather than asserted against
+     * itself. It is the field that decides whether this census asked the question the
+     * commit would have asked — the markers are derived from migrations/ — so a version
+     * that hard-coded it would describe a tree nobody had looked at.
+     */
+    const migrationsDirty = git('status', '--porcelain', '--', 'migrations')
+      .split(/\r?\n/)
+      .filter((l) => l.trim() !== '').length;
+    assert.equal(
+      provenance.migrations_match_head,
+      migrationsDirty === 0,
+      'migrations_match_head must describe the tree this census actually ran from',
+    );
+
+    const dirty = git('status', '--porcelain')
+      .split(/\r?\n/)
+      .filter((l) => l.trim() !== '').length;
+    assert.equal(provenance.modified_paths, dirty, 'and so must the changed-path count');
+    assert.equal(
+      provenance.tree_state,
+      dirty === 0 ? 'clean' : 'modified',
+      'the state and the count must agree',
+    );
+    assert.ok(provenance.statement.length > 0);
+  });
+
+  test('provenance reports a MODIFIED migrations directory, and says so in its statement', () => {
+    /*
+     * FBL-020-R6 §1.1 — THE BRANCH THIS TREE CANNOT REACH.
+     *
+     * `migrations_match_head` is the field that decides whether a census asked the question
+     * its commit would have asked: the markers are derived from `migrations/`, so a tree
+     * with an edited migration searches for a different set of names. This repository's
+     * migrations are byte-immutable, so the FALSE branch can never occur in the tree a test
+     * runs in — and a version of the reading that hard-coded `true` would satisfy every
+     * assertion made about the live tree while describing something nobody had inspected.
+     *
+     * `provenanceFrom` is therefore a pure function of the three counts git reports, and
+     * both branches are driven here.
+     */
+    const clean = provenanceFrom('a'.repeat(40), 0, 0);
+    assert.equal(clean.tree_state, 'clean');
+    assert.equal(clean.migrations_match_head, true);
+    assert.match(clean.statement, /identical to the commit above/);
+
+    // A modified tree whose migrations are untouched: the census still asked the commit's
+    // question, and the statement says how many paths moved.
+    const elsewhere = provenanceFrom('b'.repeat(40), 7, 0);
+    assert.equal(elsewhere.tree_state, 'modified');
+    assert.equal(elsewhere.migrations_match_head, true);
+    assert.match(elsewhere.statement, /carrying 7 changed path/);
+    assert.match(elsewhere.statement, /migrations\/ carries 0 of them/);
+
+    // A tree with EDITED MIGRATIONS: the field must say so, and the statement must carry
+    // the count. This is the case the live tree cannot produce.
+    const edited = provenanceFrom('c'.repeat(40), 9, 2);
+    assert.equal(edited.tree_state, 'modified');
+    assert.equal(
+      edited.migrations_match_head,
+      false,
+      'a tree with edited migrations did NOT ask the question its commit would have asked',
+    );
+    assert.match(edited.statement, /migrations\/ carries 2 of them/);
+
+    // git could not answer at all: reported as modified and unmatched, never as clean.
+    const blind = provenanceFrom('', -1, -1);
+    assert.equal(blind.head, 'unknown');
+    assert.equal(blind.tree_state, 'modified');
+    assert.equal(blind.migrations_match_head, false);
   });
 
   test('the fsync=off declaration carries an unattributed database, and nothing else does', () => {

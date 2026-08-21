@@ -6,7 +6,7 @@ keeps the two and the real workspace manifests consistent, in CI).
 
 **Governing authority.** The active order is FBL-020-R5, checked in at
 [`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
-`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+`83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`. Per its Appendix A,
 **every R5 clause is UNVERIFIED until the final package proves it**. This document records
 ownership and the gates that enforce it; it closes no clause.
 

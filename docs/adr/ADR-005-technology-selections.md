@@ -30,7 +30,7 @@ rewrites for fashion.
   `quality-baselines.json`. **These three numbers are readable only in the Version 2.0
   blueprint**: the word "ceiling" appears nowhere in the Version 1.0 document a reviewer
   holds, and nowhere in the checked-in order text `docs/orders/FBL-020-R5.md` (canonical-LF
-  SHA-256 `75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`) either.
+  SHA-256 `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`) either.
 - Container: digest-pinned node:20-alpine, non-root, healthchecked.
 
 ## Deferred, deliberately (recorded, not implemented)

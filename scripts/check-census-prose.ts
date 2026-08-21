@@ -47,7 +47,25 @@ const ROOT = join(__dirname, '..');
 
 export const REPORT = join(ROOT, 'docs', 'FBL-020-DELIVERY-REPORT.md');
 export const MAP = join(ROOT, 'docs', 'FBL-020-R5-REQUIREMENT-MAP.json');
-export const CENSUS = join(ROOT, 'artifacts', 'migration-census.json');
+
+/**
+ * FBL-020-R6 §1.1/§1.2 — THE CENSUS THIS GATE READS IS THE COMMITTED OPERATOR ONE.
+ *
+ * Two defects are closed by this one line.
+ *
+ *   * R5 pointed this gate at `artifacts/migration-census.json`. In CI that file is written
+ *     by the census step a few lines earlier — the RUNNER census — so the runner decided
+ *     what the delivery documents were required to say. §1.2 forbids exactly that.
+ *   * `artifacts/` is GITIGNORED. A developer tree has it and a fresh checkout does not, so
+ *     the same gate silently checked a different thing depending on where it ran, and the
+ *     suite had to guard the comparison with `existsSync` — which means the shipped
+ *     documents could go uncompared on any machine that had never taken a census.
+ *
+ * The operator census is therefore COMMITTED, at the path below, and this gate reads that.
+ * It exists in every checkout, it is the same bytes for every reader, and it carries the
+ * `authority` block — so a runner census substituted for it is refused rather than obeyed.
+ */
+export const CENSUS = join(ROOT, 'docs', 'evidence', 'FBL-020-R6-operator-environment-census.json');
 
 /** The map rows that state a §0.2 position and must therefore carry the token. */
 export const POSITION_BEARING_ROWS = ['R5-§0.1-census', 'R5-§0.2-in-place-branch'] as const;
@@ -58,13 +76,40 @@ export const BLOCK_END = '<!-- census-position:end -->';
 export interface CensusClaim {
   position: CensusPosition;
   branch_sentence: string;
+  /** Which host the census inspected, carried through so a reader sees what decided. */
+  role: string;
 }
 
-/** Reads the artifact's position. A census that states none is itself a failure. */
+/**
+ * Reads the artifact's position. A census that states none is itself a failure — and so is
+ * a census that is not entitled to state one.
+ *
+ * FBL-020-R6 §1.2: a census taken on a CI runner reports a runner, and a runner is not an
+ * operator-controlled persistent environment. Such an artifact carries
+ * `authority.may_decide_the_057_058_branch: false` and is REFUSED here, so it cannot be
+ * substituted for the operator census by a wrong path, a copied file or a CI step that
+ * writes over it.
+ */
 export function readCensusClaim(file = CENSUS): CensusClaim {
   const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
+    authority?: { role?: string; may_decide_the_057_058_branch?: boolean };
     conclusion?: { position?: string; branch_sentence?: string };
   };
+  const authority = parsed.authority;
+  if (authority === undefined || typeof authority.may_decide_the_057_058_branch !== 'boolean')
+    throw new Error(
+      `${file} carries no authority.may_decide_the_057_058_branch. A census that does not ` +
+        'say which host it inspected, and whether that host may decide anything, cannot be ' +
+        'the census a schema branch rests on.',
+    );
+  if (!authority.may_decide_the_057_058_branch)
+    throw new Error(
+      `${file} declares role ${JSON.stringify(authority.role)} and ` +
+        'may_decide_the_057_058_branch=false, so it MAY NOT DECIDE THE 057/058 BRANCH. It is ' +
+        'evidence about the machine it ran on and nothing else. FBL-020-R6 §1.2: the branch ' +
+        'rests on a census of the ACTUAL OPERATOR-CONTROLLED PERSISTENT ENVIRONMENTS, and a ' +
+        'runner census is not one.',
+    );
   const position = parsed.conclusion?.position;
   const sentence = parsed.conclusion?.branch_sentence;
   if (position === undefined || sentence === undefined)
@@ -76,7 +121,11 @@ export function readCensusClaim(file = CENSUS): CensusClaim {
     throw new Error(
       `${file}: conclusion.position is ${JSON.stringify(position)}, which is not a position`,
     );
-  return { position: position as CensusPosition, branch_sentence: sentence };
+  return {
+    position: position as CensusPosition,
+    branch_sentence: sentence,
+    role: authority.role ?? 'unstated',
+  };
 }
 
 /** The `census-position` block of a Markdown document, or undefined when there is none. */
@@ -172,6 +221,8 @@ function main(): void {
     readFileSync(REPORT, 'utf8'),
     JSON.parse(readFileSync(MAP, 'utf8')) as { requirements?: MapRow[] },
   );
+  console.log(`census: ${census}`);
+  console.log(`census role: ${claim.role}`);
   console.log(`census position: ${claim.position}`);
   if (problems.length > 0) {
     console.error('The delivery documents do not state what the census artifact concluded:');

@@ -168,6 +168,29 @@ source in this repository can derive must carry a `NOT GATE-CHECKED: …` label 
 appears; the gate refuses it otherwise. In CI the step runs after the summary parser and
 the mutation runner, because it reads their artifacts.
 
+```bash
+npx tsx scripts/check-final-state.ts          # the gate
+npx tsx scripts/check-final-state.ts --list   # what it requires, and what it forbids
+```
+
+**If you are editing a delivery document, do not retype the FINAL STATE either — and the
+final state is not a number.** `docs/evidence/FBL-020-FINAL-STATE.json` is the one record of
+which commits exist, which exact-SHA `ci.yml` run measured which of them with what per-job
+conclusions, whether the one-commit budget was kept, and whether the revision may be
+submitted; this gate checks that record against **git** (every named commit exists, its
+recorded subject matches, and the recorded list is exactly the commits in the recorded
+range), against the run data (each run's `head_sha` is the commit it is attributed to, and
+the per-job conclusions agree with the run-level one), and then sentence by sentence against
+the delivery report, the requirement map, the provenance record, KNOWN-LIMITATIONS and the
+README. It exists because the figure gate above compares NUMBERS and FBL-020-R5 was rejected
+for SENTENCES: a report naming a red `HEAD` that was no longer `HEAD`, a KNOWN-LIMITATIONS
+repeating that no CI run existed, a requirement map awaiting a run that had already happened.
+A withdrawn sentence may be QUOTED, and only inside a
+`<!--final-state:withdrawn-->` … `<!--/final-state-->` region (a `withdrawn_claims` key, in
+the JSON documents) — deleting the history of a corrected claim is its own dishonesty.
+**This gate reads no artifact at all**, deliberately: `artifacts/` is gitignored, and a gate
+that reads it checks a different thing on a developer machine than on a fresh checkout.
+
 ## The safety model
 
 - `npm test` reads **`TEST_DATABASE_URL` only** — it never falls back to
@@ -184,3 +207,9 @@ the mutation runner, because it reads their artifacts.
   rather than skipping the changed body — and it refuses equally on a NULL checksum, an
   unsupported algorithm, or a ledger row whose migration body is no longer on disk. That is
   why an environment that applied an earlier `057` must be recreated rather than re-migrated.
+- **`057` IS FROZEN, and so are `000` and `049`–`056`.** FBL-020-R6 §1.3 closed the question
+  of whether `057` could still be corrected in place: the operator census cannot prove that
+  no persistent environment has applied it, so every further schema change goes in a new
+  `058`. The decision, its reason and the census that supports it are
+  `docs/evidence/FBL-020-R6-MIGRATION-PREFLIGHT.md`. Editing any file in `migrations/` is
+  therefore a review event, not routine work.

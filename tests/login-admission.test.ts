@@ -20,9 +20,12 @@ import { ROLES } from '@dealer/contracts';
 import {
   NOT_IMPERSONATED,
   admitLoginAndEstablishSession,
+  claimLoginTransactionAtomically,
   exchangeMatchesVerifiedToken,
   expireStaleLoginTransactions,
   openCookiePayload,
+  sealCookiePayload,
+  startLoginTransaction,
   type CodeExchangeResult,
   type IdentityProviderPort,
   type VerifiedAccessToken,
@@ -93,6 +96,8 @@ describe(
       readonly header: string;
       readonly state: string;
       readonly oidcNonce: string;
+      /** FBL-020-R6 §2.1: needed to RESEAL a cookie with one value perturbed. */
+      readonly codeVerifier: string;
       readonly loginTxnId: string;
     }
 
@@ -111,6 +116,7 @@ describe(
         header: `dealer_auth_txn=${encodeURIComponent(sealed)}`,
         state: String(payload.state),
         oidcNonce: String(payload.oidc_nonce),
+        codeVerifier: String(payload.code_verifier),
         loginTxnId: String(payload.login_txn_id),
       };
     }
@@ -228,6 +234,36 @@ describe(
     async function liveSessionCount(): Promise<number> {
       const r = await query(`SELECT COUNT(*)::int AS n FROM identity_sessions`);
       return Number((r.rows[0] as { n: number }).n);
+    }
+
+    /**
+     * A login transaction in exactly the state `admitLoginAndEstablishSession` is
+     * always handed one in: CLAIMED, i.e. `consuming` (FBL-020-R6 §2.5).
+     *
+     * IT MATTERS THAT THIS CLAIMS, and the reason was measured rather than reasoned:
+     * with a merely `pending` transaction the success transition inside the admission
+     * refuses `login_transaction_not_consuming` and rolls the whole thing back, so an
+     * admission that had WRONGLY admitted somebody would still come back
+     * `admitted: false` with no session and no custody — and the two direct-call tests
+     * below would pass with the admission chain broken. That is not hypothetical: the
+     * `pending_link_admitted` mutation SURVIVED against a `pending` transaction and is
+     * killed against this one.
+     */
+    async function claimedLoginTransaction(): Promise<string> {
+      const started = await startLoginTransaction({
+        purpose: 'login',
+        redirectUri: 'http://127.0.0.1:3000/auth/callback',
+      });
+      const claimed = await claimLoginTransactionAtomically({
+        loginTxnId: started.loginTxnId,
+        state: started.state,
+        purpose: 'login',
+        nonce: started.nonce,
+        codeVerifier: started.codeVerifier,
+        redirectUri: 'http://127.0.0.1:3000/auth/callback',
+      });
+      assert.ok(claimed, 'the fixture claim must win, or the admission is handed the wrong state');
+      return started.loginTxnId;
     }
 
     /** Any stored provider refresh credential at all, sealed or digested. */
@@ -589,10 +625,15 @@ describe(
      *     re-termination of an already-succeeded transaction (same
      *     `tests/identity-boundary.test.ts` battery), which proves absorption, not
      *     terminalization.
-     *   · `session_establishment_failed` — NOT COVERED BY ANY TEST. The route writes it
-     *     (`apps/api/src/routes/auth.ts`); no assertion anywhere reads it. That residue is
-     *     declared in `docs/identity/KNOWN-LIMITATIONS.md` under "Open at FBL-020-R5
-     *     submission" rather than hidden behind this comment.
+     *   · `session_establishment_failed` — COVERED, since FBL-020-R6 §4.2, by
+     *     `a login whose LOCAL SESSION cannot be established is terminal, with ONE audit event`
+     *     in this file: a real callback over HTTP with a valid exchange and an impossible
+     *     session insert, asserting the terminal state and the single audit event. It was
+     *     NOT COVERED BY ANY TEST until then — the route wrote the value and no assertion
+     *     read it — and the residue was declared in `docs/identity/KNOWN-LIMITATIONS.md`
+     *     rather than hidden behind this comment. It is registered in
+     *     `scripts/mutation-kill.ts` as `session_establishment_failure_left_pending` so the
+     *     coverage cannot silently disappear again.
      */
     test('the refusals are INDISTINGUISHABLE from one another at the wire — every one of them', async () => {
       // The order's enumeration, held against the table. A scenario removed from
@@ -753,6 +794,7 @@ describe(
       const admission = await admitLoginAndEstablishSession({
         session: { ttlSeconds: 3600, cookiePassword: env.cookiePassword },
         trustedIssuer: env.issuer.issuer,
+        loginTxnId: await claimedLoginTransaction(),
         exchanged: {
           accessToken: 'unused',
           refreshToken: 'provider-refresh-pending',
@@ -847,6 +889,7 @@ describe(
       const admission = await admitLoginAndEstablishSession({
         session: { ttlSeconds: 3600, cookiePassword: env.cookiePassword },
         trustedIssuer: env.issuer.issuer,
+        loginTxnId: await claimedLoginTransaction(),
         exchanged: {
           accessToken: 'unused',
           refreshToken: 'provider-refresh-bound-pending',
@@ -1054,24 +1097,128 @@ describe(
       );
 
       /*
-       * …and the session the admission had ALREADY established — the exchange
-       * succeeded, so it exists — is revoked rather than left live. This is the half
-       * that matters most: the row was created before the leg discovered it had run
-       * out of time, so "fail closed" has to mean destroying it, not just answering
-       * 401.
+       * …AND NO SESSION ROW EXISTS AT ALL — FBL-020-R6 §2.5.
+       *
+       * This assertion is the one that changed, and the change is the point. R5
+       * established the session in one commit and recorded the login in another, so
+       * a leg that discovered it had run out of time found a COMMITTED, REFRESHABLE
+       * session already sitting in the table and had to compensate by revoking it.
+       * That compensation was a second best-effort write with the same failure modes
+       * as the first, one step later: if IT failed, or the process stopped between
+       * them, the orphan survived. This test asserted the orphan-then-revoke shape
+       * as if it were the property.
+       *
+       * The success transition is now inside the same transaction as the custody, so
+       * a refused transition ROLLS THE CUSTODY BACK. There is nothing to revoke
+       * because there is nothing at rest: no session row, no sealed provider
+       * credential, and no `identity.session.established` audit row either.
        */
-      const session = (
-        await query(
-          `SELECT revoked_at, revoked_reason, refresh_state_sealed, refresh_token_hash
-             FROM identity_sessions`,
-        )
-      ).rows[0] as Record<string, unknown> | undefined;
-      assert.ok(session !== undefined, 'the admission did establish a session to revoke');
-      assert.notEqual(session.revoked_at, null, 'and it must not be left live');
-      assert.equal(session.revoked_reason, 'login_transaction_not_consuming');
-      assert.equal(session.refresh_state_sealed, null, 'its provider credential is destroyed');
-      assert.equal(session.refresh_token_hash, null);
-      assert.equal(await refreshStateCount(), 0);
+      assert.equal(
+        await liveSessionCount(),
+        0,
+        'no session may EXIST — not "exist and be revoked" — when the login could not complete',
+      );
+      assert.equal(await refreshStateCount(), 0, 'and no provider credential is in custody');
+      const established = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE event_type = 'identity.session.established'`,
+      );
+      assert.equal(
+        Number((established.rows[0] as { n: number }).n),
+        0,
+        'the session-established audit row rolled back with the session it describes',
+      );
+    });
+
+    /**
+     * FBL-020-R6 §2.3 — THE SLOW EXCHANGE THAT CROSSES EXPIRY WITH NO SWEEP AT ALL.
+     *
+     * The test above runs the worker's expiry sweep inside the exchange, so the row
+     * is already `failed` by the time the leg comes back. That proves the leg loses
+     * to a sweep — and it is exactly why R5's defect survived: with the sweep in the
+     * picture, SOMETHING terminalized the transaction, and it was easy to read the
+     * refusal as the expiry rule doing its job.
+     *
+     * Take the sweep away and R5 had no expiry rule on this path. `succeedLoginTransaction`
+     * required `status = 'consuming'` and NOTHING about `expires_at`, so a callback
+     * claimed one millisecond before the deadline could finish minutes later, be
+     * recorded `succeeded`, and receive a session cookie for a transaction that had
+     * expired while the provider was answering. On a real deployment the sweep runs
+     * on an interval — minutes apart — so this is the ordinary case, not the exotic one.
+     *
+     * NO SWEEP IS INVOKED ANYWHERE IN THIS TEST. Only the CLOCK moves, through a
+     * declared fixture write, while the leg is inside the provider exchange; the row
+     * is left `consuming` and expired. Everything that follows is the completion path
+     * enforcing `expires_at > NOW()` in DATABASE TIME, by itself. The sweep is then
+     * run at the END purely as a control: it must find nothing left to age, which is
+     * what makes "no sweep was involved" a measured fact rather than a promise.
+     */
+    test('a login claimed before expiry and completed after it is refused WITHOUT any sweep', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const txn = await beginLogin();
+
+      let clockMoved = 0;
+      const honest = fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce });
+      useIdentityProviderForTests({
+        ...honest,
+        async exchangeCode(input) {
+          // The transaction is `consuming` — the claim has already happened — and the
+          // exchange has not returned. ONLY the deadline moves. Nothing terminalizes
+          // the row, so it is still `consuming` and still claimable when the leg
+          // resumes, which is precisely the state R5 recorded as a success.
+          const moved = await query(
+            `UPDATE login_transactions
+                SET created_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
+              WHERE login_txn_id = $1 AND status = 'consuming'`,
+            [txn.loginTxnId],
+          );
+          clockMoved = moved.rowCount ?? 0;
+          return honest.exchangeCode(input);
+        },
+      });
+
+      const res = await callback(txn);
+      assert.equal(clockMoved, 1, 'the deadline must have moved on a CONSUMING row');
+
+      // (1) a NEUTRAL 401 — the same answer every other refusal on this leg gives
+      assert.equal(res.status, 401);
+      assert.equal(res.body?.error?.code, 'unauthorized');
+      // (2) NO SESSION COOKIE
+      assert.ok(
+        !/dealer_session=[^;,]+/.test((res.setCookie ?? '').replace(/dealer_session=;/, '')),
+        'an expired transaction may not hand out a session cookie',
+      );
+      // (3) NO LIVE SESSION and (4) NO REFRESH CUSTODY
+      assert.equal(await liveSessionCount(), 0, 'no session row may exist');
+      assert.equal(await refreshStateCount(), 0, 'no provider credential may be in custody');
+      // (5) a TERMINAL EXPIRY STATE
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed');
+      assert.equal(row.failure_reason, 'expired');
+      // (6) EXACTLY ONE EXPIRY AUDIT, and no success event anywhere
+      const events = await loginEvents(txn.loginTxnId);
+      assert.deepEqual(events, [
+        'identity.login.started',
+        'identity.login.claimed',
+        'identity.login.expired',
+      ]);
+
+      // THE CONTROL. The sweep runs now, for the first time in this test, and finds
+      // nothing: the transition above was not the sweep's, and it did not leave a
+      // second one to make.
+      assert.equal(
+        await expireStaleLoginTransactions(),
+        0,
+        'the sweep must have had nothing to do — the completion path enforced the expiry itself',
+      );
+      assert.deepEqual(
+        await loginEvents(txn.loginTxnId),
+        events,
+        'and it wrote no second expiry event',
+      );
     });
 
     /**
@@ -1130,6 +1277,379 @@ describe(
         '00000000-0000-0000-0000-000000000000',
         'the nil tenant is what this clause exists to stop',
       );
+    });
+
+    /**
+     * ── FBL-020-R6 §2.1 / §2.2, AT THE WIRE ────────────────────────────────
+     *
+     * `apps/api/src/routes/auth.ts` refused a missing or disagreeing query `state`
+     * BEFORE the authoritative claim — with a valid sealed handle in hand, naming a
+     * live `pending` row. The answer was a 401 and nothing else: the transaction was
+     * NOT terminalized, its state was NOT burned, no audit event was written, and the
+     * next attempt could still claim it. The lifecycle service, not the route, is the
+     * authority for what a callback presented, so every one of these now reaches it.
+     *
+     * Each case below asserts the same four things: the neutral 401, no session, the
+     * transaction TERMINAL with its OWN explained reason, and exactly one terminal
+     * audit event. The state and purpose cases additionally prove the §2.2 clause
+     * that matters most — A LATER CORRECT CALLBACK LOSES.
+     */
+    const routedCallbackRefusals: ReadonlyArray<{
+      readonly title: string;
+      readonly reason: string;
+      /** Builds the callback URL query for this case. */
+      readonly query: (txn: TxnCookie) => string;
+      /** An alternative cookie, when the case is about what the cookie carried. */
+      readonly cookie?: (txn: TxnCookie) => string;
+    }> = [
+      {
+        title:
+          'a callback with NO state reaches the lifecycle service and ends its transaction (R6 §2.1)',
+        reason: 'callback_state_mismatch',
+        query: () => 'code=any-code',
+      },
+      {
+        title:
+          'a callback whose state DISAGREES ends its transaction, and the correct one afterwards loses (R6 §2.2)',
+        reason: 'callback_state_mismatch',
+        query: () => 'code=any-code&state=not-the-state-this-transaction-issued',
+      },
+      {
+        title:
+          'a sealed handle presented with the WRONG PURPOSE ends the transaction it names (R6 §2.1)',
+        reason: 'callback_purpose_mismatch',
+        query: (txn) => `code=any-code&state=${txn.state}`,
+        // The SAME handle and the SAME state, resealed under the server key with a
+        // purpose this leg is not. Only the server can produce such a cookie, which is
+        // exactly why the row — not the route — has to be the one that judges it.
+        cookie: (txn) =>
+          sealCookiePayload(
+            {
+              purpose: 'reauth',
+              login_txn_id: txn.loginTxnId,
+              state: txn.state,
+              code_verifier: txn.codeVerifier,
+              oidc_nonce: txn.oidcNonce,
+            },
+            env.cookiePassword,
+          ),
+      },
+      {
+        title:
+          'a sealed handle carrying the WRONG PKCE VERIFIER ends the transaction it names (R6 §2.1)',
+        reason: 'callback_pkce_mismatch',
+        query: (txn) => `code=any-code&state=${txn.state}`,
+        cookie: (txn) =>
+          sealCookiePayload(
+            {
+              purpose: 'login',
+              login_txn_id: txn.loginTxnId,
+              state: txn.state,
+              code_verifier: 'a-verifier-this-transaction-never-issued',
+              oidc_nonce: txn.oidcNonce,
+            },
+            env.cookiePassword,
+          ),
+      },
+      {
+        title:
+          'a sealed handle carrying the WRONG OIDC NONCE ends the transaction it names (R6 §2.1)',
+        reason: 'callback_nonce_mismatch',
+        query: (txn) => `code=any-code&state=${txn.state}`,
+        cookie: (txn) =>
+          sealCookiePayload(
+            {
+              purpose: 'login',
+              login_txn_id: txn.loginTxnId,
+              state: txn.state,
+              code_verifier: txn.codeVerifier,
+              oidc_nonce: 'a-nonce-this-transaction-never-issued',
+            },
+            env.cookiePassword,
+          ),
+      },
+    ];
+
+    for (const scenario of routedCallbackRefusals) {
+      test(scenario.title, async () => {
+        const advisor = await seedActor(env.issuer, {
+          tenantId: tenant,
+          roles: [ROLES.SERVICE_ADVISOR],
+        });
+        const txn = await beginLogin();
+        // A provider port that WOULD succeed, so a refusal here cannot be an
+        // accident of a broken exchange.
+        useIdentityProviderForTests(
+          fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce }),
+        );
+
+        const header =
+          scenario.cookie === undefined
+            ? txn.header
+            : `dealer_auth_txn=${encodeURIComponent(scenario.cookie(txn))}`;
+        const res = await fetch(`${base}/auth/callback?${scenario.query(txn)}`, {
+          headers: { cookie: header },
+          redirect: 'manual',
+        });
+        const body = (await res.json().catch(() => null)) as { error?: { code?: string } } | null;
+
+        assert.equal(res.status, 401, scenario.reason);
+        assert.equal(body?.error?.code, 'unauthorized', 'the neutral answer, as everywhere else');
+        assert.ok(
+          !/dealer_session=[^;,]/.test(res.headers.get('set-cookie') ?? ''),
+          'a refused callback sets no session cookie',
+        );
+        assert.equal(await liveSessionCount(), 0, 'and establishes no session');
+        assert.equal(await refreshStateCount(), 0, 'and takes no credential into custody');
+
+        // THE TRANSACTION IS TERMINAL, with its own explained reason. R5 left it
+        // `pending` here, which is the whole defect.
+        const row = await fullTxnRow(txn.loginTxnId);
+        assert.equal(row.status, 'failed', 'the transaction the callback named must END');
+        assert.equal(row.failure_reason, scenario.reason);
+
+        // EXACTLY ONE terminal audit event.
+        const events = await loginEvents(txn.loginTxnId);
+        assert.deepEqual(
+          events,
+          ['identity.login.started', 'identity.login.failed'],
+          'one start, one terminal event — and no claim, because the claim never happened',
+        );
+
+        // …AND A LATER CORRECT CALLBACK LOSES. This is what burning the state buys:
+        // the transaction is spent, so the genuine callback arriving afterwards
+        // cannot resurrect it.
+        const late = await callback(txn);
+        assert.equal(late.status, 401, 'the correct callback afterwards must lose');
+        assert.equal(await liveSessionCount(), 0);
+        const after = await fullTxnRow(txn.loginTxnId);
+        assert.equal(after.status, 'failed');
+        assert.equal(
+          after.failure_reason,
+          scenario.reason,
+          'the FIRST terminal fact wins; nothing overwrites it',
+        );
+        assert.deepEqual(
+          await loginEvents(txn.loginTxnId),
+          ['identity.login.started', 'identity.login.failed', 'identity.login.replayed'],
+          'the late attempt is recorded as the replay it is, and adds no second terminal event',
+        );
+      });
+    }
+
+    /**
+     * ── FBL-020-R6 §4.2: `session_establishment_failed`, AT THE ROUTE ──────
+     *
+     * This reason was EXPRESSLY UNTESTED. `docs/identity/KNOWN-LIMITATIONS.md` carried it
+     * as an open item, `docs/identity/AUTH-FLOWS.md` said "one of the nine reaches no
+     * test", and the comment above `the refusals are INDISTINGUISHABLE …` in this very
+     * file said so too — `grep -rn session_establishment_failed tests/` found the string
+     * only inside comments. The route wrote the value and nothing read it, so a future
+     * edit could have stopped terminalizing that exit and every gate would have stayed
+     * green.
+     *
+     * WHAT THIS DRIVES, and why it is the route rather than the function. The clause is
+     * about a TERMINAL STATE and a SINGLE AUDIT EVENT, and both are properties of the leg
+     * as a whole: the transaction is claimed by the route, the admission runs inside it,
+     * and the `catch` in `apps/api/src/routes/auth.ts` is the only writer of this reason.
+     * So the test performs a real `GET /auth/login` and a real `GET /auth/callback` over
+     * HTTP against a substituted provider that answers with a genuinely valid exchange —
+     * everything up to and including token verification SUCCEEDS — and makes only the
+     * LOCAL SESSION WRITE impossible.
+     *
+     * THE INJECTION IS THE SESSION INSERT ITSELF, not an audit row: a `BEFORE INSERT`
+     * trigger on `identity_sessions` that raises. That is the literal meaning of
+     * `session_establishment_failed` in `AUTH-FLOWS.md` — "the local session could not be
+     * established after a good exchange" — and it is a different injection point from the
+     * R6 §2.5 test below, which fails the SUCCESS AUDIT write instead. Two different
+     * faults inside `admitLoginAndEstablishSession` reach the same terminal reason, which
+     * is what the route's `catch` is for. The trigger is created inside the test and
+     * dropped in `finally`; `resetDatabase` TRUNCATEs and does not drop, so it cannot be
+     * relied on to remove it.
+     *
+     * REVERT-PROOF (FBL-020-R6 §4.2): delete the
+     * `await failLoginTransaction(claimed.loginTxnId, 'session_establishment_failed');`
+     * line from that `catch` and this test fails on the terminal-state assertion, because
+     * the transaction is left stranded at `consuming` with no reason and no event.
+     */
+    test('a login whose LOCAL SESSION cannot be established is terminal, with ONE audit event', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const txn = await beginLogin('/ros/9');
+      // A REAL, VALID exchange: the provider leg must succeed, or this would be
+      // testing `provider_exchange_failed` or `token_verification_failed` instead.
+      useIdentityProviderForTests(
+        fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce }),
+      );
+
+      await query(`CREATE OR REPLACE FUNCTION fbl_r6_fail_session_insert()
+                     RETURNS TRIGGER AS $$
+                     BEGIN
+                       RAISE EXCEPTION 'FBL-020-R6 fault injection: local session insert';
+                     END;
+                     $$ LANGUAGE plpgsql`);
+      let res: { status: number; setCookie: string | null; body: string };
+      try {
+        await query(`CREATE TRIGGER fbl_r6_fail_session_insert
+                       BEFORE INSERT ON identity_sessions
+                       FOR EACH ROW EXECUTE FUNCTION fbl_r6_fail_session_insert()`);
+        const raw = await fetch(`${base}/auth/callback?code=any-code&state=${txn.state}`, {
+          headers: { cookie: txn.header },
+          redirect: 'manual',
+        });
+        const body = await raw.text();
+        res = { status: raw.status, setCookie: raw.headers.get('set-cookie'), body };
+      } finally {
+        await query(`DROP TRIGGER IF EXISTS fbl_r6_fail_session_insert ON identity_sessions`);
+        await query(`DROP FUNCTION IF EXISTS fbl_r6_fail_session_insert()`);
+      }
+
+      // NOT a login: no redirect, no session cookie.
+      assert.notEqual(res.status, 302, 'a login that established no session is not a login');
+      assert.ok(
+        !/dealer_session=[^;,]/.test(res.setCookie ?? ''),
+        'and it hands out no session cookie',
+      );
+
+      // THE TERMINAL STATE, by name. This is the assertion the clause is about.
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed', 'the transaction must END, not sit at `consuming`');
+      assert.equal(
+        row.failure_reason,
+        'session_establishment_failed',
+        'and it must say WHY, in the reason the route writes for exactly this fault',
+      );
+      assert.notEqual(row.consumed_at, null, 'terminal, not merely annotated');
+      assert.notEqual(row.claimed_at, null, 'it went through the CLAIM path, not around it');
+
+      // ONE AUDIT EVENT — the second half of the clause. Not zero, not two, and not an
+      // expiry: `identity.login.failed` is the single terminal event for this ending.
+      assert.deepEqual(
+        await loginEvents(txn.loginTxnId),
+        ['identity.login.started', 'identity.login.claimed', 'identity.login.failed'],
+        'exactly one terminal audit event, and it is a failure rather than an expiry',
+      );
+
+      // Nothing was taken into custody by the half-completed leg.
+      assert.equal(await liveSessionCount(), 0, 'no session row survives');
+      assert.equal(await refreshStateCount(), 0, 'no sealed provider credential survives');
+      const succeeded = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE event_type = 'identity.login.succeeded' AND entity_id = $1`,
+        [txn.loginTxnId],
+      );
+      assert.equal(
+        Number((succeeded.rows[0] as { n: number }).n),
+        0,
+        'and the login is not recorded as having succeeded',
+      );
+
+      // The database fault text is an internal string. It may not reach the row, the
+      // audit trail or the answer the caller reads.
+      const details = await query(
+        `SELECT details::text AS d FROM audit_events
+          WHERE entity_type = 'login_transaction' AND entity_id = $1`,
+        [txn.loginTxnId],
+      );
+      const written = JSON.stringify(row) + JSON.stringify(details.rows) + res.body;
+      assert.ok(
+        !written.includes('fault injection'),
+        'the internal failure text is never stored or returned',
+      );
+    });
+
+    /**
+     * ── FBL-020-R6 §2.5: FAULT-INJECT THE SUCCESS AUDIT ───────────────────
+     *
+     * §2.5 asks for the one experiment the two-commit shape could never survive.
+     * R5's route established the session (commit one) and then recorded the login
+     * (commit two). Make the SUCCESS AUDIT WRITE fail and R5 leaves behind exactly
+     * what the clause names: a committed, live, REFRESHABLE session belonging to no
+     * completed login — an orphan the compensating revocation never even reached,
+     * because the failure happened inside the second transaction.
+     *
+     * The injection is a database trigger that raises on the
+     * `identity.login.succeeded` INSERT and on nothing else, so it is the AUDIT WRITE
+     * that fails and not the transition, the session insert or the exchange. It is
+     * created inside the test and dropped in `finally`, and `resetDatabase` (which
+     * TRUNCATEs and does not drop) cannot be relied on to remove it.
+     *
+     * What must hold afterwards: NO CUSTODY SURVIVES. No session row at all, no
+     * sealed provider refresh state, no `identity.session.established` audit row, and
+     * no `identity.login.succeeded` row — because all five writes were one commit.
+     */
+    test('a failing login-success AUDIT write leaves NO custody behind (R6 §2.5)', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const txn = await beginLogin();
+      useIdentityProviderForTests(
+        fakeExchange({ subject: advisor.providerUserId, oidcNonce: txn.oidcNonce }),
+      );
+
+      await query(`CREATE OR REPLACE FUNCTION fbl_r6_fail_login_success_audit()
+                     RETURNS TRIGGER AS $$
+                     BEGIN
+                       IF NEW.event_type = 'identity.login.succeeded' THEN
+                         RAISE EXCEPTION 'FBL-020-R6 fault injection: login success audit write';
+                       END IF;
+                       RETURN NEW;
+                     END;
+                     $$ LANGUAGE plpgsql`);
+      let res: { status: number; setCookie: string | null };
+      try {
+        await query(`CREATE TRIGGER fbl_r6_fail_login_success_audit
+                       BEFORE INSERT ON audit_events
+                       FOR EACH ROW EXECUTE FUNCTION fbl_r6_fail_login_success_audit()`);
+        const raw = await fetch(`${base}/auth/callback?code=any-code&state=${txn.state}`, {
+          headers: { cookie: txn.header },
+          redirect: 'manual',
+        });
+        await raw.text();
+        res = { status: raw.status, setCookie: raw.headers.get('set-cookie') };
+      } finally {
+        await query(`DROP TRIGGER IF EXISTS fbl_r6_fail_login_success_audit ON audit_events`);
+        await query(`DROP FUNCTION IF EXISTS fbl_r6_fail_login_success_audit()`);
+      }
+
+      // The leg fails. WHICH failure it is does not matter to this clause — what
+      // matters is that it is not a 302 with a cookie.
+      assert.notEqual(
+        res.status,
+        302,
+        'a login whose success could not be recorded is not a login',
+      );
+      assert.ok(
+        !/dealer_session=[^;,]/.test(res.setCookie ?? ''),
+        'and it hands out no session cookie',
+      );
+
+      // NO CUSTODY SURVIVES — the clause, asserted four ways.
+      assert.equal(await liveSessionCount(), 0, 'no session row survives the failed audit write');
+      assert.equal(await refreshStateCount(), 0, 'no sealed provider credential survives it');
+      const established = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE event_type = 'identity.session.established'`,
+      );
+      assert.equal(
+        Number((established.rows[0] as { n: number }).n),
+        0,
+        'nor does the session-established audit row, which was in the same commit',
+      );
+      const succeeded = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE event_type = 'identity.login.succeeded' AND entity_id = $1`,
+        [txn.loginTxnId],
+      );
+      assert.equal(Number((succeeded.rows[0] as { n: number }).n), 0);
+
+      // …and the transaction is terminal rather than stranded at `consuming`.
+      const row = await fullTxnRow(txn.loginTxnId);
+      assert.equal(row.status, 'failed');
+      assert.equal(row.failure_reason, 'session_establishment_failed');
     });
   },
 );

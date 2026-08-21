@@ -49,8 +49,21 @@ export const POLICY_VERSION = 'fbl-020.1';
  * anything below the current version, so the number cannot be used to opt back
  * into the weaker class. It is stated here, once, and interpolated into the one
  * INSERT that writes evidence — there is no second place for it to drift to.
+ *
+ * FBL-020-R6-R6 §D1 — THE CURRENT VERSION IS 3, and the reason is the whole
+ * point of the version existing. Migration 058 §3.1 requires the recorded
+ * `auth_time` to BE the named session's, compared inside the INSERT. That rule
+ * cannot be applied to rows already stored: `identity_sessions.auth_time`
+ * legitimately advances on provider re-authentication (`refreshProviderSession`
+ * in ./session.ts), so a version-2 decision whose session has since
+ * re-authenticated records an instant that is no longer the session's — and it
+ * is CORRECT evidence of the instant that was true when the decision was taken.
+ * Version 3 is therefore what "including an authentication instant bound exactly
+ * to the named session" is called, 058 raises the floor to it so no writer can
+ * claim version 2 and inherit the historic exemption, and the INSERT below writes
+ * it.
  */
-export const CURRENT_EVIDENCE_VERSION = 2;
+export const CURRENT_EVIDENCE_VERSION = 3;
 
 /**
  * FBL-020-R3 — how long a provider authentication counts as FRESH for the
@@ -277,6 +290,71 @@ export function coversTenantWide(binding: ScopedBinding, targetTenantId: string 
  */
 export function coversPlatformAction(binding: ScopedBinding): boolean {
   return binding.scope_level === 'platform';
+}
+
+/**
+ * FBL-020-R6 gate finding C7 — HOW DEEP A SCOPE SITS, so the scope a decision
+ * RECORDS is the narrowest authority it actually relied on.
+ *
+ * `decide()` records ONE `scope_level`/`scope_id` on an allow while
+ * `matched_role_binding_ids` records EVERY binding that covered the target. Until
+ * this function the recorded pair came from `bindings.find(...)` — an arbitrary
+ * element of an unordered SQL result — so an actor holding both a tenant-scope
+ * and a rooftop-scope binding could have either one's scope written down, at
+ * random, for the same request.
+ *
+ * That is not merely untidy. Migration 058 §2 now refuses a matched binding that
+ * sits at a SIBLING organization node or BENEATH the node the decision records,
+ * and every binding that covers one target sits on that target's own ancestor
+ * chain — so they are totally ordered, and recording the DEEPEST of them makes
+ * every other matched binding an ancestor-or-self of what is written down. An
+ * arbitrary choice would have let a legitimate allow record a shallow scope with
+ * a deeper binding beside it, which the database would then correctly refuse.
+ *
+ * `platform` is not comparable with tenant data and is scored lowest; `resource`
+ * names a single row and is the narrowest thing there is.
+ */
+export function scopeDepth(scopeLevel: string): number {
+  switch (scopeLevel) {
+    case 'platform':
+      return 0;
+    case 'tenant':
+      return 1;
+    case 'dealer_group':
+      return 2;
+    case 'legal_entity':
+      return 3;
+    case 'rooftop':
+      return 4;
+    case 'department':
+      return 5;
+    case 'resource':
+      return 6;
+    default:
+      return -1;
+  }
+}
+
+/**
+ * The narrowest binding in a set that has already been filtered to the ones that
+ * COVER the target. Ties break on `role_binding_id` so the answer is the same on
+ * every run and on every host — an arbitrary pick was the defect.
+ */
+export function narrowestBinding<T extends { scope_level: string; role_binding_id: string }>(
+  covering: readonly T[],
+): T | undefined {
+  let best: T | undefined;
+  for (const candidate of covering) {
+    if (best === undefined) {
+      best = candidate;
+      continue;
+    }
+    const delta = scopeDepth(candidate.scope_level) - scopeDepth(best.scope_level);
+    if (delta > 0 || (delta === 0 && candidate.role_binding_id < best.role_binding_id)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 interface Row {
@@ -527,6 +605,17 @@ export function createPolicyEngine(options: {
      * ONE object precisely so that no caller can supply three of its four
      * facts: the database's `pd_credential_group_is_atomic` refuses that shape,
      * and this signature makes it unreachable before the database has to.
+     *
+     * FBL-020-R6 §3.1 — ITS `authTime` IS NO LONGER SENT. Migration 058 requires
+     * the recorded authentication time to BE the named session's, and the INSERT
+     * below therefore reads it out of that session row in the same statement, the
+     * way the support window has been read since R5. Sending a value back would
+     * fail the comparison outright — PostgreSQL keeps microseconds and a
+     * JavaScript `Date` keeps milliseconds — and it would leave a race open: a
+     * refresh that advances `auth_time` between `readPresentedCredential` and
+     * this write would make the evidence disagree with the session it names. The
+     * field survives on the object because `GET /auth/session` and the freshness
+     * classification both read it.
      */
     credential: PresentedCredential | null;
   }): Promise<string> {
@@ -557,9 +646,10 @@ export function createPolicyEngine(options: {
           scope_level, scope_id, decision, reason_code, policy_version, request_id,
           support_session_id, matched_role_binding_ids, matched_authorization_versions,
           freshness_classification, mfa_assurance_classification, correlation_id,
-          support_request_id, auth_time, connection_id, session_id, actor_provider_subject,
-          support_session_expires_at, evidence_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
+          support_request_id, connection_id, session_id, actor_provider_subject,
+          auth_time, support_session_expires_at, evidence_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+               (SELECT s.auth_time FROM identity_sessions s WHERE s.session_id = $21),
                (SELECT s.expires_at FROM support_access_sessions s
                  WHERE s.support_session_id = $13),
                ${CURRENT_EVIDENCE_VERSION})
@@ -584,7 +674,6 @@ export function createPolicyEngine(options: {
           input.mfaAssurance,
           input.correlationId,
           input.supportRequestId ?? null,
-          input.credential?.authTime ?? null,
           input.credential?.connectionId ?? null,
           input.credential?.sessionId ?? null,
           input.credential?.providerSubject ?? null,
@@ -826,15 +915,17 @@ export function createPolicyEngine(options: {
       };
 
       if (actor.actorScope === 'dealership') {
-        const match = bindings.find((b) => def.allowedRoles.includes(b.role) && covers(b));
+        // EVERY matching binding is evidence, not just the first one found — and the
+        // scope RECORDED is the NARROWEST of them (FBL-020-R6 gate finding C7), so the
+        // row names the tightest authority the decision actually relied on rather than
+        // whichever binding the unordered result happened to yield first.
+        const covering = bindings.filter((b) => def.allowedRoles.includes(b.role) && covers(b));
+        const match = narrowestBinding(covering);
         if (match !== undefined) {
-          // EVERY matching binding is evidence, not just the first one found.
-          const matched = bindings
-            .filter((b) => def.allowedRoles.includes(b.role) && covers(b))
-            .map((b) => ({
-              roleBindingId: b.role_binding_id,
-              authorizationVersion: Number(b.authorization_version),
-            }));
+          const matched = covering.map((b) => ({
+            roleBindingId: b.role_binding_id,
+            authorizationVersion: Number(b.authorization_version),
+          }));
           const decisionId = await record({
             tenantId: targetTenantId,
             actorUserLinkId: actor.userLinkId,

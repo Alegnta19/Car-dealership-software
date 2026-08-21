@@ -68,6 +68,11 @@ import {
   type IdentityProviderKind,
   type VerifiedAccessToken,
 } from './contracts';
+import {
+  failLoginTransaction,
+  succeedLoginTransactionWithin,
+  type LoginSuccessRefusal,
+} from './login-transaction';
 import { createSessionWithin, type CreatedSession } from './session';
 import { observeUserLinkOnLoginWithin } from './user-link';
 
@@ -91,7 +96,16 @@ export type LoginAdmissionRefusal =
    * indistinguishable outward, and collapsing them here means no code path can
    * accidentally render the difference.
    */
-  | 'identity_not_admitted';
+  | 'identity_not_admitted'
+  /**
+   * FBL-020-R6 §2.3/§2.5 — the chain held and the session was built, and the login
+   * transaction could NOT be moved to `succeeded`: it had expired in database time,
+   * or it was no longer `consuming`, or the identity it was opened for disagreed
+   * with the identity admitted. The whole transaction — session row, sealed provider
+   * refresh credential, session-established audit — was ROLLED BACK, and the login
+   * transaction has already been terminalized with its own reason by this call.
+   */
+  | 'login_not_completable';
 
 /** The facts a session may be built from, every one of them database-derived. */
 export interface AdmittedLogin {
@@ -516,11 +530,47 @@ export interface LoginAdmissionRequest {
   readonly verified: VerifiedAccessToken;
   readonly provider?: IdentityProviderKind;
   readonly session: LoginSessionCustody;
+  /**
+   * FBL-020-R6 §2.5 — THE CLAIMED LOGIN TRANSACTION THIS ADMISSION COMPLETES, and
+   * it is REQUIRED for the same reason `session` is: a caller that could omit it
+   * would be back to establishing custody in one commit and recording the login in
+   * another, which is the defect §2.5 names. The success transition happens inside
+   * this call's transaction, so there is no interval a caller could act in.
+   */
+  readonly loginTxnId: string;
 }
 
 /**
- * THE ONE FUNCTION. Admits a login AND takes custody of what it admits, or
- * refuses — and there is no third answer and no intermediate state.
+ * Thrown INSIDE the admission transaction when the login transaction cannot reach
+ * `succeeded`, purely to force a ROLLBACK. `withTransaction` commits whatever a
+ * successful callback returns, so a refusal expressed as a return value would leave
+ * the session row and the sealed provider credential committed — which is precisely
+ * the orphan §2.5 exists to make unreachable. It never escapes this module.
+ */
+class LoginSuccessNotRecorded extends Error {
+  constructor(readonly refusal: LoginSuccessRefusal) {
+    super('the login transaction could not be recorded as succeeded');
+    this.name = 'LoginSuccessNotRecorded';
+  }
+}
+
+/**
+ * THE ONE FUNCTION. Admits a login, takes custody of what it admits, AND records
+ * the login transaction as succeeded — or refuses, leaving nothing at rest. There
+ * is no third answer and no intermediate state.
+ *
+ * ── what R5 still got wrong (FBL-020-R6 §2.3/§2.5) ─────────────────────────
+ *
+ * R5 closed the admission↔custody gap (below) and left a SECOND one exactly like
+ * it: the ROUTE recorded the login as succeeded, in its own transaction, after this
+ * one had committed. A success transition that refused — R6 §2.3's expiry, or
+ * another leg terminalizing the row — or an `identity.login.succeeded` audit INSERT
+ * that failed, or a process that stopped in between, each left a committed, live,
+ * REFRESHABLE session belonging to no completed login. The route's compensation was
+ * to revoke the session it had just been handed: a second best-effort write with the
+ * same failure modes, one step later. The success transition is now INSIDE this
+ * transaction, so custody, the login's success and both of their audit rows are one
+ * local commit and a refusal rolls all of them back together.
  *
  * ── what R4 got wrong (FBL-020-R5 §1.3) ────────────────────────────────────
  *
@@ -570,36 +620,79 @@ export async function admitLoginAndEstablishSession(
     return { admitted: false, refusal: 'exchange_token_mismatch' };
   }
 
-  const outcome = await withTransaction(
-    async (executor): Promise<{ identity: AdmittedLogin; created: CreatedSession } | null> => {
-      const identity = await admitWithin(executor, provider, input);
-      if (identity === null) return null;
+  let outcome: { identity: AdmittedLogin; created: CreatedSession } | null;
+  try {
+    outcome = await withTransaction(
+      async (executor): Promise<{ identity: AdmittedLogin; created: CreatedSession } | null> => {
+        const identity = await admitWithin(executor, provider, input);
+        if (identity === null) return null;
 
-      // THE CUSTODY, in the same transaction and under the same locks. Sealing the
-      // provider refresh credential IS this INSERT — the sealed state and its
-      // replay digest are columns of the row — so an admission that is rolled back
-      // takes the credential with it.
-      const created = await createSessionWithin(executor, {
-        tenantId: identity.tenantId,
-        userLinkId: identity.userLinkId,
-        providerSessionId: identity.providerSessionId,
-        authTime: verified.authTime,
-        ttlSeconds: custody.ttlSeconds,
-        connectionId: identity.connectionId,
-        issuer: identity.issuer,
-        providerSubject: identity.providerSubject,
-        providerOrganizationId: identity.providerOrganizationId,
-        refreshToken: exchanged.refreshToken,
-        cookiePassword: custody.cookiePassword,
-        refreshStateKeyVersion: custody.refreshStateKeyVersion,
-        // R3 correction C1: WHEN the provider credential expires, taken from the
-        // token this login already verified. Without it the sealed state would be
-        // a credential in custody that nothing could ever spend.
-        providerAccessTokenExpiresAt: verified.expiresAt,
-      });
-      return { identity, created };
-    },
-  );
+        // THE CUSTODY, in the same transaction and under the same locks. Sealing the
+        // provider refresh credential IS this INSERT — the sealed state and its
+        // replay digest are columns of the row — so an admission that is rolled back
+        // takes the credential with it.
+        const created = await createSessionWithin(executor, {
+          tenantId: identity.tenantId,
+          userLinkId: identity.userLinkId,
+          providerSessionId: identity.providerSessionId,
+          authTime: verified.authTime,
+          ttlSeconds: custody.ttlSeconds,
+          connectionId: identity.connectionId,
+          issuer: identity.issuer,
+          providerSubject: identity.providerSubject,
+          providerOrganizationId: identity.providerOrganizationId,
+          refreshToken: exchanged.refreshToken,
+          cookiePassword: custody.cookiePassword,
+          refreshStateKeyVersion: custody.refreshStateKeyVersion,
+          // R3 correction C1: WHEN the provider credential expires, taken from the
+          // token this login already verified. Without it the sealed state would be
+          // a credential in custody that nothing could ever spend.
+          providerAccessTokenExpiresAt: verified.expiresAt,
+        });
+
+        /*
+         * ── FBL-020-R6 §2.5: THE SUCCESS TRANSITION, IN THIS SAME COMMIT ────────
+         *
+         * R5 recorded it from the ROUTE, in a transaction of its own, AFTER this one
+         * had committed. Three things could then land between the two commits and
+         * each of them left a live, refreshable session that no login owned: the
+         * success UPDATE could refuse (§2.3's expiry, or another leg terminalizing
+         * the row), its `identity.login.succeeded` audit INSERT could fail, or the
+         * process could stop. The route's compensation — revoke the session it had
+         * just been handed — was a second best-effort write with the same three
+         * failure modes, one step later.
+         *
+         * There is no interval now. The session row, the sealed provider credential,
+         * the session-established audit, the success transition and the
+         * `identity.login.succeeded` audit are ONE local commit, and a refusal
+         * THROWS so that `withTransaction` rolls all five back together. NOTHING
+         * about that reaches the provider: both carriers were obtained before this
+         * function was entered, and no statement below opens a network call.
+         */
+        const recorded = await succeedLoginTransactionWithin(executor, {
+          loginTxnId: input.loginTxnId,
+          tenantId: created.session.tenantId,
+          userLinkId: created.session.userLinkId,
+          connectionId: created.session.connectionId,
+        });
+        if (!recorded.recorded) throw new LoginSuccessNotRecorded(recorded.refusal);
+        return { identity, created };
+      },
+    );
+  } catch (err) {
+    if (err instanceof LoginSuccessNotRecorded) {
+      /*
+       * The rollback has already happened: no session row, no sealed credential, no
+       * audit row for either. The TERMINAL FACT is recorded here, in a transaction
+       * of its own, because the one that would have carried it no longer exists —
+       * and it is conditional on the row being non-terminal, so a transaction some
+       * other path has already closed keeps its first reason.
+       */
+      await failLoginTransaction(input.loginTxnId, err.refusal);
+      return { admitted: false, refusal: 'login_not_completable' };
+    }
+    throw err;
+  }
   if (outcome === null) return { admitted: false, refusal: 'identity_not_admitted' };
   return { admitted: true, identity: outcome.identity, created: outcome.created };
 }

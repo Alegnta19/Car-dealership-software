@@ -5,7 +5,7 @@
 
 **Governing authority.** The active order is FBL-020-R5, checked in at
 [`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
-`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+`83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`. Per its Appendix A,
 **every R5 clause is UNVERIFIED until the final package proves it**; this document describes
 schema and closes no clause.
 
@@ -243,9 +243,12 @@ constraints, triggers and indexes, and deletes no row.
 
 **This heading read "FBL-020-R2/R3 boundary completion", and the sentence beneath it said
 057 creates one table.** Both were stale: 057 has carried R4 and R5 corrections since, and
-the second table has existed since the R5 §2 pass. `057` is still being **edited in place**
-and is not accepted, so its digest is deliberately not pinned anywhere in this repository —
-see "Migration checksums" below.
+the second table has existed since the R5 §2 pass. `057` WAS being **edited in place** while
+it was unaccepted, which is why its digest was pinned nowhere in this repository.
+**FBL-020-R6 §1.3 FROZE `057`**: it is not edited again, and every further schema change
+goes in a new `058`. Its digest is therefore pinned under "Migration checksums" below, like
+every other file in the chain. Freezing is not acceptance — the migration has still not been
+ratified by anyone; it is now simply immutable while that is decided.
 
 **Reconciliation always precedes constraints.** Adding a CHECK before the
 UPDATE that fixes existing rows would abort the migration on a populated
@@ -380,10 +383,13 @@ values**, computed as
 sed 's/\r$//' migrations/<file>.sql | sha256sum
 ```
 
-**Where the bytes are read from does not change the value, and `HEAD` may be used.** Every
-migration in this repository is committed — `git status --short migrations/` reports nothing
-— so each file's `HEAD` blob canonicalises to the same digest as the file on disk. For `057`,
-the one this section is most often read for, both of
+**Where the bytes are read from does not change the value, and `HEAD` may be used FOR THE
+COMMITTED CHAIN.** Every migration through `057` is committed — `git status --short
+migrations/` reports only the UNTRACKED `058_policy_evidence_reconstructable.sql`, which
+FBL-020-R6 §3 added and which the R6 order forbids committing — so each committed file's
+`HEAD` blob canonicalises to the same digest as the file on disk, and `058` has no `HEAD`
+blob to compare against at all. For `057`, the one this section is most often read for, both
+of
 
 ```bash
 git show HEAD:migrations/057_identity_boundary_completion.sql | sed 's/\r$//' | sha256sum
@@ -391,8 +397,12 @@ sed 's/\r$//' migrations/057_identity_boundary_completion.sql | sha256sum
 ```
 
 produce `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` at commit
-`0e99ecd`. `docs/FBL-020-DELIVERY-REPORT.md` publishes the same values beside their git blob
-OIDs, under its "The migration chain" heading, measured on this tree.
+`174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`, which is this repository's `HEAD`.
+`docs/FBL-020-DELIVERY-REPORT.md` publishes the same values beside their git blob OIDs,
+under its "The migration chain" heading, measured on this tree. (This sentence named
+`0e99ecd` until FBL-020-R6 §4.4; that commit stopped being `HEAD` when `174c789` was pushed,
+and the digest is unchanged because `057` is frozen — §1 of the delivery report is the one
+place the final commit is stated, and every other document reads it from there.)
 
 **A correction, recorded rather than quietly overwritten.** Until this revision the two
 sentences above read: "`HEAD` is deliberately not used here: the delivery is an uncommitted
@@ -401,7 +411,7 @@ were false from commit `52e1567` onward — the migrations have been committed s
 the two commands above return the same digest, so the stated justification was not merely
 stale but demonstrably wrong. The same claim was corrected in
 `docs/FBL-020-DELIVERY-REPORT.md` and `docs/identity/KNOWN-LIMITATIONS.md` in an earlier
-pass; this document is one of the nine §3.6 documents and was missed by it.
+pass; this document is one of the ten reconciled documents and was missed by it.
 
 They are **not** Windows working-tree values: a working copy checked out with
 CRLF line endings hashes differently for every file, and a checksum taken there
@@ -419,10 +429,29 @@ in a report, in a ticket or in a review, it is this value.
 | `054_phase248_waitlist.sql`                  | `8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58` |
 | `055_identity_organization.sql`              | `52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d` |
 | `056_identity_contract_completion.sql`       | `ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d` |
+| `057_identity_boundary_completion.sql`       | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
+| `058_policy_evidence_reconstructable.sql`    | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 
-`057_identity_boundary_completion.sql` is **not** pinned here: it is unaccepted
-and still being edited in place, so any value quoted for it would be stale
-before it was read. It gets its checksum when it is accepted.
+`058_policy_evidence_reconstructable.sql` is **new in this working tree and not yet
+committed**, so the digest above is of the body on disk rather than of a blob in `HEAD`. It
+is the file the frozen-`057` position requires, and it carries FBL-020-R6 §3's four database
+controls: the recorded authentication time bound to the named identity session; a matched
+role binding required to be the exact version observed, in force, in the decision's tenant
+and able to reach it; the normalized authority rows made exactly equivalent to the array
+they normalize, with unique contiguous ordinality and one authorized writer; and
+delegated-support evidence required on every platform-support tenant allow and validated
+against the approval, action, scope, revocation state and live window it claims. It creates
+no table, deletes no row and rewrites no row. **The digest above was stale until this revision
+and is re-derived here**: it published `bcf39d9a…` against a body that had since been edited,
+which an uncommitted file is exactly where to expect — every other row in this table is pinned
+by `git ls-tree` and `057` is frozen. The delivery report §4.2 and
+`architecture/migration-fixture-chains.json` carry the same value.
+
+`057_identity_boundary_completion.sql` was **not** pinned here while it was still being
+edited in place: any value quoted for it would have been stale before it was read.
+**FBL-020-R6 §1.3 froze it**, so the value above is now as durable as the others and a
+change to the file is a discrepancy rather than an expected drift. Re-derive any row with
+`npx tsx scripts/migration-manifest.ts migrations`. Being frozen is not being accepted.
 
 ## No hard deletion
 

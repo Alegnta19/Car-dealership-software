@@ -24,7 +24,7 @@ import {
   startLoginTransaction,
   startReauthentication,
 } from '@dealer/identity-access';
-import { runAllJobsOnce } from '@dealer/worker';
+import { LOGIN_TRANSACTION_EXPIRY_JOB, main, runAllJobsOnce } from '@dealer/worker';
 
 /**
  * FBL-020-R5 §4.8 — THE WORKER RUNS EVERY EXPIRY SWEEP THAT EXISTS.
@@ -571,6 +571,94 @@ describe(
         await eventCount('identity.support.expired', supportSessionId),
         1,
         'still exactly one ending, still the true one',
+      );
+    });
+
+    /**
+     * ── FBL-020-R6 §2.7: A FAILED SWEEP IS REPORTED, NOT SWALLOWED ──────────
+     *
+     * `runAllJobsOnce` returned `void`: it caught every job's error, logged it, and
+     * discarded it, so `main --once` exited 0 whatever happened. A scheduler has one
+     * signal — the exit status — so a sweep that had been throwing on every pass for a
+     * week was indistinguishable from a sweep with nothing to do, while the expiry
+     * audit rows this very inventory promises were never written.
+     *
+     * THE END-TO-END PROOF IS THE EXIT STATUS OF THE COMPILED ARTIFACT, and it lives
+     * in `tests/worker-entrypoint.test.ts`, because only a spawned process has an exit
+     * status. That battery cannot run under `scripts/mutation-kill.ts`, whose isolated
+     * copy carries no `dist/`. This test is the same control at the level the mutation
+     * runner CAN reach: the pass reports WHICH job failed, and `main(['--once'])` — the
+     * exact function the compiled entry point calls — REJECTS rather than returning,
+     * which is what the `require.main` guard turns into a non-zero exit.
+     *
+     * The failure is injected in the DATABASE, so the sweep fails for a reason the
+     * worker cannot anticipate or special-case. The trigger is dropped in `finally`;
+     * `resetDatabase` TRUNCATEs and would not remove it.
+     */
+    test('a pass in which a registered sweep FAILS reports it, and --once refuses to report success', async () => {
+      // CONTROL FIRST: the same pass, with nothing injected, reports NO failed jobs.
+      assert.deepEqual(
+        [...(await runAllJobsOnce())],
+        [],
+        'CONTROL: a healthy pass must report no failed jobs',
+      );
+
+      const stale = await startLoginTransaction({ purpose: 'login', redirectUri: LOGIN_REDIRECT });
+      await query(
+        `UPDATE login_transactions
+            SET created_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
+          WHERE login_txn_id = $1`,
+        [stale.loginTxnId],
+      );
+
+      await query(`CREATE OR REPLACE FUNCTION fbl_r6_fail_login_sweep_inproc()
+                     RETURNS TRIGGER AS $$
+                     BEGIN
+                       RAISE EXCEPTION 'FBL-020-R6 fault injection: login transaction sweep';
+                     END;
+                     $$ LANGUAGE plpgsql`);
+      let failed: readonly string[];
+      let onceRejected = false;
+      try {
+        await query(`CREATE TRIGGER fbl_r6_fail_login_sweep_inproc
+                       BEFORE UPDATE ON login_transactions
+                       FOR EACH ROW EXECUTE FUNCTION fbl_r6_fail_login_sweep_inproc()`);
+        failed = await runAllJobsOnce();
+        // `main --once` closes the pool on its way out, exactly as the shipped process
+        // does; `getPool()` rebuilds it for the statements below.
+        await main(['--once']).then(
+          () => undefined,
+          () => {
+            onceRejected = true;
+          },
+        );
+      } finally {
+        await query(`DROP TRIGGER IF EXISTS fbl_r6_fail_login_sweep_inproc ON login_transactions`);
+        await query(`DROP FUNCTION IF EXISTS fbl_r6_fail_login_sweep_inproc()`);
+      }
+
+      assert.deepEqual(
+        [...failed],
+        [LOGIN_TRANSACTION_EXPIRY_JOB],
+        'the pass must report WHICH sweep failed, and only that one',
+      );
+      assert.equal(
+        onceRejected,
+        true,
+        '--once must refuse to report success when a registered sweep failed',
+      );
+
+      // …and the injection really did stop that sweep, rather than being absorbed
+      // somewhere harmless.
+      assert.equal(
+        (
+          await scalar(
+            `SELECT status FROM login_transactions WHERE login_txn_id = $1`,
+            stale.loginTxnId,
+          )
+        ).status,
+        'pending',
+        'the injected failure really did stop the login-transaction sweep',
       );
     });
   },

@@ -20,10 +20,12 @@
  *
  *   --list-jobs   prints the registered jobs and exits. Touches NO database, so it is
  *                 a truthful smoke test of the wiring on a machine with no schema.
- *   --once        runs one pass of every job and exits with the pool closed. This is
- *                 also the shape an external scheduler (cron, a Kubernetes CronJob)
- *                 would invoke, so the periodic mode is a convenience, not a
- *                 requirement.
+ *   --once        runs one pass of every job and exits with the pool closed, NON-ZERO
+ *                 if any registered sweep failed (FBL-020-R6 §2.7 — it used to
+ *                 swallow every failure and exit 0). This is also the shape an
+ *                 external scheduler (cron, a Kubernetes CronJob) would invoke, so
+ *                 the periodic mode is a convenience, not a requirement — and the
+ *                 exit status is the only thing such a scheduler reads.
  *   (default)     runs each job on its configured interval until SIGTERM/SIGINT, then
  *                 finishes the pass in flight and closes the pool.
  *
@@ -165,23 +167,45 @@ export async function runReauthenticationExpiryOnce(): Promise<number> {
 }
 
 /**
- * Runs one pass of EVERY registered job. A job that throws is logged and does not stop
- * the loop: a transient database failure must not silently retire the process that keeps
- * the support trail complete.
+ * Runs one pass of EVERY registered job and RETURNS THE NAMES OF THE ONES THAT FAILED.
  *
- * Each job is caught SEPARATELY rather than under one shared `try`, so a throw in the
- * first sweep does not skip the remaining ones. That is a property of the structure
- * below and is stated as such: this revision ships NO test that forces a sweep to throw,
- * so it is a reading of the code, not a measured result.
+ * A job that throws is logged and does not stop the loop: a transient database failure
+ * must not silently retire the process that keeps the support trail complete. Each job
+ * is caught SEPARATELY rather than under one shared `try`, so a throw in the first sweep
+ * does not skip the remaining ones — and that is now a MEASURED result rather than a
+ * reading of the code: `tests/worker-entrypoint.test.ts` makes the login sweep fail and
+ * asserts that the step-up and support sweeps still performed their transitions.
+ *
+ * ── FBL-020-R6 §2.7: WHY THIS RETURNS SOMETHING NOW ─────────────────────────
+ *
+ * It returned `void`. Every failure was logged and then DISCARDED, so `--once` — the
+ * shape a cron entry, a Kubernetes CronJob or any external scheduler invokes — exited 0
+ * whatever happened inside it. A scheduler's only signal is the exit status, so a sweep
+ * that had been throwing on every pass for a week looked exactly like a sweep that had
+ * nothing to do, and the `identity.login.expired`,
+ * `identity.reauthentication.expired` and `identity.support.expired` rows those sweeps
+ * owe were simply never written while every run reported success.
+ *
+ * The NAMES, not a count: the caller logs WHICH sweeps failed, and a job name is a
+ * server-side constant — never a tenant identifier, a token or anything a caller
+ * supplied. The error objects stay in the log lines below and are not returned, so no
+ * database message can travel up into an exit path.
+ *
+ * The PERIODIC mode deliberately does NOT stop on a failure; it is the `--once` caller
+ * that turns a failure into a non-zero exit, because that is the mode with a supervisor
+ * on the other end of it.
  */
-export async function runAllJobsOnce(): Promise<void> {
+export async function runAllJobsOnce(): Promise<readonly string[]> {
+  const failed: string[] = [];
   for (const job of REGISTRY) {
     try {
       await job.run();
     } catch (err) {
+      failed.push(job.name);
       logger.error({ err, job: job.name }, 'worker job pass failed');
     }
   }
+  return failed;
 }
 
 interface WorkerHandle {
@@ -249,8 +273,26 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
   if (argv.includes('--once')) {
     logger.info({ jobs: WORKER_JOBS, mode: 'once' }, 'worker single pass');
-    await runAllJobsOnce();
+    const failed = await runAllJobsOnce();
+    // The pool is closed BEFORE the outcome is decided, so a failing pass releases
+    // its connections exactly as a succeeding one does. A process that leaked a pool
+    // on the failure path would turn one bad sweep into an exhausted database.
     await closePool();
+    if (failed.length > 0) {
+      /*
+       * FBL-020-R6 §2.7 — THE EXIT STATUS IS THE ONLY THING A SCHEDULER READS.
+       *
+       * Throwing rather than assigning `process.exitCode` on purpose: `main` is
+       * exported and driven directly by the batteries, and a function that reached
+       * into the process's exit status would make any test that called it poison the
+       * runner's own result. The `require.main === module` guard below is the single
+       * place that translates a failure into a status, which is the same "one writer"
+       * rule the job registry itself follows.
+       */
+      throw new Error(
+        `worker single pass: ${failed.length} registered job(s) failed: ${failed.join(', ')}`,
+      );
+    }
     return;
   }
 

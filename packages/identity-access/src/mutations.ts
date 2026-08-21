@@ -767,9 +767,38 @@ async function requireCertificationAuthority(
   // the second authority path this codebase has already been corrected for once.
   //
   // The predicate is the engine's own SQL, interpolated. There is no second copy.
+  //
+  // ── FBL-020-R6 §2.6: THE TENANT STATE IS HELD, NOT MERELY READ ───────────
+  //
+  // R5 asked this question with a plain `SELECT`. Under READ COMMITTED that reads a
+  // snapshot and claims nothing, so an administrator suspending the tenant — or
+  // closing its effective window — a microsecond later committed freely, and the
+  // certification went on to write `mfa_policy_certified = TRUE` for a tenant that
+  // no longer admits any decision at all. The certification is the single fact every
+  // high-assurance step-up in the platform rests on, and it was being granted
+  // against a tenant state nobody was holding.
+  //
+  // `FOR SHARE` is the claim, and it is the same mode and the same argument as the
+  // login admission's: share locks do not conflict with each other, so two
+  // certifications are not queued behind one another, while an administrator's
+  // EXCLUSIVE write to the tenant row is. The lock is held to COMMIT, which now
+  // happens only after the certification UPDATE and its audit row exist, so the two
+  // orderings are the only two:
+  //
+  //   * the suspension commits FIRST — this lock request waits, is granted against
+  //     the NEW row version, the predicate is re-evaluated against it, no row
+  //     qualifies, and the certification is REFUSED. Nothing is written.
+  //   * this transaction commits first — the administrator waits for it, and the
+  //     suspension lands on a system where the certification exists and is subject
+  //     to the ordinary revocation and expiry paths.
+  //
+  // THE LOCK ORDER IS CONNECTION, THEN TENANT — the same order
+  // `login-admission.ts` takes — so a certification and a login cannot deadlock
+  // against each other.
   if (tenantId !== null) {
     const tenant = await executor.query(
-      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}`,
+      `SELECT 1 FROM tenants t WHERE t.tenant_id = $1 AND ${ACTIVE_EFFECTIVE_TENANT_SQL}
+        FOR SHARE`,
       [tenantId],
     );
     if (tenant.rows.length === 0) {

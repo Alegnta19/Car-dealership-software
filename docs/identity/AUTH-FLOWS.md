@@ -8,7 +8,7 @@ Anything that is **not** proven by deterministic tests is labelled as such in
 
 **Governing authority.** The active order is FBL-020-R5, checked in at
 [`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
-`75aa7500f804d51019a6e950a91ab3ef5f30a1a37bb15c743c6d952a2e2bd783`. Per its Appendix A,
+`83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`. Per its Appendix A,
 **every R5 clause is UNVERIFIED until the final package proves it**; this document describes
 behaviour and closes no clause.
 
@@ -111,10 +111,17 @@ never reach the table or a log. The answer outward is always the same neutral 40
 unknown organization, an unknown identity, a pending identity and a deactivated identity are
 externally indistinguishable.
 
-**One of the nine reaches no test.** `session_establishment_failed` is written by the route
-and asserted nowhere; it is declared in
-[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md) under "Open at FBL-020-R5 submission" rather
-than presented here as if it were covered.
+**All nine reach a test.** The last one to do so was `session_establishment_failed`, closed
+by FBL-020-R6 §4.2: _a login whose LOCAL SESSION cannot be established is terminal, with ONE
+audit event_ in `tests/login-admission.test.ts` drives a real `GET /auth/callback` against a
+valid provider exchange while a `BEFORE INSERT` trigger on `identity_sessions` makes the
+local session write impossible, then asserts the terminal state, the single
+`identity.login.failed` event, and that no session, sealed credential or success event
+survives. `scripts/mutation-kill.ts` registers the control as
+`session_establishment_failure_left_pending`, so removing the route's terminalizing call
+takes that named test from pass to fail in CI. Until R6 this line read "one of the nine
+reaches no test", and `docs/identity/KNOWN-LIMITATIONS.md` carried the gap as an open item;
+both are now closed rather than restated.
 
 ## 2. Request authentication
 

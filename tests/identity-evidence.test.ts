@@ -4,6 +4,7 @@ import { after, beforeEach, describe, test } from 'node:test';
 import {
   bootstrapAdministrator,
   certifyMfaPolicy,
+  mintReauthGrant,
   ensureActiveConnection,
   resetDatabase,
   seedLocalSession,
@@ -11,8 +12,8 @@ import {
   fixtureAuthorizationStateWrite,
   seedTenantViaService,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
-import { grantRole } from '@dealer/identity-access';
+import { closePool, query, withTransaction, type Executor } from '@dealer/database';
+import { CURRENT_EVIDENCE_VERSION, grantRole } from '@dealer/identity-access';
 
 /**
  * FBL-020-R4 §2 — THE CONTROLS PROVED AGAINST THE DATABASE ITSELF.
@@ -570,6 +571,15 @@ describe(
      *     back is a DIFFERENT instant, and migration 057 §11's window check —
      *     correctly — refuses it. Defaults to the session being claimed; point
      *     it at another session to test the mismatch.
+     *   - `auth_time_from` is the FBL-020-R6 §3.1 counterpart, and it exists for
+     *     the same reason. This helper used to write `auth_time: new Date()`, and
+     *     every test here passed — which was itself the finding R6 §3.1 names:
+     *     the schema accepted a coherent, live, correctly cross-wired credential
+     *     beside an authentication instant that belonged to nothing. The
+     *     authentication time is now read, BY THE DATABASE, out of the session the
+     *     row itself names, exactly as `record()` reads it. Point `auth_time_from`
+     *     at another session to test the mismatch, or pass `auth_time` directly to
+     *     write an arbitrary instant.
      */
     async function insertAllow(overrides: Record<string, unknown> = {}): Promise<void> {
       const row: Record<string, unknown> = {
@@ -585,7 +595,6 @@ describe(
         scope_level: 'tenant',
         scope_id: f.tenantId,
         session_id: f.sessionId,
-        auth_time: new Date(),
         connection_id: f.connectionId,
         actor_provider_subject: f.subject,
         ...overrides,
@@ -607,6 +616,17 @@ describe(
       delete row.support_window_from;
       delete row.support_session_expires_at;
 
+      // An explicit `auth_time` override wins — that is how an adversarial test
+      // writes an arbitrary instant, and how the completeness cases write NULL.
+      const authTimeSupplied = 'auth_time' in row;
+      const authTimeValue = row.auth_time;
+      const authTimeFrom =
+        'auth_time_from' in row
+          ? (row.auth_time_from as string | null)
+          : ((row.session_id as string | null | undefined) ?? null);
+      delete row.auth_time;
+      delete row.auth_time_from;
+
       const columns = Object.keys(row);
       const placeholders = columns.map((_, i) => `$${i + 1}`);
       const matched = emptyAuthority
@@ -618,20 +638,41 @@ describe(
           ? `NULL::timestamptz`
           : `(SELECT s.expires_at FROM support_access_sessions s
                 WHERE s.support_session_id = '${windowFrom}')`;
+      const authTimeExpression = authTimeSupplied
+        ? `$${columns.length + 1}::timestamptz`
+        : authTimeFrom === null
+          ? `NULL::timestamptz`
+          : `(SELECT s.auth_time FROM identity_sessions s
+                WHERE s.session_id = '${authTimeFrom}')`;
       await query(
         `INSERT INTO policy_decisions (${columns.join(', ')},
             matched_role_binding_ids, matched_authorization_versions,
-            support_session_expires_at)
-         VALUES (${placeholders.join(', ')}, ${matched}, ${windowExpression})`,
-        columns.map((c) => row[c]),
+            support_session_expires_at, auth_time)
+         VALUES (${placeholders.join(', ')}, ${matched}, ${windowExpression},
+                 ${authTimeExpression})`,
+        authTimeSupplied
+          ? [...columns.map((c) => row[c]), authTimeValue]
+          : columns.map((c) => row[c]),
       );
     }
 
-    test('the COMPLETE version-2 allow is accepted, and lands at the current version', async () => {
+    test('the COMPLETE allow is accepted, and lands at the CURRENT evidence version', async () => {
+      // FBL-020-R6-R6 §D1: the current version is 3, not 2. Migration 058 introduced it
+      // because §3.1's exact-auth_time rule cannot be applied to rows already stored —
+      // `identity_sessions.auth_time` legitimately advances on provider re-authentication
+      // — so version 3 is the name of "complete, INCLUDING an authentication instant bound
+      // exactly to the named session", and 058 raises the floor to it. The number is read
+      // from the exported constant rather than retyped, so this test cannot drift from the
+      // writer it describes.
       await insertAllow();
       const row = (await query(`SELECT evidence_version, session_id FROM policy_decisions`))
         .rows[0] as Record<string, unknown>;
-      assert.equal(Number(row.evidence_version), 2, 'the default is the CURRENT version');
+      assert.equal(
+        Number(row.evidence_version),
+        CURRENT_EVIDENCE_VERSION,
+        'the default is the CURRENT version',
+      );
+      assert.equal(Number(row.evidence_version), 3, 'and the current version is 3 (R6-R6 §D1)');
       assert.equal(String(row.session_id), f.sessionId);
     });
 
@@ -641,7 +682,13 @@ describe(
         { label: 'the server-generated request id', override: { request_id: null } },
         { label: 'the server-generated correlation id', override: { correlation_id: null } },
         { label: 'the presented session', override: { session_id: null } },
-        { label: 'the authentication time', override: { auth_time: null } },
+        // FBL-020-R6 §3.1 moved this one to a MORE specific rule, and the expected
+        // SQLSTATE says so rather than hiding it: the row names a live session, so
+        // the binding trigger compares the omitted instant against that session's
+        // own and refuses it BEFORE `pd_credential_group_is_atomic` is evaluated —
+        // a BEFORE trigger runs ahead of every CHECK. The refusal is stricter, not
+        // weaker, and the message names the session.
+        { label: 'the authentication time', override: { auth_time: null }, state: RAISED },
         { label: 'the connection', override: { connection_id: null } },
         { label: 'the provider subject', override: { actor_provider_subject: null } },
         { label: 'the matched scope', override: { scope_level: null, scope_id: null } },
@@ -650,7 +697,7 @@ describe(
       ]) {
         await assertSqlState(
           insertAllow(missing.override),
-          CHECK_VIOLATION,
+          missing.state ?? CHECK_VIOLATION,
           `a new allow without ${missing.label} must be refused`,
         );
         assert.equal(await countEvidence(), 0, `${missing.label}: nothing was written`);
@@ -692,37 +739,61 @@ describe(
       });
       assert.equal(await countEvidence(), 1);
 
+      const partialDeny = {
+        decision: 'deny',
+        reason_code: 'NO_MATCHING_BINDING',
+        scope_level: null,
+        scope_id: null,
+        matched_role_binding_ids: null,
+      };
       await assertSqlState(
-        insertAllow({
-          decision: 'deny',
-          reason_code: 'NO_MATCHING_BINDING',
-          scope_level: null,
-          scope_id: null,
-          matched_role_binding_ids: null,
-          auth_time: null,
-        }),
+        insertAllow({ ...partialDeny, connection_id: null }),
         CHECK_VIOLATION,
         'a partial credential group on a deny',
       );
       assert.equal(await countEvidence(), 1);
+
+      // FBL-020-R6 §3.1: and a deny that names a session may not go quiet about
+      // WHEN that session authenticated either. The rule reaches denies because
+      // the trigger is conditional on the session being named, not on the verdict.
+      await assertSqlState(
+        insertAllow({ ...partialDeny, auth_time: null }),
+        RAISED,
+        'a deny naming a session but no authentication time',
+      );
+      assert.equal(await countEvidence(), 1);
     });
 
-    test('a new decision cannot opt back into the WEAKER historic version', async () => {
-      // Without the version floor the discriminator would be a self-certification: a
-      // writer could keep claiming version 1 and inherit the historic exemption forever.
-      await assertSqlState(
-        query(
-          `INSERT INTO policy_decisions
-             (tenant_id, actor_type, action, decision, reason_code, policy_version,
-              evidence_version)
-           VALUES ($1, 'user', 'service.ro.view', 'allow', 'ALLOW_ROLE_BINDING',
-                   'fbl-020.1', 1)`,
-          [f.tenantId],
-        ),
-        RAISED,
-        'a version-1 INSERT must be refused by the version floor',
-      );
-      assert.equal(await countEvidence(), 0);
+    test('a new decision cannot opt back into ANY weaker historic version', async () => {
+      /*
+       * Without the version floor the discriminator would be a self-certification: a
+       * writer could keep claiming an older version and inherit its exemption forever.
+       *
+       * FBL-020-R6-R6 §D1 — BOTH weaker versions are now probed, and version 2 is the one
+       * that matters. 058 exempts version-1 and version-2 decisions from the exact
+       * `auth_time` rule, because a session that has since re-authenticated does not
+       * falsify the instant a decision was taken at. That exemption is only safe while
+       * NOTHING NEW can be written at version 2 — otherwise the fix would have created a
+       * fresh way to record an authentication that never happened, which is the hole §3.1
+       * was opened over. A version-1 probe alone cannot see that: 057's floor already
+       * refused version 1, so the test would pass unchanged against a floor that never
+       * moved.
+       */
+      for (const weaker of [1, 2]) {
+        await assertSqlState(
+          query(
+            `INSERT INTO policy_decisions
+               (tenant_id, actor_type, action, decision, reason_code, policy_version,
+                evidence_version)
+             VALUES ($1, 'user', 'service.ro.view', 'allow', 'ALLOW_ROLE_BINDING',
+                     'fbl-020.1', $2)`,
+            [f.tenantId, weaker],
+          ),
+          RAISED,
+          `a version-${weaker} INSERT must be refused by the version floor`,
+        );
+        assert.equal(await countEvidence(), 0);
+      }
     });
 
     test('a HISTORIC version-1 row stays legal, readable, and append-only', async () => {
@@ -766,7 +837,7 @@ describe(
       assert.equal(row.session_id, null);
 
       // …and it is still EVIDENCE: append-only applies to a version-1 row exactly as it
-      // does to a version-2 one.
+      // does to a current one.
       await assertSqlState(
         query(`UPDATE policy_decisions SET decision = 'deny' WHERE decision_id = $1`, [
           row.decision_id,
@@ -780,45 +851,113 @@ describe(
         'a historic row cannot be deleted',
       );
 
-      // And a NEW complete row lands beside it: history and the present coexist.
+      // And a NEW complete row lands beside it: history and the present coexist. The
+      // present is version 3 (R6-R6 §D1), so this pair also states that the floor moved.
       await insertAllow();
       const versions = (
         await query(`SELECT evidence_version FROM policy_decisions ORDER BY evidence_version`)
       ).rows.map((r) => Number((r as { evidence_version: unknown }).evidence_version));
-      assert.deepEqual(versions, [1, 2]);
+      assert.deepEqual(versions, [1, 3]);
+    });
+
+    test('a HISTORIC version-2 row survives a session that has since re-authenticated', async () => {
+      /*
+       * FBL-020-R6-R6 §D1 — THE EXEMPTION MIGRATION 058 APPLIES, PROVED FROM BOTH SIDES.
+       *
+       * §3.1 requires a decision's recorded `auth_time` to BE its named session's. That
+       * rule cannot reach backwards: `identity_sessions.auth_time` advances BY DESIGN when
+       * a session re-authenticates with the provider (`refreshProviderSession` in
+       * `packages/identity-access/src/session.ts`), so a decision written before the
+       * re-authentication correctly records an instant the session no longer carries. It is
+       * not corrupt evidence; it is what an audit trail is FOR.
+       *
+       * So 058 keys the rule on evidence_version 3 and leaves versions 1 and 2 alone. This
+       * test builds exactly that state — a complete version-2 ALLOW, written the only honest
+       * way (the floor disabled for one statement, which IS "written before the floor
+       * existed"), and then the session's `auth_time` moved on — and asserts that the row is
+       * still there, still readable, still append-only, and STILL DISAGREES with its
+       * session. If a future edit re-applied §3.1 to stored rows, or "repaired" them, this
+       * test dies.
+       */
+      await query(
+        `ALTER TABLE policy_decisions DISABLE TRIGGER trg_policy_decisions_current_evidence`,
+      );
+      try {
+        await insertAllow({ evidence_version: 2 });
+      } finally {
+        await query(
+          `ALTER TABLE policy_decisions ENABLE TRIGGER trg_policy_decisions_current_evidence`,
+        );
+      }
+      const before = (
+        await query(`SELECT decision_id, evidence_version, auth_time FROM policy_decisions`)
+      ).rows[0] as Record<string, unknown>;
+      assert.equal(Number(before.evidence_version), 2);
+
+      // The provider re-authentication, as its effect on the row the decision names.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE identity_sessions SET auth_time = auth_time + INTERVAL '20 minutes'
+          WHERE session_id = $1`,
+        [f.sessionId],
+      );
+
+      const after = (
+        await query(
+          `SELECT d.evidence_version, d.auth_time = $2::timestamptz AS auth_time_unchanged,
+                  (d.auth_time = s.auth_time) AS agrees_with_its_session
+             FROM policy_decisions d JOIN identity_sessions s USING (session_id)
+            WHERE d.decision_id = $1`,
+          [before.decision_id, before.auth_time],
+        )
+      ).rows[0] as Record<string, unknown>;
+      assert.equal(
+        Number(after.evidence_version),
+        2,
+        'the row keeps the version it was written at',
+      );
+      assert.equal(after.auth_time_unchanged, true, 'and nothing rewrote its recorded instant');
+      assert.equal(
+        after.agrees_with_its_session,
+        false,
+        'the session moved on and the evidence did not — which is the exempt state 058 tolerates',
+      );
+
+      // Append-only still applies, so there is no "repair" path for an operator either.
+      await assertSqlState(
+        query(`UPDATE policy_decisions SET auth_time = NOW() WHERE decision_id = $1`, [
+          before.decision_id,
+        ]),
+        RAISED,
+        'the exempt row cannot be rewritten into agreement',
+      );
+
+      // …and the CURRENT version is still bound exactly, on the very same session.
+      await insertAllow();
+      const current = (
+        await query(
+          `SELECT d.evidence_version, (d.auth_time = s.auth_time) AS agrees_with_its_session
+             FROM policy_decisions d JOIN identity_sessions s USING (session_id)
+            WHERE d.decision_id <> $1`,
+          [before.decision_id],
+        )
+      ).rows[0] as Record<string, unknown>;
+      assert.equal(Number(current.evidence_version), 3);
+      assert.equal(
+        current.agrees_with_its_session,
+        true,
+        'a new decision records the session’s CURRENT instant, exactly',
+      );
     });
 
     test('support-access evidence is all three facts or none', async () => {
-      const requestId = String(
-        (
-          await fixtureAuthorizationStateWrite(
-            'seed-authorization-state',
-            `INSERT INTO support_access_requests
-               (tenant_id, requester_user_link_id, requested_actions, reason,
-                requested_duration_minutes)
-             VALUES ($1, $2, ARRAY['service.ro.view'], 'ticket 2', 30)
-             RETURNING request_id`,
-            [f.tenantId, f.linkId],
-          )
-        ).rows[0]?.request_id,
-      );
-      const s = (
-        await fixtureAuthorizationStateWrite(
-          'seed-authorization-state',
-          `INSERT INTO support_access_sessions
-             (request_id, tenant_id, actor_user_link_id, expires_at)
-           VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
-           RETURNING support_session_id, expires_at`,
-          [requestId, f.tenantId, f.linkId],
-        )
-      ).rows[0] as Record<string, unknown>;
-
+      const delegated = await supportSessionFor(f.tenantId, f.linkId);
       const supportAllow = {
         actor_type: 'platform_support',
         reason_code: 'ALLOW_SUPPORT_SESSION',
         matched_role_binding_ids: null,
-        support_session_id: String(s.support_session_id),
-        support_request_id: requestId,
+        support_session_id: delegated.sessionId,
+        support_request_id: delegated.requestId,
       };
 
       await assertSqlState(
@@ -864,23 +1003,71 @@ describe(
     // first and is blind to the second, so a suite that only used random UUIDs
     // would report a control that is not there.
 
-    /** A support request + session in the named tenant, held by the named actor. */
+    /**
+     * A support request + session in the named tenant, held by the named actor —
+     * and, since FBL-020-R6 §3.4, a genuinely APPROVED one.
+     *
+     * The request used to be left `pending`, and every support test in this file
+     * passed anyway. That is the §3.4 finding in miniature: a decision could cite
+     * a delegation nobody had approved. Migration 058 asks the request, so the
+     * fixture has to build one — separation of duty (a decider who is not the
+     * requester) and the approving grant included, because both are schema rules
+     * and neither may be faked.
+     */
     async function supportSessionFor(
       tenantId: string,
       actorLinkId: string,
+      approved: {
+        actions?: readonly string[];
+        scopeLevel?: string;
+        scopeId?: string | null;
+        durationMinutes?: number;
+        expiresAt?: string;
+      } = {},
     ): Promise<{ sessionId: string; requestId: string }> {
+      const actions = approved.actions ?? ['service.ro.view'];
       const requestId = String(
         (
           await fixtureAuthorizationStateWrite(
             'seed-authorization-state',
             `INSERT INTO support_access_requests
                (tenant_id, requester_user_link_id, requested_actions, reason,
-                requested_duration_minutes)
-             VALUES ($1, $2, ARRAY['service.ro.view'], 'relational coherence', 30)
+                requested_duration_minutes, scope_level, scope_id)
+             VALUES ($1, $2, $3::text[], 'relational coherence', $4, $5, $6)
              RETURNING request_id`,
-            [tenantId, actorLinkId],
+            [
+              tenantId,
+              actorLinkId,
+              [...actions],
+              approved.durationMinutes ?? 30,
+              approved.scopeLevel ?? 'tenant',
+              approved.scopeId ?? null,
+            ],
           )
         ).rows[0]?.request_id,
+      );
+      // The approver is a real, separate administrator of this tenant, holding a
+      // real single-use grant minted for THIS request — `sar_approval_is_high_assurance`
+      // and the two grant tuple keys (057 §7d) all have to resolve.
+      const decider = await bootstrapAdministrator(tenantId);
+      await mintReauthGrant({
+        tenantId,
+        userLinkId: decider,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `UPDATE support_access_requests
+            SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                approval_grant_id = (
+                  SELECT g.grant_id FROM reauthentication_grants g
+                   WHERE g.user_link_id = $2
+                     AND g.action = 'identity.support.approve'
+                     AND g.resource_id = $1)
+          WHERE request_id = $1`,
+        [requestId, decider],
       );
       const sessionId = String(
         (
@@ -888,13 +1075,38 @@ describe(
             'seed-authorization-state',
             `INSERT INTO support_access_sessions
                (request_id, tenant_id, actor_user_link_id, expires_at)
-             VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+             VALUES ($1, $2, $3, ${approved.expiresAt ?? `NOW() + INTERVAL '30 minutes'`})
              RETURNING support_session_id`,
             [requestId, tenantId, actorLinkId],
           )
         ).rows[0]?.support_session_id,
       );
       return { sessionId, requestId };
+    }
+
+    /**
+     * FBL-020-R6 §3.2 — runs a direct child write with the normalizer's
+     * transaction-local marker SET, so the writer guard lets it through and the
+     * rule underneath is the one that answers.
+     *
+     * Migration 058 says in terms that the marker is a guard and not a proof:
+     * anyone who can run SQL can also run `set_config`. This helper is that
+     * sentence, executed. Every test that uses it is therefore testing the control
+     * that survives a forged marker — the equivalence rule, the composite keys,
+     * the ordinality index — rather than the guard that merely inconveniences a
+     * casual writer.
+     */
+    async function forgingTheNormalizerMarker(
+      decisionId: string,
+      write: (executor: Executor) => Promise<unknown>,
+    ): Promise<void> {
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `SELECT set_config('policy_evidence.normalizing_decision', $1, true)`,
+          [decisionId],
+        );
+        await write(executor);
+      });
     }
 
     /**
@@ -947,7 +1159,12 @@ describe(
         'a decision naming a connection nobody created',
       );
       await assertRefusedBy(
-        insertAllow({ session_id: randomUUID() }),
+        // The authentication instant is taken from the REAL session, so the row is
+        // otherwise complete and coherent: FBL-020-R6 §3.1's trigger returns quietly
+        // for a session that does not exist (`auth_time` is NOT NULL on
+        // `identity_sessions`, so an absent session yields no instant to compare
+        // against), leaving the composite key as the only rule that can refuse it.
+        insertAllow({ session_id: randomUUID(), auth_time_from: f.sessionId }),
         { state: FK_VIOLATION },
         'a decision naming a session nobody created',
       );
@@ -1157,6 +1374,17 @@ describe(
           >
         ).decision_id,
       );
+      // FBL-020-R6 §3.2 added a writer guard AHEAD of this key, and it now answers
+      // first: a BEFORE INSERT trigger precedes every foreign key. That is a
+      // stricter refusal, so the original rule is exercised with the guard's marker
+      // FORGED — which is also the honest demonstration that the guard is a guard
+      // and not a proof, and that the key underneath it is doing the work.
+      //
+      // The statement is written out at BOTH sites rather than hoisted into a
+      // variable, because `scripts/check-owned-mutations.ts` reads the SQL where it
+      // is passed: a write to authorization state that reaches the primitive through
+      // a variable is invisible to the guard, and being visible to the guard is the
+      // whole point of routing it through the primitive.
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'adversarial-bypass-attempt',
@@ -1165,6 +1393,21 @@ describe(
               match_ordinality)
            VALUES ($1, $2, $3, 1, 2)`,
           [decisionId, f.otherRoleBindingId, f.otherLinkId],
+        ),
+        RAISED,
+        'a child row written directly, with no normalizer behind it',
+      );
+      await assertSqlState(
+        forgingTheNormalizerMarker(decisionId, (executor) =>
+          fixtureAuthorizationStateWrite(
+            'adversarial-bypass-attempt',
+            `INSERT INTO policy_decision_matched_bindings
+               (decision_id, role_binding_id, actor_user_link_id, authorization_version,
+                match_ordinality)
+             VALUES ($1, $2, $3, 1, 2)`,
+            [decisionId, f.otherRoleBindingId, f.otherLinkId],
+            { executor },
+          ),
         ),
         FK_VIOLATION,
         'authority attached to a decision that names a different actor',
