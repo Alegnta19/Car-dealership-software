@@ -343,6 +343,13 @@ async function migrate(): Promise<void> {
       );
       count += 1;
     } catch (err) {
+      // The refusal text IS the operator's instruction (FBL-020-R7 §4: every
+      // migration refusal carries an actionable, truthful explanation), so it is
+      // printed in full here: the terminal handler's structured log deliberately
+      // redacts error messages to a stack fingerprint — right for credential
+      // safety, wrong for a message written to be read and acted on.
+      console.error(`Migration ${filename} FAILED:
+${(err as Error).message}`);
       throw new Error(`Migration ${filename} failed: ${(err as Error).message}`);
     }
   }

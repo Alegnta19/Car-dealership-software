@@ -46,6 +46,11 @@
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
+// The two mutation registries, imported so the R7 map's cited ids are checked
+// against what the runners actually declare. Both modules guard their main()
+// behind require.main, so importing them runs nothing.
+import { MUTATIONS } from './mutation-kill';
+import { CONTROLS as DB_CONTROLS, PREDICATES as DB_PREDICATES } from './database-control-mutations';
 
 const ROOT = join(__dirname, '..');
 const MAP_PATH = join(ROOT, 'docs', 'FBL-020-R5-REQUIREMENT-MAP.json');
@@ -153,7 +158,11 @@ export function loadRequirementMap(): RequirementMap {
 export function declaredTestNames(file: string): Set<string> {
   const source = readFileSync(join(ROOT, file), 'utf8');
   const names = new Set<string>();
-  for (const m of source.matchAll(/\btest\(\s*'((?:[^'\\]|\\.)*)'/g)) {
+  // Both declaration shapes: a direct `test('name', …)` call, and a table-driven
+  // suite whose rows carry `title: 'name'` and are fed to test() in a loop —
+  // tests/login-admission.test.ts declares several of its R7 §2.2 cases that way,
+  // and a scanner blind to the second shape would refuse a map that cites them.
+  for (const m of source.matchAll(/\b(?:test\(\s*|title:\s*)'((?:[^'\\]|\\.)*)'/g)) {
     names.add((m[1] as string).replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
   }
   return names;
@@ -451,6 +460,149 @@ export function checkRequirementMap(map: RequirementMap = loadRequirementMap()):
   return problems;
 }
 
+/**
+ * ── THE FBL-020-R7 MAP, CHECKED WITH THE SAME DISCIPLINE ──────────────────────
+ *
+ * `docs/FBL-020-R7-REQUIREMENT-MAP.json` maps the R7 order — as amended by
+ * FBL-020-R7-A1 — to its implementations, named tests, mutations and gates. It is
+ * validated here rather than in a second script so one CI step and one artifact
+ * cover both maps, and so the two cannot drift onto different rules:
+ *
+ *   1. AUTHORITY — both digests must equal the canonical-LF SHA-256 of the
+ *      checked-in order texts, so a map built against different words is refused.
+ *   2. IDS — well formed (`R7-§…` / `R7A1-§…`), unique, and each naming a clause
+ *      the inventory declares.
+ *   3. COVERAGE — every clause in the inventory is cited by at least one
+ *      requirement; an omitted requirement is a failure, not a gap.
+ *   4. EXISTENCE — every implementation file exists; every named test exists
+ *      VERBATIM in the file that claims it (the same `test('…')` scan the R5
+ *      checker uses, so a renamed test breaks the map rather than orphaning it).
+ *   5. MUTATIONS — every named runtime-mutation id exists in
+ *      `scripts/mutation-kill.ts`, and every named database-control id exists in
+ *      `scripts/database-control-mutations.ts` (whole controls and predicates
+ *      alike). A mutation the registry no longer declares cannot be cited as
+ *      proof of anything.
+ */
+const R7_MAP_PATH = join(ROOT, 'docs', 'FBL-020-R7-REQUIREMENT-MAP.json');
+const R7_ORDER_PATH = join(ROOT, 'docs', 'orders', 'FBL-020-R7.md');
+const R7_AMENDMENT_PATH = join(ROOT, 'docs', 'orders', 'FBL-020-R7-A1.md');
+const R7_ID_SHAPE = /^R7(?:A1)?-§\d+(?:\.\d+)?-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+interface R7Requirement {
+  id: string;
+  clause: string;
+  requirement: string;
+  implementation: string[];
+  tests: Array<{ file: string; name: string }>;
+  runtime_mutations: string[];
+  database_controls: string[];
+  gates: string[];
+  verdict: string;
+}
+
+interface R7RequirementMap {
+  order: string;
+  amended_by: string;
+  authority: {
+    order_text: string;
+    order_text_sha256_canonical_lf: string;
+    amendment_text: string;
+    amendment_text_sha256_canonical_lf: string;
+  };
+  clause_inventory: Array<{ clause: string; text: string }>;
+  requirements: R7Requirement[];
+}
+
+export function loadR7RequirementMap(): R7RequirementMap {
+  return JSON.parse(readFileSync(R7_MAP_PATH, 'utf8')) as R7RequirementMap;
+}
+
+function canonicalLfDigest(path: string): string {
+  return createHash('sha256')
+    .update(readFileSync(path, 'utf8').replace(/\r\n/g, '\n'))
+    .digest('hex');
+}
+
+export function checkR7RequirementMap(map: R7RequirementMap = loadR7RequirementMap()): string[] {
+  const problems: string[] = [];
+
+  // 1. authority
+  for (const [label, path, expected] of [
+    ['order_text', R7_ORDER_PATH, map.authority.order_text_sha256_canonical_lf],
+    ['amendment_text', R7_AMENDMENT_PATH, map.authority.amendment_text_sha256_canonical_lf],
+  ] as const) {
+    if (!existsSync(path)) {
+      problems.push(`R7 map: ${label} ${path} does not exist`);
+      continue;
+    }
+    const actual = canonicalLfDigest(path);
+    if (actual !== expected)
+      problems.push(
+        `R7 map: ${label} digest is ${actual} on disk and ${expected} in the map — the map ` +
+          'was built against different order words',
+      );
+  }
+
+  // 2/3. ids and coverage
+  const declaredClauses = new Set(map.clause_inventory.map((c) => c.clause));
+  const covered = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const req of map.requirements) {
+    if (!R7_ID_SHAPE.test(req.id)) problems.push(`R7 map: malformed requirement id ${req.id}`);
+    if (seenIds.has(req.id)) problems.push(`R7 map: duplicate requirement id ${req.id}`);
+    seenIds.add(req.id);
+    if (!declaredClauses.has(req.clause))
+      problems.push(
+        `R7 map: ${req.id} cites clause ${req.clause}, which the inventory does not declare`,
+      );
+    covered.add(req.clause);
+    if (req.verdict.trim() === '') problems.push(`R7 map: ${req.id} has an empty verdict`);
+  }
+  for (const clause of declaredClauses) {
+    if (!covered.has(clause))
+      problems.push(`R7 map: clause ${clause} is in the inventory and NO requirement covers it`);
+  }
+
+  // 4. existence — files and verbatim tests
+  for (const req of map.requirements) {
+    for (const file of req.implementation) {
+      if (!existsSync(join(ROOT, file)))
+        problems.push(`R7 map: ${req.id} names implementation ${file}, which does not exist`);
+    }
+    for (const t of req.tests) {
+      if (!existsSync(join(ROOT, t.file))) {
+        problems.push(`R7 map: ${req.id} names test file ${t.file}, which does not exist`);
+        continue;
+      }
+      if (!declaredTestNames(t.file).has(t.name))
+        problems.push(
+          `R7 map: ${req.id} claims test ${JSON.stringify(t.name)} in ${t.file}, and no test ` +
+            'of that exact name is declared there',
+        );
+    }
+  }
+
+  // 5. mutation ids resolve in their registries
+  const runtimeIds = new Set(MUTATIONS.map((m) => m.id));
+  const databaseIds = new Set([...DB_CONTROLS.map((c) => c.id), ...DB_PREDICATES.map((p) => p.id)]);
+  for (const req of map.requirements) {
+    for (const id of req.runtime_mutations) {
+      if (!runtimeIds.has(id))
+        problems.push(
+          `R7 map: ${req.id} cites runtime mutation ${id}, which scripts/mutation-kill.ts does not declare`,
+        );
+    }
+    for (const id of req.database_controls) {
+      if (!databaseIds.has(id))
+        problems.push(
+          `R7 map: ${req.id} cites database control ${id}, which scripts/database-control-mutations.ts does not declare`,
+        );
+    }
+  }
+
+  return problems;
+}
+
 function main(): void {
   let out: string | undefined;
   const argv = process.argv.slice(2);
@@ -462,10 +614,12 @@ function main(): void {
     }
   }
 
-  const problems = checkRequirementMap();
+  const problems = [...checkRequirementMap(), ...checkR7RequirementMap()];
   const report =
     problems.length === 0
-      ? 'requirement map OK: every clause is covered, every id is well formed and unique, and every requirement resolves to tests, code, steps and artifacts that exist\n'
+      ? 'requirement maps OK (R5 and R7): every clause is covered, every id is well formed ' +
+        'and unique, and every requirement resolves to tests, code, mutations, steps and ' +
+        'artifacts that exist\n'
       : problems.map((p) => `FAIL: ${p}`).join('\n') + '\n';
   process.stdout.write(report);
   if (out !== undefined) writeFileSync(out, report);

@@ -196,7 +196,12 @@ export interface RangeCommit {
 
 export type HeadRelation = 'HEAD_IS_THE_EVIDENCE_COMMIT' | 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT';
 
-export type SubmissionStatus = 'NOT SUBMITTABLE AS COMPLETE' | 'SUBMITTABLE AS COMPLETE';
+export type SubmissionStatus =
+  | 'NOT SUBMITTABLE AS COMPLETE'
+  | 'SUBMITTABLE AS COMPLETE'
+  // FBL-020-R7 §6: the canonical record states this exact phrase while the
+  // delivery awaits the architect; acceptance is the release gate, not CI.
+  | 'SUBMITTED FOR REVIEW — NOT ACCEPTED';
 
 export interface FinalState {
   order: string;
@@ -250,7 +255,13 @@ export interface FinalState {
     ci_run_for_this_working_tree: number | null;
   };
   commit_budget: {
-    allowed: number;
+    /**
+     * A number under R5/R6 (one per order, and both were ruled violated), or the
+     * string naming FBL-020-R7-A1 §4, which removed the one-commit limit for R7.
+     * The `used`/`failed_ci` arithmetic is checked against git either way — an
+     * unbounded budget is still a fully disclosed one.
+     */
+    allowed: number | string;
     used: number;
     failed_ci: number;
     verdict: string;
@@ -483,9 +494,16 @@ export function requiredStatements(state: FinalState): Statement[] {
   const out: Statement[] = [
     {
       id: 'final_head_and_run',
-      what: 'the final code-bearing commit and the exact-SHA run that measured it',
+      /*
+       * FBL-020-R7 rewords this from "THE FINAL CODE-BEARING COMMIT IS": the
+       * evidence commit is the last commit a recorded run MEASURED, and under
+       * R7-A1's normal-commit discipline the code-bearing R7 commits sit above
+       * it until their own run lands — calling the measured one "final" would
+       * be the exact stale-sentence class this gate exists to refuse.
+       */
+      what: 'the last CI-measured commit and the exact-SHA run that measured it',
       sentence:
-        `THE FINAL CODE-BEARING COMMIT IS ${state.evidence_commit_sha} AND ITS EXACT-SHA ` +
+        `THE LAST CI-MEASURED COMMIT IS ${state.evidence_commit_sha} AND ITS EXACT-SHA ` +
         `${run?.workflow_path ?? '?'} RUN ${run?.run_id ?? '?'} COMPLETED WITH ${total} OF ` +
         `${total} JOBS SUCCESSFUL`,
       documents: [REPORT, MAP, LIMITS, README],
@@ -510,8 +528,8 @@ export function requiredStatements(state: FinalState): Statement[] {
       id: 'working_tree_not_covered',
       what:
         state.working_tree.state === 'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT'
-          ? 'that the R6 work is committed, and that the run named above did NOT measure it'
-          : 'that the R6 work is committed, and that the exact-SHA run above measured it',
+          ? 'that the R7 work is committed, and that the run named above did NOT measure it'
+          : 'that the R7 work is committed, and that the exact-SHA run above measured it',
       /*
        * TWO BRANCHES, AND BOTH ARE LIVE — which is why this one IS conditional where the
        * paragraph above refuses to be. "Uncommitted" cannot recur, so no branch leads back
@@ -523,26 +541,50 @@ export function requiredStatements(state: FinalState): Statement[] {
        */
       sentence:
         state.working_tree.state === 'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT'
-          ? 'THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN ' +
+          ? 'THE FBL-020-R7 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN ' +
             'EARLIER COMMIT AND NOT IT'
-          : 'THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, ' +
+          : 'THE FBL-020-R7 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, ' +
             'AND NO UNCOMMITTED WORK SITS ON TOP OF IT',
       documents: [REPORT, MAP, LIMITS],
     },
-    {
-      id: 'commit_budget_violated',
-      what: 'the one-commit budget, recorded as a violation rather than a footnote',
-      sentence:
-        `THE ONE-COMMIT BUDGET WAS VIOLATED: ${state.commit_budget.used} CODE-BEARING ` +
-        `COMMITS EXIST WHERE THE ORDER ALLOWED ${state.commit_budget.allowed}, ` +
-        `${state.commit_budget.failed_ci} OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE ` +
-        'THE VIOLATION',
-      documents: [REPORT, MAP, LIMITS],
-    },
+    typeof state.commit_budget.allowed === 'number'
+      ? {
+          id: 'commit_budget_violated',
+          what: 'the one-commit budget, recorded as a violation rather than a footnote',
+          sentence:
+            `THE ONE-COMMIT BUDGET WAS VIOLATED: ${state.commit_budget.used} CODE-BEARING ` +
+            `COMMITS EXIST WHERE THE ORDER ALLOWED ${state.commit_budget.allowed}, ` +
+            `${state.commit_budget.failed_ci} OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE ` +
+            'THE VIOLATION',
+          documents: [REPORT, MAP, LIMITS],
+        }
+      : {
+          /*
+           * FBL-020-R7-A1 §4 removed the one-commit limit for R7. The R5/R6
+           * violations stand exactly as the architect ruled on them — they are
+           * disclosed in the record's per-order figures — and what the current
+           * documents must now say is the AMENDED discipline: every commit
+           * counted, every failure disclosed, nothing hidden behind a budget
+           * that no longer exists.
+           */
+          id: 'commit_budget_violated',
+          what: 'the commit discipline under FBL-020-R7-A1 §4, with full disclosure',
+          sentence:
+            `THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: ` +
+            `${state.commit_budget.used} CODE-BEARING COMMITS EXIST ACROSS R5, R6 AND R7, ` +
+            `${state.commit_budget.failed_ci} OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND ` +
+            'EVERY ONE IS DISCLOSED IN THE FINAL-STATE RECORD',
+          documents: [REPORT, MAP, LIMITS],
+        },
     {
       id: 'submission_status',
       what: 'the submission status, in the record’s own closed vocabulary',
-      sentence: `FBL-020-R6 IS ${state.submission.status} WHILE §3.1 IS OPEN`,
+      // FBL-020-R7 §6 / R7-A1 §10: the record says SUBMITTED FOR REVIEW — NOT
+      // ACCEPTED, and every governed document restates that architect
+      // acceptance — not CI — is the release gate.
+      sentence:
+        `FBL-020-R7 IS ${state.submission.status}, AND ARCHITECT ACCEPTANCE REMAINS ` +
+        'THE RELEASE GATE',
       documents: [REPORT, MAP, PROVENANCE, README],
     },
     {
@@ -1023,7 +1065,10 @@ export function finalStateProblems(
       `commit_budget.failed_ci is ${state.commit_budget.failed_ci} and ${reallyFailed} recorded ` +
         'runs did not conclude success',
     );
-  if (state.commit_budget.used > state.commit_budget.allowed) {
+  if (
+    typeof state.commit_budget.allowed === 'number' &&
+    state.commit_budget.used > state.commit_budget.allowed
+  ) {
     if (state.commit_budget.verdict !== 'VIOLATED')
       problems.push(
         `${state.commit_budget.used} code-bearing commits against a budget of ` +
@@ -1175,22 +1220,32 @@ export function finalStateProblems(
     );
 
   // ── 4. the submission status ────────────────────────────────────────────────
-  const statuses: SubmissionStatus[] = ['NOT SUBMITTABLE AS COMPLETE', 'SUBMITTABLE AS COMPLETE'];
+  const statuses: SubmissionStatus[] = [
+    'NOT SUBMITTABLE AS COMPLETE',
+    'SUBMITTABLE AS COMPLETE',
+    // FBL-020-R7 §6: the delivery is handed to the architect and expressly NOT
+    // claimed accepted — a third state, distinct from both of the others.
+    'SUBMITTED FOR REVIEW — NOT ACCEPTED',
+  ];
   if (!statuses.includes(state.submission.status))
     problems.push(
       `submission.status is ${JSON.stringify(state.submission.status)}, which is not one of ` +
         statuses.join(' / '),
     );
   if (
-    state.submission.status === 'NOT SUBMITTABLE AS COMPLETE' &&
+    state.submission.status !== 'SUBMITTABLE AS COMPLETE' &&
     state.submission.blocking.length === 0
   )
-    problems.push('a NOT SUBMITTABLE status must name what blocks it');
+    problems.push('a status short of SUBMITTABLE must name what blocks it');
   if (state.submission.status === 'SUBMITTABLE AS COMPLETE' && state.submission.blocking.length > 0)
     problems.push('a SUBMITTABLE status cannot also list blocking items');
+  // FBL-020-R6 §4.6, kept and widened for R7: while §3.1 is OPEN the one status
+  // the record may NOT claim is completeness. SUBMITTED FOR REVIEW — NOT
+  // ACCEPTED claims no completeness — it is the R7 §6 handover phrase — so it
+  // satisfies the rule exactly as NOT SUBMITTABLE does.
   if (
     state.blueprint_section_3_1.status === 'OPEN' &&
-    state.submission.status !== 'NOT SUBMITTABLE AS COMPLETE'
+    state.submission.status === 'SUBMITTABLE AS COMPLETE'
   )
     problems.push(
       'FBL-020-R6 §4.6: while §3.1 is OPEN the revision MAY NOT be submitted as complete',

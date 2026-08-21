@@ -92,6 +92,7 @@ import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
   createActionCatalog,
+  createOrganizationUnit,
   createPolicyEngine,
   createSession,
   grantRole,
@@ -805,19 +806,68 @@ async function afterMigration059(outPath: string | undefined, logPath: string | 
   const tenantId = String((actor[0] as Record<string, unknown>).tenant_id);
   const sessionId = String((actor[0] as Record<string, unknown>).session_id);
 
-  // A REAL Fixed Ops resource of this tenant, and the rooftop the DATABASE says it
-  // lives under — read through the same one registry the trigger uses.
-  const ro = (
+  // A REAL Fixed Ops resource of this tenant, and the rooftop the DATABASE says
+  // it lives under — read through the same one registry the trigger uses.
+  //
+  // The drill's legacy Fixed Ops seed lives in the RETAINED tenant, which 055
+  // correctly kept at `pending_configuration` — truthful history, but a dead
+  // chain by §3.5, so nothing in it can anchor a version-4 resource ALLOW. The
+  // resource is therefore established in the drill's own ACTIVE tenant, through
+  // the SAME attributed organization mutations production uses (each created,
+  // audited and versioned by the between-stage administrator), plus one Fixed
+  // Ops repair order seeded the way every Fixed Ops row in this drill is seeded.
+  // Idempotent: a re-run finds the rows the first run left.
+  let ro = (
     await query(
       `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
         ORDER BY ro_id LIMIT 1`,
       [tenantId],
     )
   ).rows as Array<Record<string, unknown>>;
+  if (ro.length === 0) {
+    const group = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'dealer_group',
+      parentId: tenantId,
+      name: 'R7 Drill Group',
+      status: 'active',
+    });
+    const entity = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'legal_entity',
+      parentId: group.unitId,
+      name: 'R7 Drill Entity LLC',
+      status: 'active',
+    });
+    const rooftop = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'rooftop',
+      parentId: entity.unitId,
+      name: 'R7 Drill Rooftop',
+      status: 'active',
+    });
+    await query(
+      `INSERT INTO repair_orders
+         (ro_id, tenant_id, location_id, appointment_id, mdm_customer_id, mdm_vehicle_id, status)
+       VALUES ($1, $2, $3, NULL, $4, $5, 'checked_in')`,
+      [randomUUID(), tenantId, rooftop.unitId, randomUUID(), randomUUID()],
+    );
+    say('after-059 activity: organization chain and repair order established in the drill tenant');
+    ro = (
+      await query(
+        `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
+          ORDER BY ro_id LIMIT 1`,
+        [tenantId],
+      )
+    ).rows as Array<Record<string, unknown>>;
+  }
   if (ro.length !== 1) {
     throw new Error(
-      'after-059 activity refused: the drill database holds no repair order for the drill ' +
-        'tenant, so the §3.4 resource path cannot be exercised against a real resource',
+      'after-059 activity refused: no repair order for the drill tenant even after the ' +
+        'stage established one — the §3.4 resource path cannot be exercised',
     );
   }
   const roId = String((ro[0] as Record<string, unknown>).ro_id);

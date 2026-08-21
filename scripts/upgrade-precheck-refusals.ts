@@ -98,8 +98,10 @@ WITH requester AS (
    WHERE actor_scope = 'dealership' AND status = 'activated' AND tenant_id IS NOT NULL
    ORDER BY user_link_id LIMIT 1
 ), actor AS (
+  -- ANY other real, activated link: the precheck judges the SUBSTITUTION, and
+  -- the drill fixture may hold a single activated link per tenant.
   SELECT user_link_id FROM user_links
-   WHERE tenant_id = (SELECT tenant_id FROM requester) AND status = 'activated'
+   WHERE status = 'activated'
      AND user_link_id <> (SELECT user_link_id FROM requester)
    ORDER BY user_link_id LIMIT 1
 ), req AS (

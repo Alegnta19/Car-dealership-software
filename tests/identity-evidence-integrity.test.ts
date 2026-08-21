@@ -930,9 +930,15 @@ describe(
     // ══ §3.6 — liveness at the ACTUAL write instant ═════════════════════════
 
     test('a transaction started before a binding expired and completed after it is refused', async () => {
-      let facts: { alive_by_txn_clock: boolean; expired_by_wall_clock: boolean } | null = null;
-      let refusal: { code?: string; message?: string } | null = null;
-      let completed = false;
+      // A holder object rather than three `let`s: assignments made inside the
+      // transaction callback are invisible to control-flow narrowing, which
+      // would otherwise type the captured values as `never` at the judgment
+      // site below.
+      const seen: {
+        facts: { alive_by_txn_clock: boolean; expired_by_wall_clock: boolean } | null;
+        refusal: { code?: string; message?: string } | null;
+        completed: boolean;
+      } = { facts: null, refusal: null, completed: false };
       await withTransaction(async (executor) => {
         // Inside this transaction NOW() is frozen. Close the binding's window a few
         // hundred milliseconds ahead of the LIVE clock, then let the wall cross it
@@ -956,20 +962,25 @@ describe(
         // catch absorbs the abort the refusal causes, and any assertion placed
         // in here would be absorbed with it — a dead assertion no mutation
         // could ever fail.
-        facts = probe.rows[0] as { alive_by_txn_clock: boolean; expired_by_wall_clock: boolean };
+        seen.facts = probe.rows[0] as {
+          alive_by_txn_clock: boolean;
+          expired_by_wall_clock: boolean;
+        };
         try {
           await insertAllow({}, executor);
-          completed = true;
+          seen.completed = true;
         } catch (err) {
-          refusal = err as { code?: string; message?: string };
+          seen.refusal = err as { code?: string; message?: string };
         }
         // Roll back either way, so a wrongly-accepted row can never commit.
         throw new Error('probe transaction always rolls back');
       }).catch(() => undefined);
+      const facts = seen.facts;
+      const refusal = seen.refusal;
       assert.ok(facts, 'the premise probe ran');
       assert.equal(facts.alive_by_txn_clock, true, 'premise: NOW() has not reached the window');
       assert.equal(facts.expired_by_wall_clock, true, 'premise: clock_timestamp() has crossed it');
-      assert.equal(completed, false, 'the straddling write must not complete');
+      assert.equal(seen.completed, false, 'the straddling write must not complete');
       assert.ok(refusal, 'it must be refused');
       assert.equal(String(refusal.code), 'P0001', 'by the write-instant rule itself');
       assert.ok(

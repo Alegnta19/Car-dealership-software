@@ -730,9 +730,17 @@ async function assertOrganizationBackfill(): Promise<void> {
    * the tenant ids that appear in legacy Fixed Ops data asserts exactly the
    * property 055 is responsible for, and asserts it in every phase.
    */
+  // FBL-020-R7: scoped one step further, to tenants WITHOUT an attributed
+  // creator. A tenant created after 055 through the sanctioned bootstrap
+  // (`created_by_user_link_id` set, a 056 column present in every phase this
+  // runs in) that later accumulates Fixed Ops rows is ordinary production life
+  // — the after-059 drill stage creates exactly that — and says nothing about
+  // what 055 did to the LEGACY tenants, which are the ones 055 backfilled and
+  // which no attributed actor created.
   const activatedByBackfill = await scalar(
     `SELECT COUNT(*)::int AS n FROM tenants t
       WHERE t.status <> 'pending_configuration'
+        AND t.created_by_user_link_id IS NULL
         AND t.tenant_id IN (
           SELECT tenant_id FROM service_appointments UNION
           SELECT tenant_id FROM repair_orders UNION
