@@ -348,7 +348,7 @@ EXACT-SHA `.github/workflows/ci.yml` RUN 32459475019 COMPLETED WITH 4 OF 4 JOBS 
 That commit IS the FBL-020-R6 work, measured by its own run at the third attempt; the first
 two, `0fe4ae7` and `242e24a`, **both FAILED their runs** and are recorded rather than dropped.
 A green run is evidence for the controls it exercised and is not acceptance. The one-commit
-budget was violated under both orders: six code-bearing commits where each allowed one, four
+budget was violated under both orders: seven code-bearing commits where each allowed one, four
 of them red. §1 and §1.1 of `docs/FBL-020-DELIVERY-REPORT.md` carry the tables, and
 **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN** — §3.1 requires the governing
 Version 2.0 blueprint in both designated project copies; the document itself is committed here

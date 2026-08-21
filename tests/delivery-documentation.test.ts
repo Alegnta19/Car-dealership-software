@@ -1687,8 +1687,28 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
      * A stand-in for git must AGREE with the record on the geometry the record declares, or
      * it is testing a disagreement it invented itself.
      */
+    /*
+     * AND IT MODELS THE COMMIT THE RECORD LIVES IN, because where this stand-in runs that
+     * commit always exists.
+     *
+     * `asRecorded` is used only when there is no `.git` — the tree copy
+     * `scripts/mutation-kill.ts` builds. A tree copy is a copy of a CHECKOUT, and in any
+     * checkout of a committed record HEAD is STRICTLY ABOVE the evidence commit: the record
+     * NAMES the evidence commit, so the commit containing the record cannot be it.
+     * `HEAD_IS_THE_EVIDENCE_COMMIT` is reachable only in a working tree edited after that
+     * commit, and never here.
+     *
+     * The previous revision modelled exactly that unreachable state — head = the evidence
+     * commit with nothing above it — so it contradicted every record that correctly declared
+     * AHEAD, and it did so ONLY in the copy, where no one looks. It cost run 32462910851.
+     * `SELF` stands for the unnamed commit the record lives in; the gate exempts HEAD from
+     * the ahead-LIST for precisely the reason the record cannot name it.
+     */
+    // A deliberately unmistakable 40-hex stand-in: no real commit will collide with it, and
+    // a reader who sees it in a failure message knows at once it is the modelled self-commit.
+    const SELF = 'se1f'.replace('s', '5').padEnd(40, '0');
     return {
-      head: above[0]?.sha ?? s.evidence_commit_sha,
+      head: SELF,
       shallow: false,
       // This fixture stands in for a COMPLETE checkout — it hands the gate every fact a full
       // clone would have — so it is not the no-repository case, which has its own test.
@@ -1696,7 +1716,7 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
       subject,
       ancestorOfHead,
       baselineToEvidence: s.code_bearing_commits.map((c) => c.sha).reverse(),
-      aheadOfEvidence: above.map((c) => c.sha),
+      aheadOfEvidence: [SELF, ...above.map((c) => c.sha)],
     };
   };
   const factsFor = (s: FinalState): GitFacts => (IN_GIT_CHECKOUT ? readGitFacts(s) : asRecorded(s));

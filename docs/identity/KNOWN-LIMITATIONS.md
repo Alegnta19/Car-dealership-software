@@ -427,7 +427,7 @@ measured. A green third attempt does not un-fail the first two, and both stay in
 The delivery report's "Verification evidence" section records the local runs as well, and a
 local run is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 7 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
 failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
 each time, with `174c789` the green one for that order. Under FBL-020-R6 they are `0fe4ae7`
