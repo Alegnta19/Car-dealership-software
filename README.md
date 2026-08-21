@@ -343,8 +343,8 @@ twice.)
 Nothing in this README closes one, and no "closed"/"discharged" claim about an R5 clause
 stands anywhere in this repository as a governing status.
 
-**THE FINAL CODE-BEARING COMMIT IS `e8ec81d045e3ddbc4de07419914c098af2536b74` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32470560425 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
+**THE FINAL CODE-BEARING COMMIT IS `f113fad7c0487aada4773612322208714661a52c` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32474578625 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
 That commit IS the FBL-020-R6 work, measured by its own run at the third attempt; the first
 two, `0fe4ae7` and `242e24a`, **both FAILED their runs** and are recorded rather than dropped.
 A green run is evidence for the controls it exercised and is not acceptance. The one-commit

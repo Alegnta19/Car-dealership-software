@@ -413,8 +413,8 @@ revocation) is pinned by tests proven to fail when the control is reverted.
 
 ### The CI state, stated once and exactly (FBL-020-R6 §4.4)
 
-**THE FINAL CODE-BEARING COMMIT IS `e8ec81d045e3ddbc4de07419914c098af2536b74` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32470560425 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `f113fad7c0487aada4773612322208714661a52c` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32474578625 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.

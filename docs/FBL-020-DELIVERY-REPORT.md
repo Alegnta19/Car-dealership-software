@@ -150,8 +150,8 @@ sentence by sentence. R5 was rejected for exactly the defect that gate now catch
 checked-in final state had stopped being true and every figure gate stayed green, because
 none of the false sentences was a number.
 
-**THE FINAL CODE-BEARING COMMIT IS `e8ec81d045e3ddbc4de07419914c098af2536b74` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32470560425 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `f113fad7c0487aada4773612322208714661a52c` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32474578625 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions, read individually rather than inferred from the run
 level:
 
