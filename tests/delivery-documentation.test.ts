@@ -1841,10 +1841,22 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
     const undercount = clone();
     const dropped = undercount.commits_in_the_measured_range.shift();
     assert.ok(dropped);
-    // The R5 shape exactly: the record's own arithmetic is made self-consistent at the
-    // WRONG number, which is what let the published count stay green.
-    undercount.commit_budget.used = undercount.commits_in_the_measured_range.length;
-    undercount.commit_budget.failed_ci = undercount.commits_in_the_measured_range.filter(
+    /*
+     * The R5 shape exactly: the record's own arithmetic is made self-consistent at the WRONG
+     * number, which is what let the published count stay green.
+     *
+     * DERIVED FROM THE FLAGS, NOT FROM THE LIST LENGTH. This used to read
+     * `= commits_in_the_measured_range.length`, which was the same number for as long as
+     * every commit in the range carried code. Once a documentation-only commit landed in the
+     * range the two diverged, and the shortened list's LENGTH happened to equal the count the
+     * gate expects — so the record looked consistent, the budget limb stayed silent, and this
+     * test caught it. Counting the flags is what makes the staged record self-consistent at
+     * the wrong number rather than accidentally at the right one.
+     */
+    const codeBearing = undercount.commits_in_the_measured_range.filter((c) => c.code_bearing);
+    undercount.commit_budget.used =
+      codeBearing.length + (undercount.this_commit.is_code_bearing ? 1 : 0);
+    undercount.commit_budget.failed_ci = codeBearing.filter(
       (c) => c.run.conclusion !== 'success',
     ).length;
     const problems = finalStateProblems(undercount, facts, docs);

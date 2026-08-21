@@ -413,8 +413,8 @@ revocation) is pinned by tests proven to fail when the control is reverted.
 
 ### The CI state, stated once and exactly (FBL-020-R6 §4.4)
 
-**THE FINAL CODE-BEARING COMMIT IS `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32465933403 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `e8ec81d045e3ddbc4de07419914c098af2536b74` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32470560425 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.
@@ -427,7 +427,7 @@ measured. A green third attempt does not un-fail the first two, and both stay in
 The delivery report's "Verification evidence" section records the local runs as well, and a
 local run is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 8 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
 failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
 each time, with `174c789` the green one for that order. Under FBL-020-R6 they are `0fe4ae7`

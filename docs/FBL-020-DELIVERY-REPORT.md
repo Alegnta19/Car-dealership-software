@@ -150,8 +150,8 @@ sentence by sentence. R5 was rejected for exactly the defect that gate now catch
 checked-in final state had stopped being true and every figure gate stayed green, because
 none of the false sentences was a number.
 
-**THE FINAL CODE-BEARING COMMIT IS `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32465933403 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `e8ec81d045e3ddbc4de07419914c098af2536b74` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32470560425 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions, read individually rather than inferred from the run
 level:
 
@@ -227,10 +227,10 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 8 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Each order allows one
 code-bearing commit plus an optional documentation-only closeout, and **both orders are
-over**: FBL-020-R5 used three, FBL-020-R6 has used five. The sixth is the commit this
+over**: FBL-020-R5 used three, FBL-020-R6 has used six. The sixth is the commit this
 revision is made in, counted rather than deferred — a record cannot name the SHA of the
 commit that contains it, so the gate exempts `HEAD` from the ahead-of-evidence LIST and adds
 it back to the COUNT, printing a note whenever that allowance is in play. R6 §5's verbatim text is not held in
@@ -1984,7 +1984,7 @@ Not risks. Not residual. **Work that is not done.**
    measures a commit rather
    than a working tree. Every R6 gate was executed locally against a real PostgreSQL 16;
    that is corroboration, not a CI run, and it is not offered as one. **The one-commit
-   budget was also VIOLATED** — eight code-bearing commits, four of them red, across the two
+   budget was also VIOLATED** — nine code-bearing commits, four of them red, across the two
    orders — which §1.1 records as a violation rather than as a mitigated footnote. This
    clause published three and two until this closeout, which made the report state the
    budget at two values at once; §1.1's table is the authority.
@@ -2346,7 +2346,7 @@ Every "old" value in this column is a figure this repository really did publish.
 FBL-000 closed → FBL-010 closed → **FBL-020 IN PROGRESS. THE FINAL CODE-BEARING COMMIT IS
 `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` AND ITS EXACT-SHA `.github/workflows/ci.yml` RUN
 32465933403 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL**; **THE ONE-COMMIT BUDGET WAS VIOLATED:
-8 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
+9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
 DOES NOT CURE THE VIOLATION** (§1.1); **THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA
 RUN NAMED ABOVE MEASURED IT, AND NO UNCOMMITTED WORK SITS ON TOP OF IT** — at the third
 attempt, the first two having failed their own runs; and every clause is UNVERIFIED until the
