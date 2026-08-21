@@ -54,8 +54,17 @@ jobs:
       # that on a real `git clone --depth 1`). This setting is what makes those limbs
       # actually RUN here rather than be reported as unrun. Removing it does not break the
       # job; it silently narrows what the job checks, which is worse.
+      # FBL-020-R7: ON PULL-REQUEST EVENTS, CHECK OUT THE BRANCH ITSELF. The
+      # default pull_request checkout is the SYNTHETIC MERGE ref — a detached
+      # commit whose tree is not the tree of the commit the run is attributed
+      # to, whose first-parent walk hides every branch commit from the
+      # final-state gate, and whose detached HEAD breaks the --depth-1-clone
+      # fixture. An exact-SHA run must measure the exact commit, so the
+      # checkout follows github.head_ref when it exists and the pushed ref
+      # otherwise.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -350,6 +359,10 @@ jobs:
       FRESH_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_fresh_check
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # FBL-020-R7: measure the exact branch head, not the synthetic merge
+          # ref (see the checkout note in the test job).
+          ref: ${{ github.head_ref || github.ref }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -703,6 +716,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # FBL-020-R7: measure the exact branch head, not the synthetic merge
+          # ref (see the checkout note in the test job).
+          ref: ${{ github.head_ref || github.ref }}
 
       - name: Build image and record digest, runtime user, healthcheck
         run: |
@@ -727,8 +744,17 @@ jobs:
     name: secret scan (genuine full history)
     runs-on: ubuntu-latest
     steps:
+      # FBL-020-R7: ON PULL-REQUEST EVENTS, CHECK OUT THE BRANCH ITSELF. The
+      # default pull_request checkout is the SYNTHETIC MERGE ref — a detached
+      # commit whose tree is not the tree of the commit the run is attributed
+      # to, whose first-parent walk hides every branch commit from the
+      # final-state gate, and whose detached HEAD breaks the --depth-1-clone
+      # fixture. An exact-SHA run must measure the exact commit, so the
+      # checkout follows github.head_ref when it exists and the pushed ref
+      # otherwise.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
 
       - name: Full-history gitleaks scan (pinned image, --log-opts=--all)
