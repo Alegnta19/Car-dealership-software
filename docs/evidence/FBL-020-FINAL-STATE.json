@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 12,
+    "used": 13,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -543,7 +543,7 @@
       },
       "FBL-020-R7": {
         "allowed": "no numeric budget (FBL-020-R7-A1 §4)",
-        "used": 3,
+        "used": 4,
         "failed_ci": 0,
         "verdict": "DISCLOSED — every R7 commit is listed above with its run, or with run: null while none exists"
       }
@@ -633,6 +633,48 @@
       "sha": "969e7fe6b9d9122af7606518d103e7f5f6099ce2",
       "short": "969e7fe",
       "subject": "R7: drill green end-to-end, gates reconciled, requirement map, A1 adopted",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "bcef31c45b2ff09425beb3d4f4c4b13f159eb198",
+      "short": "bcef31c",
+      "subject": "FBL-020-R7 §6: documentation closeout — the record names every commit above the baseline",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32520118939,
+        "run_number": 65,
+        "run_attempt": 1,
+        "head_sha": "bcef31c45b2ff09425beb3d4f4c4b13f159eb198",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ],
+        "what_failed": "The battery step alone, and not over any control: the pull_request checkout was the SYNTHETIC MERGE ref, a detached commit whose first-parent walk hides every branch commit from the final-state gate and whose detached HEAD breaks the depth-1-clone fixture. The drill, secret-scan and container jobs were green on this first attempt. Closed by the checkout correction committed directly above this entry."
+      }
+    },
+    {
+      "sha": "595cd8f39420b04aac6e81daf50889727b964e56",
+      "short": "595cd8f",
+      "subject": "R7: CI measures the exact branch head, not the synthetic merge ref",
       "code_bearing": true,
       "run": null
     }
