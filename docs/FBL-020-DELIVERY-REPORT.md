@@ -23,7 +23,7 @@ or narrowed.
 
 ### 0.1 The order
 
-The active order is **FBL-020-R5**, and its text is **checked into this repository** at
+The active order is **FBL-020-R6**. The R5 order text it succeeds is **checked into this repository** at
 [`docs/orders/FBL-020-R5.md`](orders/FBL-020-R5.md) — §3.2. Nothing in this delivery
 depends on an order document that is not in this repository.
 
@@ -162,8 +162,9 @@ level:
 | `container build (digest-pinned base)`                       | **success** |
 | `secret scan (genuine full history)`                         | **success** |
 
-**TWO GREEN RUNS ARE IN PLAY AND THE TABLE NAMES BOTH**, because naming only one is how this
-section went stale. Until this closeout it described run 32190154935 alone and answered "is
+**THE TABLE NAMES EVERY RUN IN THE RANGE, GREEN OR RED**, because naming only some of them is
+how this section went stale — repeatedly, and always by publishing a count that the next
+commit moved. Until this closeout it described run 32190154935 alone and answered "is
 that commit this repository's `HEAD`?" with **YES** — true when written, false from the moment
 `0fe4ae7` was pushed, and sitting inside the very section that calls itself the only place the
 final commit is stated. That is finding C4's own defect class, in the paragraph that records
@@ -183,9 +184,9 @@ measured a commit in the range is still in that table with its conclusion, inclu
 that were briefly the evidence run. They measured what they measured; they are simply not the
 evidence run any more.
 
-**NEITHER ROW ANSWERS "IS IT `HEAD`?", AND THAT IS DELIBERATE.** `HEAD` is the
-documentation-only closeout that names the R6 run, which sits one commit above the evidence
-commit; a run cannot exist for a commit before the commit does, so no record written into a
+**NEITHER ROW ANSWERS "IS IT `HEAD`?", AND THAT IS DELIBERATE.** `HEAD` is a documentation-only
+closeout standing above the evidence commit — how far above is not stated here, because that
+distance grows with every closeout and a second copy of it has no way to stay right; a run cannot exist for a commit before the commit does, so no record written into a
 commit can claim that commit is measured. The relation between `HEAD` and the evidence commit
 is published in exactly one place, `repository_head_relation` in
 `docs/evidence/FBL-020-FINAL-STATE.json`, and `scripts/check-final-state.ts` decides it from
@@ -234,9 +235,11 @@ code-bearing commit plus an optional documentation-only closeout, and **both ord
 over**: FBL-020-R5 used three and FBL-020-R6 six. §1.1 enumerates every one of them, and the
 count is read from `commit_budget` in the record rather than tallied here — a record cannot name the SHA of the
 commit that contains it, so the gate exempts `HEAD` from the ahead-of-evidence LIST and adds
-it back to the COUNT, printing a note whenever that allowance is in play. R6 §5's verbatim text is not held in
-this repository — `docs/orders/FBL-020-R6.md` Part 2 marks it derived — so its budget is
-applied on the same terms as R5 §5 and is reported rather than construed.
+it back to the COUNT, printing a note whenever that allowance is in play. R6 §5's verbatim text is not held in this repository at all: `docs/orders/FBL-020-R6.md`
+carries §4.3 verbatim and a clause register running §1.1–§4.6 plus C1–C8, and **§5 appears in
+neither**. Its budget is therefore applied on the same terms as R5 §5 and is reported rather
+than construed — and that this repository cannot quote the clause it is applying is stated
+here rather than left for a reader to discover.
 
 **THIS FIGURE READ 3 UNTIL THIS REVISION, AND THE UNDERCOUNT WAS PRODUCED BY THE RECORD'S OWN
 SHAPE.** `commits_in_the_measured_range` is checked to be exactly `r5_baseline..evidence_commit`, the
@@ -720,7 +723,7 @@ must be unique and well formed, and the inventory must agree with the checked-in
 | §3.5   | `R5-§3.5-clause-inventory`                       | Clause inventory, unique well-formed ids, and a completeness check that FAILS on an omission                                                                                                                                                                                            | `tests/ci-gates.test.ts` ; `requirement-map-check.txt`                                           |
 | §3.6   | `R5-§3.6-document-reconciliation`                | The nine named documents exist, speak of this revision, and agree in one wording                                                                                                                                                                                                        | `tests/delivery-documentation.test.ts`                                                           |
 | §4     | `R5-§4-verification-gates`                       | Floors above all three of the order's figures, the six coverage kinds, a COMPLETE mutation run, and every standing gate                                                                                                                                                                 | `tests/ci-gates.test.ts`, `tests/architecture.test.ts`                                           |
-| §5     | `R5-§5-commit-discipline`                        | The commit discipline above is recorded, and no commit or run is claimed for this tree                                                                                                                                                                                                  | `tests/delivery-documentation.test.ts`                                                           |
+| §5     | `R5-§5-commit-discipline`                        | The commit discipline above is recorded; the commits and their runs are in §1.1, and the budget verdict in §1.1's headline                                                                                                                                                              | `tests/delivery-documentation.test.ts`                                                           |
 
 ### What is still OPEN, and what this table used to say
 
@@ -1315,14 +1318,13 @@ declarations that exist.
 | FBL-020-R5 Appendix A item 9    | <!--fig:order_appendix_tests-->525<!--/fig--> / <!--fig:order_appendix_suites-->57<!--/fig-->     | a quality condition on a count the implementer had already reported, not a second floor |
 | `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->654<!--/fig--> / <!--fig:floor_suites-->64<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
 
-**THE DECLARED FLOOR WAS SIX BELOW THE MEASUREMENT AND IS NOW ONE BELOW IT, AND THE REMAINING
-GAP IS DISCLOSED RATHER THAN ROUNDED AWAY.** `MINIMUM_TESTS` stood at 646 while the battery
+**HOW THE FLOOR GOT TO THE MEASUREMENT, IN THREE STEPS, EACH OF WHICH LEFT IT BELOW FOR A WHILE.** `MINIMUM_TESTS` stood at 646 while the battery
 measured 652, inside a constant whose own docstring says a floor is raised to what a measured
 run reports "rather than left with slack". 646 was right when it was written — 642 plus the
 four tests findings C1, C2 and C7 added — and the corrective waves after it added six more
 without moving it, so it was raised to 652.
 
-**IT WENT BELOW THE MEASUREMENT TWICE MORE, AND BOTH GAPS ARE CLOSED RATHER THAN CARRIED.**
+**THE DECLARED FLOOR IS NOW THE MEASUREMENT; IT DRIFTED BELOW IT TWICE ON THE WAY HERE AND BOTH GAPS ARE CLOSED RATHER THAN CARRIED.**
 The constant sat at 652 while the battery measured 653, because a wave of this order added the
 named test that proves the final-state gate survives a tree copy with no `.git`; it was
 briefly disclosed as one test of slack, on the reasoning that raising it is a change to
@@ -1360,11 +1362,13 @@ it, because a loop over nothing proves nothing.
 ### 5.1 Every control this revision made mandatory, and the proof it fails without it
 
 A check that has never been shown to fail is not known to be a check. Each control below was
-removed and the named test observed to die, then restored and observed to pass. The first
-seven are registered mutations in `scripts/mutation-kill.ts` and are recorded in
-`mutation-kill.json`; the remaining eight cannot be expressed as a source mutation — they are
-properties of documents and of a file's presence — so they were performed by hand and are
-reproducible from the description.
+removed and the named test observed to die, then restored and observed to pass. Rows marked as
+registered mutations live in `scripts/mutation-kill.ts` and are recorded in
+`mutation-kill.json`; the rest cannot be expressed as a source mutation — they are properties
+of documents and of a file's presence — so they were performed by hand and are reproducible
+from the description. **Neither group is counted here.** This paragraph published the split as
+"the first seven / the remaining eight" while the table beneath it grew to twenty rows, which
+is the same defect the section is about: a tally beside a list that moves.
 
 **This is a SELECTION, not the registry.** `scripts/mutation-kill.ts` has 55 mutations
 declared; the seven named here are the ones this section discusses. The registry's own count
@@ -1398,7 +1402,10 @@ reprinting the run.
 Each restoration returned `tests/delivery-documentation.test.ts` to a fully green battery,
 with zero failed, cancelled, skipped and todo. **The size is stated separately from the
 result on purpose:** those experiments ran when this battery held 26 tests, and it holds <!--fig:doc_battery_tests-->48<!--/fig-->
-on this tree — S3 (§2.2) added one, FBL-020-R6 §1.1/§1.2 added two, and FBL-020-R6 §4.5 added the fifteen that drive the final-state gate.
+on this tree — S3 (§2.2), FBL-020-R6 §1.1/§1.2 and FBL-020-R6 §4.5 all added to it, the last of
+those contributing the tests that drive the final-state gate. **The additions are named and not
+tallied**: an itemised sum published beside a gated figure is a second copy of that figure, and
+this one had already drifted to 44 against a source reading 48.
 Restating the old size as though it were the current one is exactly the drift this section
 exists to catch, which is why the figure is READ from the file rather than typed.
 
@@ -1921,10 +1928,12 @@ register with reproduction detail is `docs/identity/KNOWN-LIMITATIONS.md`.
 
 8. **FIVE disclosed gaps are open, all of them guard scaffolding carried from R4**: three
    declared residue shapes of the audit-inventory gate that are described accurately but have
-   no fixture; one audit-inventory rule (the variant-overflow branch) with no test; the same
-   untested-rule shape in the sibling owned-mutation gate; and a shared-resolver header that
-   lists `.reduce` and template tags as "resolved" where the code treats them as opaque and
-   fail-loud. **A FIFTH STOOD HERE AND IS CLOSED.** The login failure reason
+   no fixture; `058` §0's ABSENT-BINDING residue shape, which has no committed control; one
+   audit-inventory rule (the variant-overflow branch) with no test; the same untested-rule
+   shape in the sibling owned-mutation gate; and a shared-resolver header that lists `.reduce`
+   and template tags as "resolved" where the code treats them as opaque and fail-loud. **The
+   list is the same five `docs/identity/KNOWN-LIMITATIONS.md` itemises**, and it enumerated
+   only four of them until this revision while announcing five. **A FIFTH STOOD HERE AND IS CLOSED.** The login failure reason
    `session_establishment_failed` was written by `apps/api/src/routes/auth.ts` and asserted by
    no test, and a comment in `tests/login-admission.test.ts` had justified that gap by citing
    a test which covers REAUTHENTICATION transactions and does not list that reason at all.
@@ -2069,7 +2078,7 @@ Not risks. Not residual. **Work that is not done.**
    `blueprint_section_3_1.status` is `OPEN`.
 
 **So three gates remain undischarged: live WorkOS certification, acceptance of the census, and
-§3.1 — the CI gate is DISCHARGED by the run §1 names. What that run covers is the FBL-020-R6 working tree, and §3.1's supply of the Version 2.0 blueprint
+§3.1 — the CI gate is DISCHARGED by the run §1 names. What that run covers is the COMMIT it measured — never a working tree; that distinction is §8.3's, and §3.1's supply of the Version 2.0 blueprint
 into the project record.** Three of the four cannot be discharged from inside this
 repository at all. **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN.**
 
@@ -2210,7 +2219,7 @@ had stopped being true rather than a wording preference.
 | Where                                                  | Claim as it stood                                                                                              | What it is now                                                                                                                                                                                                     |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `docs/identity/AUTH-FLOWS.md`                          | "**One of the nine reaches no test.**" — of the nine login failure reasons                                     | **All nine reach a test.** §4.2 closed `session_establishment_failed` with a route-level test and a registered mutation                                                                                            |
-| `docs/identity/KNOWN-LIMITATIONS.md`                   | "**Five** items are open here", the fifth being the untested `session_establishment_failed` exit               | **Four**, all guard scaffolding carried from R4. The fifth is closed, and the bullet that described it is replaced by what closed it                                                                               |
+| `docs/identity/KNOWN-LIMITATIONS.md`                   | "**Four** items are open here", the count standing above five bullets                                          | **Five**, matching the five it itemises. The `session_establishment_failed` gap that once stood here is closed (§7 item 8)                                                                                         |
 | This report, §7 item 8                                 | "**FIVE disclosed gaps are open**"                                                                             | **Four.** Same closure                                                                                                                                                                                             |
 | This report, §10.1                                     | "§7 item 8: Four guard-scaffolding gaps → **Five** disclosed gaps"                                             | Back to **four** — the row now records that the fifth was found by that pass and closed by this one                                                                                                                |
 | `tests/login-admission.test.ts` comment                | "`session_establishment_failed` — NOT COVERED BY ANY TEST"                                                     | Names the test that covers it and the mutation that keeps it covered                                                                                                                                               |
@@ -2367,8 +2376,7 @@ declares itself the only place this document states them, and this section used 
 by publishing a superseded pair. **THE ONE-COMMIT BUDGET WAS VIOLATED:
 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
 DOES NOT CURE THE VIOLATION** (§1.1); **THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA
-RUN NAMED ABOVE MEASURED IT, AND NO UNCOMMITTED WORK SITS ON TOP OF IT** — at the third
-attempt, the first two having failed their own runs; and every clause is UNVERIFIED until the
+RUN NAMED ABOVE MEASURED IT, AND NO UNCOMMITTED WORK SITS ON TOP OF IT** — after earlier attempts that failed their own runs, every one of them recorded in §1.1; and every clause is UNVERIFIED until the
 final
 package proves it → §3.1 **OPEN AND EXTERNALLY BLOCKED** (the bytes are COMMITTED in this
 repository and whether the two reviewer project copies hold them is not observable from here;

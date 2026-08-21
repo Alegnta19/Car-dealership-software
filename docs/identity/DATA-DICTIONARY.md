@@ -432,7 +432,7 @@ in a report, in a ticket or in a review, it is this value.
 | `057_identity_boundary_completion.sql`       | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
 | `058_policy_evidence_reconstructable.sql`    | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 
-`058_policy_evidence_reconstructable.sql` is **new in FBL-020-R6 and is committed**, so the digest above is of the body on disk rather than of a blob in `HEAD`. It
+`058_policy_evidence_reconstructable.sql` is **new in FBL-020-R6 and is committed**, so the digest above is of a blob in `HEAD` as well as of the body on disk, and the two agree. It
 is the file the frozen-`057` position requires, and it carries FBL-020-R6 §3's four database
 controls: the recorded authentication time bound to the named identity session; a matched
 role binding required to be the exact version observed, in force, in the decision's tenant
