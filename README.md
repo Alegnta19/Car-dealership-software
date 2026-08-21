@@ -308,7 +308,8 @@ twice.)
   in a marked span or in a sentence. Four figures had shipped at two values each before it
   existed. A figure no source can derive must carry a `NOT GATE-CHECKED` label where it
   appears.
-- **The order and the blueprint it comes from.** The active order text is checked in at
+- **The order and the blueprint it comes from.** The active order is **FBL-020-R6**; the R5
+  order text it succeeds is checked in at
   `docs/orders/FBL-020-R5.md`, verbatim and in full, canonical-LF SHA-256
   `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`
   (`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`), with a clause register that marks

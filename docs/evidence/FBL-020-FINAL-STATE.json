@@ -507,6 +507,39 @@
         ]
       },
       "what_it_is": "The documentation-only closeout that carried the SECOND independent adversarial audit's 43 confirmed corrections across the eight delivery documents. Its own exact-SHA run was GREEN, 4 of 4 jobs. It carries no code and is not counted against the budget."
+    },
+    {
+      "sha": "e72c9c14f5ee9e8834092f2004cf06ea3c8cec53",
+      "short": "e72c9c1",
+      "subject": "FBL-020-R6 §5: the third audit, and the counts that keep going stale",
+      "code_bearing": false,
+      "run": {
+        "run_id": 32484937907,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "e72c9c14f5ee9e8834092f2004cf06ea3c8cec53",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "what_it_is": "The documentation-only closeout carrying the THIRD independent adversarial audit's 16 confirmed corrections. Its own exact-SHA run was GREEN, 4 of 4 jobs. It carries no code and is not counted against the budget."
     }
   ]
 }

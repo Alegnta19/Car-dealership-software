@@ -1,7 +1,7 @@
 # FBL-020 — Known Limitations
 
-**Current as of FBL-020-R5.** Stated plainly so the next order starts from facts. The
-active order text is checked in at `docs/orders/FBL-020-R5.md`, canonical-LF SHA-256
+**Current as of FBL-020-R6.** Stated plainly so the next order starts from facts. The R5
+order text FBL-020-R6 succeeds is checked in at `docs/orders/FBL-020-R5.md`, canonical-LF SHA-256
 `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`
 (`sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`); which blueprint governs, and what a bare
 §14 citation resolves to in each, is `docs/orders/BLUEPRINT-PROVENANCE.md`.

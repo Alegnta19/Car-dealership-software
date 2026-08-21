@@ -3,7 +3,8 @@
 **Current as of FBL-020-R5.** The tables and constraints below are those of migrations 055,
 056 and 057 as this tree carries them.
 
-**Governing authority.** The active order is FBL-020-R5, checked in at
+**Governing authority.** The active order is FBL-020-R6; the R5 order text it succeeds is
+checked in at
 [`docs/orders/FBL-020-R5.md`](../orders/FBL-020-R5.md), canonical-LF SHA-256
 `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44`. Per its Appendix A,
 **every R5 clause is UNVERIFIED until the final package proves it**; this document describes

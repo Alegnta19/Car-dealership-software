@@ -45,7 +45,8 @@ cited, so a citation is never the only account of the requirement.
 This paragraph previously read "THE FBL-020-R6 CORRECTION ORDER'S TEXT IS NOT CHECKED IN",
 and said `docs/orders/` held `FBL-020-R5.md` and the Version 1.0 blueprint "and nothing
 else". Both are **withdrawn**: the order text was checked in under finding C3, and that
-directory now holds four documents and two blueprints.
+directory now holds three documents — the R5 and R6 order texts and the provenance record —
+and the two blueprints.
 
 **The repository holds the WHOLE order, verbatim** — Part 1 of that file is the disposition
 and §0 through §5, and its Part 3 register marks all twenty-nine clauses as text held. The
@@ -462,8 +463,10 @@ deleting one line and re-running: exactly one finding reappeared, the one that l
 corroboration, not a substitute for the exact-SHA run.
 
 The scan was re-run on this tree with the same pinned image and the same command:
-**47 commits scanned, `no leaks found`, 0 results in the SARIF report, exit 0** — zero
-UNSUPPRESSED findings. `.gitleaksignore` carries 58 exact finding fingerprints in total: the
+**`no leaks found`, 0 results in the SARIF report, exit 0** — zero UNSUPPRESSED findings. **The
+number of commits scanned is not published here**: it grows with every commit, and the
+authoritative scan is the `secret scan (genuine full history)` job of the exact-SHA run, which
+checks out with `fetch-depth: 0`. `.gitleaksignore` carries 58 exact finding fingerprints in total: the
 54 above and the 4 that predate this order.
 
 ### 2.2 Six further defects, found by the verification pass on this tree
@@ -1310,7 +1313,12 @@ declares `MINIMUM_TESTS` and `MINIMUM_SUITES`; `tests/ci-gates.test.ts` refuses 
 above the `describe(` declarations that exist and a test floor below the `test(`
 declarations that exist.
 
-**THREE FLOOR FIGURES ARE IN PLAY AND THIS REPORT NAMES THE ONE IT USES RATHER THAN CHOOSING SILENTLY.** They are:
+**FOUR FLOOR FIGURES ARE IN PLAY AND THIS REPORT NAMES THE ONE IT USES RATHER THAN CHOOSING
+SILENTLY.** The fourth was MISSING from this list until an audit found it, and it was the one
+set by the ACTIVE order: FBL-020-R6 §4.3, quoted verbatim in `docs/orders/FBL-020-R6.md`,
+requires "at least the submitted 577-test/59-suite level". Listing only R5's floors while R6
+governs is the same defect as any other stale restatement, and it is corrected rather than
+noted. They are:
 
 | Where it is written             | The figure                                                                                        | What kind of statement it is                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -1335,7 +1343,7 @@ thing then happened once more, for the same reason — the fixture that proves
 what the battery now measures, which is what its docstring says a floor is for. `scripts/check-published-figures.ts` holds every restatement of both numbers in
 this report and in the requirement map to their sources.
 
-**This tree satisfies all three, so there is no practical conflict to resolve** — it clears
+**This tree satisfies all four, so there is no practical conflict to resolve** — it clears
 §4's 459 / 47 and Appendix A's 525 / 57 with room, and it MEETS the declared floor exactly,
 which is what pinning a floor to a measurement means rather than a coincidence. What did need resolving is which number the constant NAMED "the order's own
 floor" should carry. It carried 315 / 29 — FBL-020-R4 §7's figures — and earlier revisions
@@ -1371,7 +1379,7 @@ from the description. **Neither group is counted here.** This paragraph publishe
 is the same defect the section is about: a tally beside a list that moves.
 
 **This is a SELECTION, not the registry.** `scripts/mutation-kill.ts` has 55 mutations
-declared; the seven named here are the ones this section discusses. The registry's own count
+declared; the rows named here are the ones this section discusses. The registry's own count
 and run status are in the gate table above, which is the ONE place this report publishes
 them: it was run COMPLETE at this head, and this section names a readable subset rather than
 reprinting the run.
@@ -1943,7 +1951,7 @@ register with reproduction detail is `docs/identity/KNOWN-LIMITATIONS.md`.
    `BEFORE INSERT` trigger on `identity_sessions` makes the local session write impossible,
    and asserts the terminal state, the SINGLE terminal audit event and that no custody
    survives; `scripts/mutation-kill.ts` registers the control as
-   `session_establishment_failure_left_pending`. The remaining four are itemised in
+   `session_establishment_failure_left_pending`. The remaining five are itemised in
    `docs/identity/KNOWN-LIMITATIONS.md`. None is a mandatory gate, and none is a runtime
    authorization hole reachable by an unauthorized caller.
 
@@ -2194,7 +2202,7 @@ them outside such a block.
 | Where it lived                             | The sentence, verbatim                                                                                                                 | Why it was false                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Delivery report §1                         | "TWO CODE-BEARING COMMITS HAVE BEEN PUSHED AND BOTH FAILED THEIR EXACT-SHA CI RUN."                                                    | **Three** exist. `e08af42..174c789` holds `52e1567`, `0e99ecd` and `174c789`                                                                                                                                                                                                                                                                                                                  |
-| Delivery report §1                         | "R5 CODE-BEARING COMMIT: `0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee`. It is the current `HEAD` and it is a RED head, not a submission." | `174c789` has been `HEAD` since it was pushed, and it is green                                                                                                                                                                                                                                                                                                                                |
+| Delivery report §1                         | "R5 CODE-BEARING COMMIT: `0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee`. It is the current `HEAD` and it is a RED head, not a submission." | `174c789` had been `HEAD` since it was pushed, and it is green                                                                                                                                                                                                                                                                                                                                |
 | Delivery report §1                         | "NO CI RUN EXISTS FOR THIS TREE."                                                                                                      | Run 32190154935 measured `174c789`, 4 of 4 jobs successful                                                                                                                                                                                                                                                                                                                                    |
 | Delivery report §8.3                       | "THE R5 CI RUN IS NOT DISCHARGED."                                                                                                     | Same run. The gate that is genuinely undischarged is a run covering the **R6** working tree                                                                                                                                                                                                                                                                                                   |
 | KNOWN-LIMITATIONS                          | "the report's Verification evidence section records local runs on this tree, and **no CI run exists for it**"                          | Same run                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -2220,7 +2228,7 @@ had stopped being true rather than a wording preference.
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `docs/identity/AUTH-FLOWS.md`                          | "**One of the nine reaches no test.**" — of the nine login failure reasons                                     | **All nine reach a test.** §4.2 closed `session_establishment_failed` with a route-level test and a registered mutation                                                                                            |
 | `docs/identity/KNOWN-LIMITATIONS.md`                   | "**Four** items are open here", the count standing above five bullets                                          | **Five**, matching the five it itemises. The `session_establishment_failed` gap that once stood here is closed (§7 item 8)                                                                                         |
-| This report, §7 item 8                                 | "**FIVE disclosed gaps are open**"                                                                             | **Four.** Same closure                                                                                                                                                                                             |
+| This report, §7 item 8                                 | "**FIVE disclosed gaps are open**"                                                                             | **Five**, and the enumeration beneath it now lists five. Same closure                                                                                                                                              |
 | This report, §10.1                                     | "§7 item 8: Four guard-scaffolding gaps → **Five** disclosed gaps"                                             | Back to **four** — the row now records that the fifth was found by that pass and closed by this one                                                                                                                |
 | `tests/login-admission.test.ts` comment                | "`session_establishment_failed` — NOT COVERED BY ANY TEST"                                                     | Names the test that covers it and the mutation that keeps it covered                                                                                                                                               |
 | `docs/identity/DATA-DICTIONARY.md`                     | the `057` digest is produced "at commit `0e99ecd`"                                                             | at `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`. The digest is unchanged at every commit since, because `057` is frozen — the sentence named that commit as `HEAD`, which it stopped being when `0fe4ae7` was pushed |
