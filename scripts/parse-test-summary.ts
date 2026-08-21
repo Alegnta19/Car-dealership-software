@@ -156,7 +156,7 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  */
-export const MINIMUM_TESTS = 653;
+export const MINIMUM_TESTS = 654;
 export const MINIMUM_SUITES = 64;
 
 /**

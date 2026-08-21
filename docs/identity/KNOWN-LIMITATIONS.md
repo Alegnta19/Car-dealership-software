@@ -413,8 +413,8 @@ revocation) is pinned by tests proven to fail when the control is reverted.
 
 ### The CI state, stated once and exactly (FBL-020-R6 §4.4)
 
-**THE FINAL CODE-BEARING COMMIT IS `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32459475019 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32465933403 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.
@@ -422,16 +422,17 @@ the single committed record both documents read is
 **THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, AND NO
 UNCOMMITTED WORK SITS ON TOP OF IT.** R6 §1–§4 were committed after the operator authorised a
 transfer path that required it. It took three attempts: `0fe4ae7` and `242e24a` **both FAILED
-their exact-SHA runs** (32450787623 and 32452596992), and `8444240` is the one the run above
+their exact-SHA runs** (32450787623 and 32452596992), and `b628e0a` is the one the run above
 measured. A green third attempt does not un-fail the first two, and both stay in the record.
 The delivery report's "Verification evidence" section records the local runs as well, and a
 local run is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 7 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 8 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
 failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
 each time, with `174c789` the green one for that order. Under FBL-020-R6 they are `0fe4ae7`
-and `242e24a`, 1 of 4 jobs red each time, with `8444240` the green one above. Delivery report
+and `242e24a`, 1 of 4 jobs red each time, with `8444240` and then `b628e0a` green — the
+latter is the one above. Delivery report
 §1.1 carries the table and names what broke in each.
 
 <!--final-state:withdrawn-->

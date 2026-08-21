@@ -172,10 +172,25 @@ export interface WorkflowRun {
   jobs: RunJob[];
 }
 
-export interface CodeBearingCommit {
+/**
+ * FBL-020-R6: ONE COMMIT IN THE MEASURED RANGE, declaring whether it is CODE-BEARING.
+ *
+ * The interface and the field it types were both named `RangeCommit` /
+ * `code_bearing_commits`, and that was true for exactly as long as every commit in
+ * `r5_baseline..evidence_commit` happened to carry code. `d0b9924` ended it: a
+ * DOCUMENTATION-ONLY closeout, which the orders explicitly allow, landing inside the range.
+ *
+ * The choice was to call a documentation commit code-bearing — overstating a budget breach
+ * the architect has already ruled on, and a budget figure wrong in the direction of severity
+ * is still wrong — or to say what the field actually holds. The gate checks the list against
+ * `git rev-list --first-parent`, so it must hold EVERY commit in the range; `code_bearing`
+ * then decides which ones the budget counts.
+ */
+export interface RangeCommit {
   sha: string;
   short: string;
   subject: string;
+  code_bearing: boolean;
   run: WorkflowRun;
 }
 
@@ -187,14 +202,14 @@ export interface FinalState {
   order: string;
   acceptance: string;
   r5_baseline: { sha: string; subject: string };
-  code_bearing_commits: CodeBearingCommit[];
+  commits_in_the_measured_range: RangeCommit[];
   evidence_commit_sha: string;
   /**
    * FBL-020-R6: THE COMMITS THAT SIT ON TOP OF THE EVIDENCE COMMIT, recorded rather than
    * left out — and this field exists because leaving them out was reproducing the exact
    * defect FBL-020-R5 was rejected for.
    *
-   * `code_bearing_commits` is checked to be EXACTLY the range `r5_baseline..evidence_commit`.
+   * `commits_in_the_measured_range` is checked to be EXACTLY the range `r5_baseline..evidence_commit`.
    * That is the right range for "which commits did the reported run measure", and it is the
    * wrong range for "how many code-bearing commits does this delivery contain": every commit
    * made AFTER the last green run falls outside it and was therefore counted nowhere. Two
@@ -281,6 +296,24 @@ export interface GitFacts {
    * inconclusive result fails the step. `head` is the empty string when this is true.
    */
   absent: boolean;
+  /**
+   * FBL-020-R6: THE PATHS `HEAD` CHANGED, so `this_commit.is_code_bearing` can be CHECKED
+   * instead of believed.
+   *
+   * That field is a declaration about the commit the record lives in — the one commit no
+   * record can name — and it decides the commit budget. It was introduced precisely because
+   * the fact cannot be derived in every environment, and the consequence went unnoticed: a
+   * closeout was authored, declared documentation-only, and committed carrying changes to
+   * `scripts/` and `tests/`. The record said one thing, the commit was another, and nothing
+   * looked. That is the "header asserting a property nobody measured" shape this delivery has
+   * already had to correct three times, in the field built to keep the budget honest.
+   *
+   * Empty where git cannot answer — a shallow clone holds no parent to diff against and a
+   * non-repository holds nothing at all — so the check below is a CROSS-CHECK that runs where
+   * it can, never a second source of truth. `undefined` means "not asked"; an empty array
+   * means "asked, and the commit changed nothing".
+   */
+  headPaths: string[] | undefined;
   /** sha → subject, or `undefined` when the object is not a commit in this repository. */
   subject: Record<string, string | undefined>;
   /** sha → is it an ancestor of HEAD, or HEAD itself. */
@@ -346,13 +379,14 @@ export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
       head: '',
       shallow: false,
       absent: true,
+      headPaths: undefined,
       subject: {},
       ancestorOfHead: {},
       baselineToEvidence: [],
       aheadOfEvidence: [],
     };
   const shallow = gitOrUndefined(['rev-parse', '--is-shallow-repository'], root) === 'true';
-  const shas = [state.r5_baseline.sha, ...state.code_bearing_commits.map((c) => c.sha)];
+  const shas = [state.r5_baseline.sha, ...state.commits_in_the_measured_range.map((c) => c.sha)];
 
   const subject: Record<string, string | undefined> = {};
   const ancestorOfHead: Record<string, boolean> = {};
@@ -376,6 +410,8 @@ export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
       head,
       shallow,
       absent: false,
+      // A --depth 1 clone holds no parent commit, so there is nothing to diff HEAD against.
+      headPaths: undefined,
       subject,
       ancestorOfHead,
       baselineToEvidence: [],
@@ -401,10 +437,12 @@ export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
     return out === '' ? [] : out.split(/\r?\n/);
   };
 
+  const headDiff = gitOrUndefined(['diff-tree', '--no-commit-id', '--name-only', '-r', head], root);
   return {
     head,
     shallow,
     absent: false,
+    headPaths: headDiff === undefined ? undefined : headDiff === '' ? [] : headDiff.split(/\r?\n/),
     subject,
     ancestorOfHead,
     baselineToEvidence: range(state.r5_baseline.sha, state.evidence_commit_sha),
@@ -431,7 +469,7 @@ export interface ForbiddenStatement {
 
 /** The green run: the one attributed to the evidence commit. */
 export function evidenceRun(state: FinalState): WorkflowRun | undefined {
-  return state.code_bearing_commits.find((c) => c.sha === state.evidence_commit_sha)?.run;
+  return state.commits_in_the_measured_range.find((c) => c.sha === state.evidence_commit_sha)?.run;
 }
 
 /**
@@ -762,6 +800,32 @@ export function finalStateProblems(
   const recordedAhead = ahead.map((c) => c.sha);
   const selfCommitCounted = state.this_commit?.is_code_bearing === true;
   const aheadCodeBearing = ahead.filter((c) => c.code_bearing).length + (selfCommitCounted ? 1 : 0);
+  /*
+   * DOCUMENTATION IS A PATH RULE, WRITTEN OUT RATHER THAN LEFT TO INTUITION. Anything under
+   * `docs/` and any Markdown file at the repository root is documentation. A migration is
+   * code. A test is code. A script is code. If a commit touches ANY path outside that set it
+   * is code-bearing, whatever the commit message calls it.
+   */
+  const isDocumentationPath = (path: string): boolean =>
+    path.startsWith('docs/') || /^[^/]+\.md$/.test(path);
+  if (git_.headPaths !== undefined && git_.headPaths.length > 0) {
+    const codePaths = git_.headPaths.filter((f) => !isDocumentationPath(f));
+    const declared = state.this_commit?.is_code_bearing;
+    if (declared === false && codePaths.length > 0)
+      problems.push(
+        `this_commit declares is_code_bearing FALSE, but HEAD changes ${codePaths.length} ` +
+          `path(s) outside docs/: ${codePaths.slice(0, 6).join(', ')}` +
+          (codePaths.length > 6 ? ', …' : '') +
+          '. A commit that carries code is code-bearing however it is described, and the ' +
+          'commit budget counts it.',
+      );
+    if (declared === true && codePaths.length === 0)
+      problems.push(
+        'this_commit declares is_code_bearing TRUE, but HEAD changes nothing outside docs/. ' +
+          'Counting a documentation commit against the budget overstates a breach, which is ' +
+          'as wrong as understating it.',
+      );
+  }
   if (state.this_commit === undefined)
     problems.push(
       'the record does not declare this_commit. A record that cannot say whether the commit ' +
@@ -780,7 +844,7 @@ export function finalStateProblems(
   // ── 1. the SHAs, against git ────────────────────────────────────────────────
   const named: Array<[string, string, string]> = [
     ['the R5 baseline', state.r5_baseline.sha, state.r5_baseline.subject],
-    ...state.code_bearing_commits.map(
+    ...state.commits_in_the_measured_range.map(
       (c) => [`code-bearing commit ${c.short}`, c.sha, c.subject] as [string, string, string],
     ),
   ];
@@ -810,11 +874,26 @@ export function finalStateProblems(
       problems.push(`${label}: ${sha} is not an ancestor of HEAD (${git_.head})`);
   }
 
-  for (const c of state.code_bearing_commits)
+  for (const c of state.commits_in_the_measured_range)
     if (!c.sha.startsWith(c.short))
       problems.push(`code-bearing commit: short form ${c.short} does not abbreviate ${c.sha}`);
 
-  const listed = state.code_bearing_commits.map((c) => c.sha);
+  const listed = state.commits_in_the_measured_range.map((c) => c.sha);
+  /*
+   * COUNTED BY DECLARATION, NOT BY LIST LENGTH. `listed.length` is the size of the RANGE and
+   * the budget is about CODE-BEARING commits, which stopped being the same number the moment
+   * a documentation-only closeout landed inside the range. Using the length would have
+   * overstated the breach by one — and a budget figure that is wrong in the direction of
+   * severity is still a wrong budget figure.
+   */
+  const rangeCodeBearing = state.commits_in_the_measured_range.filter((c) => c.code_bearing).length;
+  for (const c of state.commits_in_the_measured_range)
+    if (typeof c.code_bearing !== 'boolean')
+      problems.push(
+        `commit ${c.short} in the measured range does not declare code_bearing. Every commit ` +
+          'in the range must say which it is, because the budget counts one kind and the ' +
+          'range holds both.',
+      );
   if (!git_.shallow && !git_.absent) {
     const inRange = git_.baselineToEvidence;
     const missing = inRange.filter((sha) => !listed.includes(sha));
@@ -829,13 +908,30 @@ export function finalStateProblems(
       problems.push(
         `${invented.length} recorded commit(s) are not in that range: ${invented.join(', ')}`,
       );
-    if (state.commit_budget.used !== inRange.length + aheadCodeBearing)
+    /*
+     * DERIVED FROM GIT'S RANGE, NOT FROM THE RECORD'S LIST — and this limb is the one the R5
+     * undercount died on, so it may not quietly become a restatement of the record.
+     *
+     * Counting the record's own `code_bearing` flags would make the budget self-consistent at
+     * whatever number the record chose: drop a commit from the list, drop it from the count,
+     * and the arithmetic agrees with itself. That is EXACTLY the shape R5 shipped. So the
+     * count starts from `git rev-list` and subtracts only the commits the record has
+     * explicitly flagged NOT code-bearing AND that git actually holds in the range. A commit
+     * the record omits is therefore counted as code-bearing — the conservative direction —
+     * and the mismatch is reported here as well as by the missing-commit check above.
+     */
+    const excusedInRange = state.commits_in_the_measured_range.filter(
+      (c) => !c.code_bearing && inRange.includes(c.sha),
+    ).length;
+    const expectedInRange = inRange.length - excusedInRange;
+    if (state.commit_budget.used !== expectedInRange + aheadCodeBearing)
       problems.push(
         `commit_budget.used is ${state.commit_budget.used} and git counts ${inRange.length} ` +
-          `code-bearing commit(s) in the recorded range plus ${aheadCodeBearing} on top of the ` +
-          'evidence commit',
+          `commit(s) in the recorded range, of which the record flags ${excusedInRange} as not ` +
+          `code-bearing, plus ${aheadCodeBearing} on top of the evidence commit — ` +
+          `${expectedInRange + aheadCodeBearing} in total`,
       );
-  } else if (state.commit_budget.used !== listed.length + aheadCodeBearing) {
+  } else if (state.commit_budget.used !== rangeCodeBearing + aheadCodeBearing) {
     // Reached on a shallow clone AND on a tree with no repository: neither can recompute
     // the range, and both can still check the record's own arithmetic.
     /*
@@ -845,9 +941,10 @@ export function finalStateProblems(
      * checkout still refuses a record that publishes two while listing three.
      */
     problems.push(
-      `commit_budget.used is ${state.commit_budget.used} and the record lists ` +
-        `${listed.length} code-bearing commit(s) plus ${aheadCodeBearing} on top of the ` +
-        'evidence commit (no history here, so only the record’s own arithmetic was checked)',
+      `commit_budget.used is ${state.commit_budget.used} and the record declares ` +
+        `${rangeCodeBearing} code-bearing commit(s) in the range plus ${aheadCodeBearing} on ` +
+        'top of the evidence commit (no history here, so only the record’s own arithmetic ' +
+        'was checked)',
     );
   }
   /*
@@ -910,8 +1007,16 @@ export function finalStateProblems(
     }
   }
 
+  /*
+   * `failed_ci` is a fact about the BUDGET, so it counts the failures of commits the budget
+   * counts. `d0b9924`'s run was red and `d0b9924` is documentation-only: it is recorded in
+   * full, with its per-job conclusions and its cause, and it is not charged to a budget it
+   * never spent from.
+   */
   const reallyFailed =
-    state.code_bearing_commits.filter((c) => c.run.conclusion !== 'success').length +
+    state.commits_in_the_measured_range.filter(
+      (c) => c.code_bearing && c.run.conclusion !== 'success',
+    ).length +
     ahead.filter((c) => c.code_bearing && c.run !== null && c.run.conclusion !== 'success').length;
   if (state.commit_budget.failed_ci !== reallyFailed)
     problems.push(
@@ -933,7 +1038,7 @@ export function finalStateProblems(
   }
 
   // ── 2. the runs ─────────────────────────────────────────────────────────────
-  for (const c of state.code_bearing_commits)
+  for (const c of state.commits_in_the_measured_range)
     problems.push(...runProblems(`code-bearing commit ${c.short}`, c.sha, c.run));
 
   const run = evidenceRun(state);
@@ -946,7 +1051,7 @@ export function finalStateProblems(
       `the evidence commit's run ${run.run_id} concluded ${run.conclusion}; a red run is not ` +
         'evidence of a green head',
     );
-  if (state.code_bearing_commits.at(-1)?.sha !== state.evidence_commit_sha)
+  if (state.commits_in_the_measured_range.at(-1)?.sha !== state.evidence_commit_sha)
     problems.push('the evidence commit must be the LAST code-bearing commit in the record');
 
   // ── 3. the head relation, and the working tree ──────────────────────────────
@@ -1052,7 +1157,7 @@ export function finalStateProblems(
     if (run === undefined)
       problems.push(
         'working_tree.state says COMMITTED_AS_THE_EVIDENCE_COMMIT, but the evidence commit is ' +
-          'not among code_bearing_commits, so no run is recorded as having measured it',
+          'not among commits_in_the_measured_range, so no run is recorded as having measured it',
       );
     else if (run.conclusion !== 'success')
       problems.push(

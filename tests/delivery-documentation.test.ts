@@ -1668,7 +1668,7 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
     const subject: Record<string, string | undefined> = {};
     const ancestorOfHead: Record<string, boolean> = {};
     const above = s.commits_ahead_of_the_evidence_commit ?? [];
-    for (const c of [s.r5_baseline, ...s.code_bearing_commits, ...above]) {
+    for (const c of [s.r5_baseline, ...s.commits_in_the_measured_range, ...above]) {
       subject[c.sha] = c.subject;
       ancestorOfHead[c.sha] = true;
     }
@@ -1710,12 +1710,15 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
     return {
       head: SELF,
       shallow: false,
+      // No repository, so nothing was asked about what HEAD changed. `undefined` is
+      // "not asked"; an empty array would claim the commit changed nothing.
+      headPaths: undefined,
       // This fixture stands in for a COMPLETE checkout — it hands the gate every fact a full
       // clone would have — so it is not the no-repository case, which has its own test.
       absent: false,
       subject,
       ancestorOfHead,
-      baselineToEvidence: s.code_bearing_commits.map((c) => c.sha).reverse(),
+      baselineToEvidence: s.commits_in_the_measured_range.map((c) => c.sha).reverse(),
       aheadOfEvidence: [SELF, ...above.map((c) => c.sha)],
     };
   };
@@ -1818,7 +1821,8 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
 
   test('the required sentences are DERIVED from the record, so the record cannot drift from them', () => {
     const moved = clone();
-    const green = moved.code_bearing_commits[moved.code_bearing_commits.length - 1];
+    const green =
+      moved.commits_in_the_measured_range[moved.commits_in_the_measured_range.length - 1];
     assert.ok(green);
     green.run.run_id = 99999999999;
     const sentence = requiredStatements(moved).find((s) => s.id === 'final_head_and_run')?.sentence;
@@ -1835,12 +1839,12 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
      * range that held THREE, and no gate compared the list with the history.
      */
     const undercount = clone();
-    const dropped = undercount.code_bearing_commits.shift();
+    const dropped = undercount.commits_in_the_measured_range.shift();
     assert.ok(dropped);
     // The R5 shape exactly: the record's own arithmetic is made self-consistent at the
     // WRONG number, which is what let the published count stay green.
-    undercount.commit_budget.used = undercount.code_bearing_commits.length;
-    undercount.commit_budget.failed_ci = undercount.code_bearing_commits.filter(
+    undercount.commit_budget.used = undercount.commits_in_the_measured_range.length;
+    undercount.commit_budget.failed_ci = undercount.commits_in_the_measured_range.filter(
       (c) => c.run.conclusion !== 'success',
     ).length;
     const problems = finalStateProblems(undercount, facts, docs);
@@ -1865,7 +1869,7 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
       return;
     }
     const invented = clone();
-    const first = invented.code_bearing_commits[0];
+    const first = invented.commits_in_the_measured_range[0];
     assert.ok(first);
     first.sha = 'f'.repeat(40);
     first.short = 'fffffff';
@@ -1877,7 +1881,7 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
     );
 
     const relabelled = clone();
-    const head = relabelled.code_bearing_commits[0];
+    const head = relabelled.commits_in_the_measured_range[0];
     assert.ok(head);
     head.subject = 'FBL-020-R5: something else entirely';
     assert.ok(
@@ -1888,8 +1892,9 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
 
   test('a run whose head_sha is not the commit it is attributed to is REPORTED', () => {
     const branchRun = clone();
-    const green = branchRun.code_bearing_commits[branchRun.code_bearing_commits.length - 1];
-    const first = branchRun.code_bearing_commits[0];
+    const green =
+      branchRun.commits_in_the_measured_range[branchRun.commits_in_the_measured_range.length - 1];
+    const first = branchRun.commits_in_the_measured_range[0];
     assert.ok(green && first);
     green.run.head_sha = first.sha;
     assert.ok(
@@ -1902,7 +1907,8 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
 
   test('a run published as success with a non-success job in it is REPORTED', () => {
     const painted = clone();
-    const green = painted.code_bearing_commits[painted.code_bearing_commits.length - 1];
+    const green =
+      painted.commits_in_the_measured_range[painted.commits_in_the_measured_range.length - 1];
     assert.ok(green);
     const job = green.run.jobs[1];
     assert.ok(job);
@@ -2187,6 +2193,58 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
       );
     } finally {
       rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * FBL-020-R6 — THE DECLARATION THAT DECIDES THE BUDGET IS CHECKED AGAINST THE COMMIT.
+   *
+   * `this_commit.is_code_bearing` cannot be derived everywhere: a shallow clone has no parent
+   * to diff against and the mutation runner's tree copy has no repository at all. So it is
+   * DECLARED, and the arithmetic reads the declaration — which is exactly what let a closeout
+   * be authored as "documentation-only", declared FALSE, and committed carrying changes to
+   * `scripts/` and `tests/`. Nothing looked. It was undone before it was pushed, and the gate
+   * now cross-checks the declaration wherever git can answer.
+   *
+   * Both directions, because only one of them is the mistake that happened and the other is
+   * the one that would overstate a breach the architect has already ruled on.
+   */
+  test('a this_commit declaration that the commit itself contradicts is REPORTED', () => {
+    const codeInHead = cloneFacts();
+    codeInHead.headPaths = ['docs/FBL-020-DELIVERY-REPORT.md', 'scripts/check-final-state.ts'];
+    const saysDocsOnly = clone();
+    saysDocsOnly.this_commit.is_code_bearing = false;
+    assert.ok(
+      finalStateProblems(saysDocsOnly, codeInHead, docs).some((p) =>
+        p.includes('declares is_code_bearing FALSE, but HEAD changes'),
+      ),
+      'a commit that carries code is code-bearing however the record describes it',
+    );
+
+    const docsOnlyHead = cloneFacts();
+    docsOnlyHead.headPaths = ['docs/evidence/FBL-020-FINAL-STATE.json', 'README.md'];
+    const saysCode = clone();
+    saysCode.this_commit.is_code_bearing = true;
+    assert.ok(
+      finalStateProblems(saysCode, docsOnlyHead, docs).some((p) =>
+        p.includes('declares is_code_bearing TRUE, but HEAD changes nothing outside docs/'),
+      ),
+      'counting a documentation commit against the budget overstates the breach, which is as ' +
+        'wrong as understating it',
+    );
+
+    /*
+     * AND IT MUST STAY SILENT WHERE GIT CANNOT ANSWER, rather than guessing. `undefined` is
+     * "not asked" — a shallow clone, or no repository — and an empty array is "asked, and the
+     * commit changed nothing". Neither may produce a finding about the delivery.
+     */
+    for (const unanswerable of [undefined, [] as string[]]) {
+      const quiet = cloneFacts();
+      quiet.headPaths = unanswerable;
+      assert.ok(
+        !finalStateProblems(saysDocsOnly, quiet, docs).some((p) => p.includes('is_code_bearing')),
+        'an environment that cannot answer is not evidence that the record is wrong',
+      );
     }
   });
 

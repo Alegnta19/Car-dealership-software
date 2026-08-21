@@ -8,11 +8,12 @@
     "subject": "FBL-020-R4: documentation closeout — CI evidence for 2b75d8a",
     "what_it_is": "the last commit before FBL-020-R5 began. Every commit in e08af42..174c789 is an R5 code-bearing commit and is listed below; scripts/check-final-state.ts recomputes that range from git and fails if the list and the range disagree in either direction. That comparison is what an undercount cannot survive: the delivery report published TWO commits while the range held THREE."
   },
-  "code_bearing_commits": [
+  "commits_in_the_measured_range": [
     {
       "sha": "52e1567ad67a2ccde30adc4d06ce4009b4762391",
       "short": "52e1567",
       "subject": "FBL-020-R5: identity boundary corrective order",
+      "code_bearing": true,
       "run": {
         "workflow_path": ".github/workflows/ci.yml",
         "run_id": 32162114699,
@@ -46,6 +47,7 @@
       "sha": "0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee",
       "short": "0e99ecd",
       "subject": "FBL-020-R5: close the two defects the exact-SHA CI run exposed",
+      "code_bearing": true,
       "run": {
         "workflow_path": ".github/workflows/ci.yml",
         "run_id": 32168154239,
@@ -79,6 +81,7 @@
       "sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
       "short": "174c789",
       "subject": "FBL-020-R5: close the six blocking items and the stale suite figure",
+      "code_bearing": true,
       "run": {
         "workflow_path": ".github/workflows/ci.yml",
         "run_id": 32190154935,
@@ -112,6 +115,7 @@
       "sha": "0fe4ae70f0553fd32195eda2c617315f5ab19e51",
       "short": "0fe4ae7",
       "subject": "FBL-020-R6: identity boundary closure",
+      "code_bearing": true,
       "run": {
         "run_id": 32450787623,
         "workflow_path": ".github/workflows/ci.yml",
@@ -144,6 +148,7 @@
       "sha": "242e24a8a2517a0d343199a49e736890b34ca2f7",
       "short": "242e24a",
       "subject": "FBL-020-R6: correct the final-state gate for the run that measured it red",
+      "code_bearing": true,
       "run": {
         "run_id": 32452596992,
         "workflow_path": ".github/workflows/ci.yml",
@@ -176,6 +181,7 @@
       "sha": "8444240d1ece6297b20f7ee918bd584dcc9bdb0b",
       "short": "8444240",
       "subject": "FBL-020-R6: the gate must survive a tree that is not a repository",
+      "code_bearing": true,
       "run": {
         "run_id": 32459475019,
         "workflow_path": ".github/workflows/ci.yml",
@@ -203,11 +209,79 @@
         ]
       },
       "what_it_closed": "The two failures above. `0fe4ae7` broke the purity of finalStateProblems by reading the widened forbidden-sentence scan from disk; `242e24a` passed every declared test and died in the step AFTER the battery, because scripts/mutation-kill.ts copies the tree WITHOUT .git and readGitFacts called `git rev-parse HEAD` unguarded. This commit makes a non-repository a third NAMED environment beside `shallow`, proves it by BUILDING the copy the way the runner does, and closes three further defects found while fixing it: a gate that MANDATED a false sentence, a commit budget understated by the record's own shape, and a stand-in git fixture that contradicted the record it stood in for."
+    },
+    {
+      "sha": "d0b99244d69fa95cf425e621e3f42bd0c014ed66",
+      "short": "d0b9924",
+      "subject": "FBL-020-R6 §5: the documentation-only closeout that names 8444240 and its run",
+      "code_bearing": false,
+      "run": {
+        "run_id": 32462910851,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "d0b99244d69fa95cf425e621e3f42bd0c014ed66",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "why_it_failed": "It changed only documents, and it still failed — at the same step as 242e24a, for a sibling of the same cause. tests/delivery-documentation.test.ts carries a STAND-IN for git, used only where there is no .git, and it modelled a tree whose tip IS the evidence commit. That state cannot occur where the stand-in runs: the record NAMES the evidence commit, so the commit CONTAINING the record is strictly later, and in any checkout of a committed record HEAD is above the evidence commit. The stand-in therefore contradicted the record's correct HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT declaration, and only inside the mutation runner's copy, where nothing else looks. It is fixed by modelling the commit the record lives in.",
+      "why_it_is_not_code_bearing": "It changed five documents and nothing else — no code, no test, no migration. Its exact-SHA run was RED, and that red run is recorded here in full; it is not charged to the commit budget, because a budget on CODE-BEARING commits is not spent by a commit that carries no code. Overstating the breach by one would be as wrong as understating it.",
+      "what_it_did_record": "Its content is not withdrawn. It moved the evidence commit onto 8444240, recorded run 32459475019, and carried 34 corrections an independent adversarial audit found across the five governed documents. All of that stands; only the stand-in defect made its own run red."
+    },
+    {
+      "sha": "b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37",
+      "short": "b628e0a",
+      "subject": "FBL-020-R6: a committed record's HEAD is never the evidence commit",
+      "code_bearing": true,
+      "run": {
+        "run_id": 32465933403,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "what_it_closed": "The stand-in for git in tests/delivery-documentation.test.ts modelled a tree whose tip IS the evidence commit — a state that cannot occur where the stand-in runs, because a record NAMES the evidence commit and so the commit CONTAINING it is strictly later. It now models the commit the record lives in. It also raised MINIMUM_TESTS from 652 to the measured 653."
     }
   ],
-  "evidence_commit_sha": "8444240d1ece6297b20f7ee918bd584dcc9bdb0b",
+  "evidence_commit_sha": "b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37",
   "repository_head_relation": "HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT",
-  "repository_head_relation_meaning": "The evidence commit is the FBL-020-R6 work itself, and run 32459475019 measured exactly it with 4 of 4 jobs successful. What sits on top is this DOCUMENTATION-ONLY closeout, which carries no code and exists to name that commit together with its run — R6 section 5 allows exactly one such commit. The relation is AHEAD rather than HEAD_IS_THE_EVIDENCE_COMMIT for the reason this field exists at all: a run cannot exist for a commit before the commit does, so a record that named the SHA of the commit containing it could never be written. No document may say the recorded run measures THIS head; it measures the commit below it, and that commit is the delivery.",
+  "repository_head_relation_meaning": "The evidence commit is b628e0a, the last code-bearing commit, and run 32465933403 measured exactly it with 4 of 4 jobs successful. What sits on top is this DOCUMENTATION-ONLY closeout, which carries no code and exists to name that commit together with its run. The relation is AHEAD rather than HEAD_IS_THE_EVIDENCE_COMMIT for the reason this field exists: a run cannot exist for a commit before the commit does, so a record naming the SHA of the commit containing it could never be written. In fact HEAD_IS_THE_EVIDENCE_COMMIT can never be true of a COMMITTED record at all — the record names the evidence commit, so its own commit is strictly later — and a stand-in that modelled otherwise is what made run 32462910851 red.",
   "working_tree": {
     "state": "COMMITTED_AS_THE_EVIDENCE_COMMIT",
     "what_is_committed": "FBL-020-R6 sections 1 through 4",
@@ -218,7 +292,7 @@
   },
   "commit_budget": {
     "allowed": 1,
-    "used": 7,
+    "used": 8,
     "failed_ci": 4,
     "verdict": "VIOLATED",
     "disclosure_does_not_cure_the_violation": true,
@@ -231,12 +305,12 @@
       },
       "FBL-020-R6": {
         "allowed": 1,
-        "used": 4,
+        "used": 5,
         "failed_ci": 2,
         "verdict": "VIOLATED"
       }
     },
-    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used four, so the budget is breached under BOTH — seven code-bearing commits stand between the R5 baseline and this tip, and four of the seven failed their own exact-SHA run. THE SEVENTH IS THE COMMIT THIS RECORD LIVES IN. It was meant to be a documentation-only closeout and could not be: the first closeout, d0b9924, went red on a defect inside a TEST, and no edit to a document can fix a test. That is disclosed rather than smoothed over, and it is not a defence. d0b9924 itself is documentation-only and does NOT count toward the budget; its red run is recorded in commits_ahead_of_the_evidence_commit, and failed_ci counts only code-bearing commits. THE AGGREGATE USED TO STOP AT THREE, and that was an undercount produced by the record's own shape: code_bearing_commits is checked to be exactly r5_baseline..evidence_commit, so every commit made after the last GREEN run fell outside the counted range and was recorded nowhere — the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closed it and the gate checks that list against git in both directions. R6 §5's verbatim text is NOT held in this repository (docs/orders/FBL-020-R6.md Part 2 marks it derived), so its budget is applied on the same terms as R5 §5 and is reported, not construed."
+    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used five, so the budget is breached under BOTH: eight CODE-BEARING commits exist, seven inside r5_baseline..evidence_commit and the eighth being the commit this record lives in, and four of the eight failed their own exact-SHA run. THE RANGE HOLDS EIGHT COMMITS AND ONLY SEVEN OF THEM ARE COUNTED. d0b9924 is documentation-only — five documents, no code — and a budget on code-bearing commits is not spent by a commit that carries none. Its run was RED and is recorded in full beside it; charging it to the budget would overstate the breach, and a budget figure wrong in the direction of severity is still wrong. That is also why the field is named commits_in_the_measured_range rather than code_bearing_commits: the gate checks it against git rev-list --first-parent so it must hold EVERY commit in the range, and code_bearing decides which ones count. THE AGGREGATE ONCE STOPPED AT THREE, and that was an undercount produced by the record's own shape: the range ends at the evidence commit, so every commit made after the last GREEN run fell outside it and was recorded nowhere — the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closed it and the gate checks that list against git in both directions. Each successor commit exists to close a failure rather than to add scope — that is the explanation and it is not a defence, and the architect has ruled that disclosure does not cure the breach. R6 §5's verbatim text is NOT held in this repository (docs/orders/FBL-020-R6.md Part 2 marks it derived), so its budget is applied on the same terms as R5 §5 and is reported, not construed."
   },
   "submission": {
     "status": "NOT SUBMITTABLE AS COMPLETE",
@@ -244,9 +318,9 @@
       "SECTION 3.1 IS OPEN, AND IT IS OPEN ON THE ONE CLAUSE THIS REPOSITORY CANNOT OBSERVE. §3.1 requires the governing Version 2.0 blueprint to be present in BOTH designated reviewer project copies. What this repository CAN do, it has done: the bytes are committed at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, tracked by git, and filename, byte length, SHA-256, title, version and governing §14.3 are each VERIFIED FROM THOSE BYTES by tests/delivery-documentation.test.ts — so the document is reviewable by anyone who can read this repository. What it CANNOT do is see the two designated copies outside it, and it asserts nothing about them in either direction. The clause is therefore OPEN because it is unobservable from this side, not because anything here has closed it, and whether the committed bytes satisfy the \"both project copies\" wording is the reviewer's decision. An earlier revision of this entry opened with the words \"the supply obligation is DISCHARGED AS FAR AS THIS REPOSITORY CAN DISCHARGE IT\", which read as a discharge inside the list of things that BLOCK submission; the substance is unchanged and the framing is corrected.",
       "LIVE WORKOS CERTIFICATION IS NOT DISCHARGED: no live provider credentials exist in this environment.",
       "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
-      "The one-commit budget was VIOLATED under BOTH orders — seven code-bearing commits where each order allowed one, four of them red. Disclosure does not cure it."
+      "The one-commit budget was VIOLATED under BOTH orders — eight code-bearing commits where each order allowed one, four of them red. Disclosure does not cure it."
     ],
-    "status_reason": "FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN, and §3.1 is open — see blocking[0]. Alongside it: live WorkOS certification is undischarged, the census is reported rather than accepted, and the commit budget was violated under both orders. The CI blocker is GONE: run 32459475019 measured the FBL-020-R6 work itself with 4 of 4 jobs successful, which is evidence for the controls that run exercised and is not acceptance of the order. An earlier revision of this field said \"Section 3.1 is not among the reasons\", which contradicted the sentence this record REQUIRES every governed document to carry; that contradiction is corrected here rather than left for a reader to find."
+    "status_reason": "FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN, and §3.1 is open — see blocking[0]. Alongside it: live WorkOS certification is undischarged, the census is reported rather than accepted, and the commit budget was violated under both orders. The CI blocker is GONE: run 32465933403 measured the FBL-020-R6 work itself with 4 of 4 jobs successful, which is evidence for the controls that run exercised and is not acceptance of the order. An earlier revision of this field said \"Section 3.1 is not among the reasons\", which contradicted the sentence this record REQUIRES every governed document to carry; that contradiction is corrected here rather than left for a reader to find."
   },
   "blueprint_section_3_1": {
     "status": "OPEN",
@@ -299,42 +373,7 @@
   ],
   "this_commit": {
     "is_code_bearing": true,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. THIS COMMIT IS CODE-BEARING and is counted in commit_budget.used. It was intended to be a second documentation-only closeout and could not be: the first closeout's own exact-SHA run went red on a defect in tests/delivery-documentation.test.ts, and no edit to a document can fix a test. Since code had to be touched, scripts/parse-test-summary.ts's MINIMUM_TESTS was raised from 652 to the measured 653 in the same commit rather than left as disclosed slack. scripts/check-final-state.ts takes the code-bearing fact from this declaration rather than from git, so the budget arithmetic is identical in a full checkout, in a shallow clone, and in the tree copy with no .git. repository_head_relation below describes the COMMITTED state; in the working tree this was written in, HEAD was still the evidence commit. There is no value true in both, so the record describes the state that ships and that CI measures."
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. THIS COMMIT IS CODE-BEARING — it changes scripts/check-final-state.ts and tests/delivery-documentation.test.ts alongside the documents — and it is counted in commit_budget.used. IT WAS FIRST AUTHORED AND COMMITTED AS A DOCUMENTATION-ONLY CLOSEOUT, DECLARED is_code_bearing FALSE, AND CARRIED CODE ANYWAY. Nothing caught it, because this field was a declaration and no one checked it against the commit — the same 'header asserting a property nobody measured' shape corrected three times already in this delivery, reappearing in the field built to keep the budget honest. The commit was undone before it was pushed, the declaration corrected, and scripts/check-final-state.ts now CROSS-CHECKS it: where git can answer, it reads the paths HEAD changed and refuses a FALSE declaration over any path outside docs/ and root Markdown, and a TRUE one over a commit that touches nothing else. The declaration remains the source for the arithmetic, because a shallow clone has no parent to diff against and the tree copy with no .git has nothing at all — so the budget comes out the same in every environment, and the cross-check binds it to reality wherever reality is readable."
   },
-  "commits_ahead_of_the_evidence_commit": [
-    {
-      "sha": "d0b99244d69fa95cf425e621e3f42bd0c014ed66",
-      "short": "d0b9924",
-      "subject": "FBL-020-R6 §5: the documentation-only closeout that names 8444240 and its run",
-      "code_bearing": false,
-      "run": {
-        "run_id": 32462910851,
-        "workflow_path": ".github/workflows/ci.yml",
-        "head_sha": "d0b99244d69fa95cf425e621e3f42bd0c014ed66",
-        "conclusion": "failure",
-        "jobs_total": 4,
-        "jobs_non_success": 1,
-        "jobs": [
-          {
-            "name": "typecheck, lint ratchet, build, all tests, scans",
-            "conclusion": "failure"
-          },
-          {
-            "name": "populated upgrade drill + reconciliation negative controls",
-            "conclusion": "success"
-          },
-          {
-            "name": "container build (digest-pinned base)",
-            "conclusion": "success"
-          },
-          {
-            "name": "secret scan (genuine full history)",
-            "conclusion": "success"
-          }
-        ]
-      },
-      "why_it_failed": "It changed only documents, and it still failed — at the same step as 242e24a, for a sibling of the same cause. tests/delivery-documentation.test.ts carries a STAND-IN for git, used only where there is no .git, and it modelled a tree whose tip IS the evidence commit. That state cannot occur where the stand-in runs: the record NAMES the evidence commit, so the commit CONTAINING the record is strictly later, and in any checkout of a committed record HEAD is above the evidence commit. The stand-in therefore contradicted the record's correct HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT declaration, and only inside the mutation runner's copy, where nothing else looks. It is fixed by modelling the commit the record lives in.",
-      "what_it_did_record": "Its content is not withdrawn. It moved the evidence commit onto 8444240, recorded run 32459475019, and carried 34 corrections an independent adversarial audit found across the five governed documents. All of that stands; only the stand-in defect made its own run red."
-    }
-  ]
+  "commits_ahead_of_the_evidence_commit": []
 }
