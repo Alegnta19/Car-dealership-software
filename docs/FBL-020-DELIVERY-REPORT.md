@@ -1686,7 +1686,7 @@ table's prose without consulting any artifact at all). The report was then resto
 byte copy taken before the edit and `diff` confirmed the restoration byte-identical, the
 gate returned exit 0, and the battery returned fully green — 26 tests, which was its size
 when that experiment was run; it holds <!--fig:doc_battery_tests-->48<!--/fig--> on this tree
-(§2.2 S3, plus the two FBL-020-R6 §1 tests). **No digest of this file is
+(§5.1 names what added to it; the additions are not tallied there or here). **No digest of this file is
 quoted here on purpose**: a checksum of the delivery report, published inside the delivery
 report, is stale the instant the next sentence is written — which is the very class §5.4
 exists to close.

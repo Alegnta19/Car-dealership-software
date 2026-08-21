@@ -376,7 +376,7 @@
         "verdict": "VIOLATED"
       }
     },
-    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used six, so the budget is breached under BOTH: nine CODE-BEARING commits stand inside r5_baseline..evidence_commit, and four of the nine failed their own exact-SHA run. THE RANGE HOLDS TEN COMMITS AND ONLY NINE OF THEM ARE COUNTED. d0b9924 is documentation-only — five documents, no code — and a budget on code-bearing commits is not spent by a commit that carries none. Its run was RED and is recorded in full beside it; charging it to the budget would overstate the breach, and a budget figure wrong in the direction of severity is still wrong. That is also why the field is named commits_in_the_measured_range rather than code_bearing_commits: the gate checks it against git rev-list --first-parent so it must hold EVERY commit in the range, and code_bearing decides which ones count. THE AGGREGATE ONCE STOPPED AT THREE, and that was an undercount produced by the record's own shape: the range ends at the evidence commit, so every commit made after the last GREEN run fell outside it and was recorded nowhere — the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closed it and the gate checks that list against git in both directions. Each successor commit exists to close a failure rather than to add scope — that is the explanation and it is not a defence, and the architect has ruled that disclosure does not cure the breach. R6 §5's verbatim text is NOT held in this repository (docs/orders/FBL-020-R6.md Part 2 marks it derived), so its budget is applied on the same terms as R5 §5 and is reported, not construed."
+    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used six, so the budget is breached under BOTH: nine CODE-BEARING commits stand inside r5_baseline..evidence_commit, and four of the nine failed their own exact-SHA run. THE RANGE HOLDS TEN COMMITS AND ONLY NINE OF THEM ARE COUNTED. d0b9924 is documentation-only — five documents, no code — and a budget on code-bearing commits is not spent by a commit that carries none. Its run was RED and is recorded in full beside it; charging it to the budget would overstate the breach, and a budget figure wrong in the direction of severity is still wrong. That is also why the field is named commits_in_the_measured_range rather than code_bearing_commits: the gate checks it against git rev-list --first-parent so it must hold EVERY commit in the range, and code_bearing decides which ones count. THE AGGREGATE ONCE STOPPED AT THREE, and that was an undercount produced by the record's own shape: the range ends at the evidence commit, so every commit made after the last GREEN run fell outside it and was recorded nowhere — the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closed it and the gate checks that list against git in both directions. Each successor commit exists to close a failure rather than to add scope — that is the explanation and it is not a defence, and the architect has ruled that disclosure does not cure the breach. R6 §5's verbatim text is NOT held in this repository AT ALL: docs/orders/FBL-020-R6.md carries §4.3 verbatim and a clause register running §1.1-§4.6 plus C1-C8, and §5 appears in NEITHER. This sentence used to say that Part 2 marks §5 derived; it does not, and the delivery report §1.1 said so correctly while this record said otherwise. The budget is therefore applied on the same terms as R5 §5 and is reported, not construed — and that this repository cannot quote the clause whose budget it applies is stated outright rather than mis-cited."
   },
   "submission": {
     "status": "NOT SUBMITTABLE AS COMPLETE",
@@ -540,6 +540,39 @@
         ]
       },
       "what_it_is": "The documentation-only closeout carrying the THIRD independent adversarial audit's 16 confirmed corrections. Its own exact-SHA run was GREEN, 4 of 4 jobs. It carries no code and is not counted against the budget."
+    },
+    {
+      "sha": "baf4406b718aea5d48633f15014544745134a964",
+      "short": "baf4406",
+      "subject": "FBL-020-R6 §5: the fourth audit — the active order, and a floor nobody listed",
+      "code_bearing": false,
+      "run": {
+        "run_id": 32489418066,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "baf4406b718aea5d48633f15014544745134a964",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "what_it_is": "The documentation-only closeout carrying the FOURTH independent adversarial audit's 12 confirmed corrections — including the governing order still being named FBL-020-R5 in three documents, and a floor figure set by the ACTIVE order that the floor table omitted. Its own exact-SHA run was GREEN, 4 of 4 jobs. It carries no code and is not counted against the budget."
     }
   ]
 }
