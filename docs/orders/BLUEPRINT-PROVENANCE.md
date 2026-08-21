@@ -1,6 +1,7 @@
 # Which blueprint governs, and what a bare §14 citation resolves to in each
 
-**Governing authority.** The active order is **FBL-020-R5**, checked into this repository at
+**Governing authority.** The active order is **FBL-020-R6**; the R5 order text it succeeds is
+checked into this repository at
 [`docs/orders/FBL-020-R5.md`](FBL-020-R5.md), canonical-LF SHA-256
 `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44` — reproduce with
 `sed 's/\r$//' docs/orders/FBL-020-R5.md | sha256sum`. Per that order's Appendix A,

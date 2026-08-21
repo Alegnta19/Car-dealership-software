@@ -6,7 +6,7 @@
   "r5_baseline": {
     "sha": "e08af42755fb1127d611249ba3175161b06e9682",
     "subject": "FBL-020-R4: documentation closeout — CI evidence for 2b75d8a",
-    "what_it_is": "the last commit before FBL-020-R5 began. Every commit in e08af42..174c789 is an R5 code-bearing commit and is listed below; scripts/check-final-state.ts recomputes that range from git and fails if the list and the range disagree in either direction. That comparison is what an undercount cannot survive: the delivery report published TWO commits while the range held THREE."
+    "what_it_is": "e08af42 is the last commit before FBL-020-R5 began, and it is the LOWER bound of the measured range. The upper bound is evidence_commit_sha and it moves; commits_in_the_measured_range is checked to be exactly git rev-list --first-parent between the two. An earlier revision of this field fixed the range at e08af42..174c789 and called every commit in it an R5 code-bearing commit; the range now spans both orders and holds a documentation-only commit, so each entry declares code_bearing for itself rather than inheriting a blanket description from here."
   },
   "commits_in_the_measured_range": [
     {
@@ -353,7 +353,7 @@
     "what_is_committed": "FBL-020-R6 sections 1 through 4",
     "ci_run_for_this_working_tree": null,
     "how_it_was_transferred": "the FBL-020-R6 order instructed the implementation not to commit and not to push. The operator subsequently authorised a different transfer path — committing into the repository — in order to place the governing Version 2.0 blueprint where a reader of this tree can open it. The R6 work was committed under that authorisation.",
-    "what_measured_it": "run 32459475019 measured 8444240d1ece6297b20f7ee918bd584dcc9bdb0b with 4 of 4 jobs successful. Two earlier attempts at the same work FAILED and are recorded above with per-job conclusions and with what broke in each: 32450787623 at 0fe4ae7 and 32452596992 at 242e24a. A green run at the third attempt does not un-fail the first two, and they are not dropped from the record.",
+    "what_measured_it": "The run recorded against evidence_commit_sha in commits_in_the_measured_range measured it, with 4 of 4 jobs successful. It is deliberately NOT restated here: this field described run 32459475019 at 8444240 and went stale twice as the evidence commit moved, which is the defect this whole record exists to stop. Earlier attempts at the same work FAILED and are kept, not dropped — 32450787623 at 0fe4ae7 and 32452596992 at 242e24a, plus 32462910851 at the documentation-only d0b9924 — each with its per-job conclusions and its cause. A green later attempt does not un-fail an earlier one.",
     "how_the_r6_work_was_verified_besides": "every gate was ALSO executed locally against a real PostgreSQL 16 on 127.0.0.1:55434, including check-final-state in a full checkout, in a real --depth 1 clone and in a tree copy with no .git. A local run is not a CI run and is not offered as one."
   },
   "commit_budget": {
@@ -441,5 +441,39 @@
     "is_code_bearing": false,
     "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit is the FBL-020-R6 §5 DOCUMENTATION-ONLY closeout — documents and this record, no code, no test, no migration — so it is NOT code-bearing and does not move commit_budget.used. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown. The check exists because the claim was once made falsely — a closeout authored as documentation-only and committed carrying scripts/ and tests/ — and nothing looked. The declaration still drives the arithmetic, because a shallow clone has no parent to diff against and the tree copy with no .git that scripts/mutation-kill.ts runs its batteries inside has nothing at all, so the budget comes out the same in every environment and is bound to reality wherever reality is readable. LIKE repository_head_relation, BOTH DESCRIBE THE COMMITTED STATE: run in the working tree before this closeout exists, the cross-check reads the paths of whatever is currently HEAD — the gate being right about the wrong commit — and the head relation reads the tree without this commit in it. Neither arises in CI, where a run checks out the commit under test. The working procedure is to re-run the gate and the documentation battery AFTER committing and BEFORE pushing, and the exact-SHA run recorded against this closeout is what a reader should check."
   },
-  "commits_ahead_of_the_evidence_commit": []
+  "commits_ahead_of_the_evidence_commit": [
+    {
+      "sha": "6eed39b624caf83724db1186b534b3e86015fa2e",
+      "short": "6eed39b",
+      "subject": "FBL-020-R6 §5: the closeout that names f113fad and its run",
+      "code_bearing": false,
+      "run": {
+        "run_id": 32476428553,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "6eed39b624caf83724db1186b534b3e86015fa2e",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "what_it_is": "The FBL-020-R6 §5 documentation-only closeout that named f113fad and run 32474578625. Its own exact-SHA run was GREEN, 4 of 4 jobs — the first §5 closeout whose run was, d0b9924's having been red. It is recorded here rather than left out because a commit made after the last measured run is still a commit; it is not counted against the budget because it carries no code."
+    }
+  ]
 }

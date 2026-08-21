@@ -395,8 +395,9 @@ sed 's/\r$//' migrations/057_identity_boundary_completion.sql | sha256sum
 ```
 
 produce `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67`. `057` is frozen,
-so the digest is the same at `174c789` — the evidence commit — and at `242e24a`, which is this
-repository's `HEAD`.
+so the digest is the same at every commit in the range, `174c789` and the evidence commit
+included. This sentence named `174c789` as the evidence commit and `242e24a` as `HEAD`; both
+moved, which is why neither is named here any more — delivery report §1 states them once.
 `docs/FBL-020-DELIVERY-REPORT.md` publishes the same values beside their git blob OIDs,
 under its "The migration chain" heading, measured on this tree. (This sentence named
 `0e99ecd` until FBL-020-R6 §4.4; that commit stopped being `HEAD` when `174c789` was pushed,
@@ -431,8 +432,7 @@ in a report, in a ticket or in a review, it is this value.
 | `057_identity_boundary_completion.sql`       | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
 | `058_policy_evidence_reconstructable.sql`    | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 
-`058_policy_evidence_reconstructable.sql` is **new in this working tree and not yet
-committed**, so the digest above is of the body on disk rather than of a blob in `HEAD`. It
+`058_policy_evidence_reconstructable.sql` is **new in FBL-020-R6 and is committed**, so the digest above is of the body on disk rather than of a blob in `HEAD`. It
 is the file the frozen-`057` position requires, and it carries FBL-020-R6 §3's four database
 controls: the recorded authentication time bound to the named identity session; a matched
 role binding required to be the exact version observed, in force, in the decision's tenant

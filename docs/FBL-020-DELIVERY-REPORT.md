@@ -169,18 +169,19 @@ that commit this repository's `HEAD`?" with **YES** — true when written, false
 final commit is stated. That is finding C4's own defect class, in the paragraph that records
 it.
 
-| Property                       | FBL-020-R5 evidence run                              | FBL-020-R6 evidence run                              |
-| ------------------------------ | ---------------------------------------------------- | ---------------------------------------------------- |
-| Workflow                       | `.github/workflows/ci.yml`                           | `.github/workflows/ci.yml`                           |
-| Run / number / attempt         | 32190154935 / 50 / 1                                 | 32465933403 / 57 / 1                                 |
-| `head_sha` equals commit?      | **YES** — `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **YES** — `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` |
-| Jobs / non-success             | **4 / 0**                                            | **4 / 0**                                            |
-| Is it the EVIDENCE commit now? | No — superseded by the R6 evidence commit            | **YES** — this is the delivery                       |
+**THIS TABLE IS GONE, AND ITS ABSENCE IS THE FIX.** It restated one run's workflow path, id,
+run number, `head_sha`, job counts and evidence status — six facts that move every time the
+evidence commit moves. It went stale three times in a row while the sentence directly above it
+was being kept correct, which is not a proofreading failure but a design one: a second copy of
+a moving fact has no way to stay right.
 
-`8444240` was the R6 evidence commit for one revision and its run 32459475019 was green;
-it was superseded by `b628e0a`, which is green in its own right. Both are in the §1.1 table
-with their per-job conclusions. **A superseded green run is not withdrawn** — it measured what
-it measured — and it is simply not the evidence run any more.
+Every one of those properties is in `commits_in_the_measured_range` in
+`docs/evidence/FBL-020-FINAL-STATE.json`, per commit, with per-job conclusions — and §1.1
+transcribes the whole list. `scripts/check-final-state.ts` holds the record to git and holds
+this document to the record. **A superseded green run is not withdrawn**: every run that ever
+measured a commit in the range is still in that table with its conclusion, including the ones
+that were briefly the evidence run. They measured what they measured; they are simply not the
+evidence run any more.
 
 **NEITHER ROW ANSWERS "IS IT `HEAD`?", AND THAT IS DELIBERATE.** `HEAD` is the
 documentation-only closeout that names the R6 run, which sits one commit above the evidence
@@ -200,11 +201,11 @@ UNCOMMITTED WORK SITS ON TOP OF IT.** Until the operator authorised a different 
 said the opposite and was correct in saying it: R6 §1–§4 sat in the working tree and nothing
 had been pushed. They are committed now. The first two attempts, `0fe4ae7` and `242e24a`,
 **both FAILED their exact-SHA runs** — 32450787623 and 32452596992, the same one job of four
-red each time. `8444240` and then `b628e0a` were green; `b628e0a` is the commit named above.
-§1.1 records every one of them
+red each time, and the code-bearing commits after them were green. The one named above is the
+evidence commit. §1.1 records every commit in the range
 with per-job conclusions and with what broke in each.
 
-**A GREEN CI RUN NOW MEASURES THE FBL-020-R6 WORK, AT THE THIRD ATTEMPT.** While the first
+**A GREEN CI RUN MEASURES THE FBL-020-R6 WORK.** While the first
 two were red the evidence commit stayed at `174c789` — the last commit whose own run had
 concluded success — because moving that label onto a red commit would be the FBL-020-R5
 defect with a fresh SHA in it. It has moved now, and it has moved onto a commit its own run
@@ -230,34 +231,51 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 **THE ONE-COMMIT BUDGET WAS VIOLATED: 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Each order allows one
 code-bearing commit plus an optional documentation-only closeout, and **both orders are
-over**: FBL-020-R5 used three, FBL-020-R6 has used six. The sixth is the commit this
-revision is made in, counted rather than deferred — a record cannot name the SHA of the
+over**: FBL-020-R5 used three and FBL-020-R6 six. §1.1 enumerates every one of them, and the
+count is read from `commit_budget` in the record rather than tallied here — a record cannot name the SHA of the
 commit that contains it, so the gate exempts `HEAD` from the ahead-of-evidence LIST and adds
 it back to the COUNT, printing a note whenever that allowance is in play. R6 §5's verbatim text is not held in
 this repository — `docs/orders/FBL-020-R6.md` Part 2 marks it derived — so its budget is
 applied on the same terms as R5 §5 and is reported rather than construed.
 
 **THIS FIGURE READ 3 UNTIL THIS REVISION, AND THE UNDERCOUNT WAS PRODUCED BY THE RECORD'S OWN
-SHAPE.** `commits_in_the_measured_range` is checked to be exactly `e08af42..174c789`, the range the
-reported run measured. The two R6 commits were made AFTER the last green run, so they fell
+SHAPE.** `commits_in_the_measured_range` is checked to be exactly `r5_baseline..evidence_commit`, the
+range the reported run measured. The two R6 commits were made AFTER the last green run, so they fell
 outside the counted range and were recorded nowhere — the same "lists fewer commits than the
 history holds" defect FBL-020-R5 was rejected for, reproduced inside the field built to
 disclose it. `commits_ahead_of_the_evidence_commit` now records them, and
 `scripts/check-final-state.ts` checks that list against `git rev-list <evidence>..HEAD` in
 BOTH directions, so a commit git holds and the record omits fails the build.
 
-| #   | Code-bearing commit                        | Exact-SHA `ci.yml` run | Conclusion                |
-| --- | ------------------------------------------ | ---------------------- | ------------------------- |
-| 1   | `52e1567ad67a2ccde30adc4d06ce4009b4762391` | **32162114699** (48)   | **FAILURE** — 2 of 4 jobs |
-| 2   | `0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee` | **32168154239** (49)   | **FAILURE** — 2 of 4 jobs |
-| 3   | `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **32190154935** (50)   | **SUCCESS** — 4 of 4 jobs |
-| 4   | `0fe4ae70f0553fd32195eda2c617315f5ab19e51` | **32450787623**        | **FAILURE** — 1 of 4 jobs |
-| 5   | `242e24a8a2517a0d343199a49e736890b34ca2f7` | **32452596992**        | **FAILURE** — 1 of 4 jobs |
-| 6   | `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` | **32459475019** (55)   | **SUCCESS** — 4 of 4 jobs |
-| —   | `d0b99244d69fa95cf425e621e3f42bd0c014ed66` | **32462910851** (56)   | **FAILURE** — 1 of 4 jobs |
-| 7   | `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` | **32465933403** (57)   | **SUCCESS** — 4 of 4 jobs |
+| #   | Commit in `r5_baseline..evidence_commit`   | Exact-SHA `ci.yml` run | Conclusion                      |
+| --- | ------------------------------------------ | ---------------------- | ------------------------------- |
+| 1   | `52e1567ad67a2ccde30adc4d06ce4009b4762391` | **32162114699**        | **FAILURE** — 2 of 4 jobs red   |
+| 2   | `0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee` | **32168154239**        | **FAILURE** — 2 of 4 jobs red   |
+| 3   | `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **32190154935**        | **SUCCESS** — 4 of 4 jobs green |
+| 4   | `0fe4ae70f0553fd32195eda2c617315f5ab19e51` | **32450787623**        | **FAILURE** — 1 of 4 jobs red   |
+| 5   | `242e24a8a2517a0d343199a49e736890b34ca2f7` | **32452596992**        | **FAILURE** — 1 of 4 jobs red   |
+| 6   | `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` | **32459475019**        | **SUCCESS** — 4 of 4 jobs green |
+| —   | `d0b99244d69fa95cf425e621e3f42bd0c014ed66` | **32462910851**        | **FAILURE** — 1 of 4 jobs red   |
+| 7   | `b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` | **32465933403**        | **SUCCESS** — 4 of 4 jobs green |
+| 8   | `e8ec81d045e3ddbc4de07419914c098af2536b74` | **32470560425**        | **SUCCESS** — 4 of 4 jobs green |
+| 9   | `f113fad7c0487aada4773612322208714661a52c` | **32474578625**        | **SUCCESS** — 4 of 4 jobs green |
 
-Rows 1–3 are FBL-020-R5 and the rest are FBL-020-R6. **THE UNNUMBERED ROW IS NOT A
+**THE PROPERTIES THAT HOLD OF EVERY ROW ABOVE**, stated once for the whole table rather than
+retyped per run — which is how the version of this that described a single run went stale
+three times while the sentence above it was kept correct:
+
+| Property                  | Every row above                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Workflow                  | `.github/workflows/ci.yml` — `scripts/check-final-state.ts` refuses any other path                                |
+| `head_sha` equals commit? | **YES** — the gate refuses a run whose `head_sha` is not the commit it is attributed to                           |
+| Per-job conclusions       | read individually, never inferred from the run-level one; the gate refuses a run that disagrees with its own jobs |
+| Jobs / non-success        | **4 / 0** on every SUCCESS row above; the failures carry their own counts in the Conclusion column                |
+
+**THE TABLE ABOVE IS THE WHOLE RANGE, NOT A SELECTION FROM IT**, and it is transcribed from
+`commits_in_the_measured_range` in `docs/evidence/FBL-020-FINAL-STATE.json` — the list
+`scripts/check-final-state.ts` checks against `git rev-list --first-parent` in both
+directions. Numbered rows are code-bearing and are charged to the budget; the unnumbered row
+is not. Rows 1–3 are FBL-020-R5 and the rest are FBL-020-R6. **THE UNNUMBERED ROW IS NOT A
 CODE-BEARING COMMIT AND IS NOT CHARGED TO THE BUDGET.** `d0b9924` is the §5
 documentation-only closeout — five documents, no code, no test, no migration — and its
 exact-SHA run went red anyway, on a defect inside a TEST that no document edit could reach: a
@@ -298,20 +316,20 @@ exactly what no document in this repository may do, and the same claim in its ot
 is already in `scripts/check-final-state.ts`'s `FORBIDDEN` list. Who must act, and exactly
 what they must verify on arrival, are in §8.4 and `docs/orders/BLUEPRINT-PROVENANCE.md`.
 
-| Question                           | This tree                                                             |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| Final code-bearing commit          | `b628e0a` — the R6 work, measured by its own run                      |
-| Exact-SHA CI run for that commit   | 32465933403 — **SUCCESS, 4 of 4 jobs**                                |
-| A GREEN run for the R6 work?       | **Yes** — four R6 code-bearing commits, two red then two green (§1.1) |
-| `npm run build`                    | 0 TypeScript errors                                                   |
-| Full suite                         | see §5 — zero failed, cancelled, skipped or todo                      |
-| `npm run architecture:check`       | green                                                                 |
-| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                                            |
-| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)                       |
-| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8)                  |
-| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)                         |
-| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)                                |
-| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                                  |
+| Question                           | This tree                                                           |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| Final code-bearing commit          | stated once, in §1 — **not restated here**                          |
+| Exact-SHA CI run for that commit   | stated once, in §1 — **not restated here**                          |
+| A GREEN run for the R6 work?       | **Yes** — the run named in §1 measured it; §1.1 lists every attempt |
+| `npm run build`                    | 0 TypeScript errors                                                 |
+| Full suite                         | see §5 — zero failed, cancelled, skipped or todo                    |
+| `npm run architecture:check`       | green                                                               |
+| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                                          |
+| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)                     |
+| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8)                |
+| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)                       |
+| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)                              |
+| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                                |
 
 <!--final-state:withdrawn-->
 
@@ -1219,7 +1237,7 @@ TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:55434/dealership_test" \
 | `scripts/mutation-kill.ts`                   | **55 declared / 55 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `scripts/check-published-figures.ts`         | every figure in this report and in the requirement map equals the artifact or constant it derives from (§5.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `scripts/database-control-mutations.ts`      | **<!--fig:db_controls_declared-->25<!--/fig--> declared / <!--fig:db_controls_killed-->25<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `scripts/check-final-state.ts`               | **exit 0** — the record matches git (**six** commits, six subjects, the range in both directions, plus the ahead-of-evidence list checked against `git rev-list <evidence>..HEAD`), the run data is internally consistent, and all five governed documents restate the same final state (§1). It does NOT assert that the evidence commit is `HEAD`: `HEAD` is the documentation-only closeout above it, which is what `repository_head_relation` records                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `scripts/check-final-state.ts`               | **exit 0** — the record matches git (every commit in the range, every subject, the range in both directions, plus the ahead-of-evidence list checked against `git rev-list <evidence>..HEAD`), the run data is internally consistent, and all five governed documents restate the same final state (§1). It does NOT assert that the evidence commit is `HEAD`: `HEAD` is the documentation-only closeout above it, which is what `repository_head_relation` records                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | …the same gate on a tree copy with NO `.git` | **exit 0**, printing `git history: ABSENT (this tree is not a git repository)` and naming the head relation together with the four history limbs as unrun. This is the NAMED TRAP'S SIXTH APPEARANCE — what a developer tree has and another checkout does not, after four gitignored-artifact instances and one shallow clone. `scripts/mutation-kill.ts` builds exactly this environment on every run (`isolatedCopy()` excludes `.git` on purpose), and `readGitFacts` called `git rev-parse HEAD` unguarded, so every test driving this gate was red inside the copy BEFORE any mutation was applied; run 32452596992 died there with a battery in which every declared test passed. A non-repository is NOT a harsher shallow clone — a shallow clone still answers `rev-parse HEAD` and still decides the head relation — and the two are asserted apart. The named test `the gate SURVIVES a tree copy with NO .git, and says the head relation did not run` BUILDS the copy the way the runner does rather than reasoning about it, and proves the DOCUMENT half still bites there by corrupting the record inside the copy and requiring the gate to fail |
 | …the same gate on a REAL `--depth 1` clone   | **exit 0**, printing `git history: SHALLOW` and naming the four limbs that could not run there. That is the R6 gate's finding C2 closed and PROVED rather than reasoned about: the named test `the gate SURVIVES a real --depth 1 clone, and says which limbs did not run` makes the clone with git and runs the real gate against it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Populated upgrade drill + fingerprints       | green end to end on two independent drill databases: retained fixture digests OK, **12 of 12** reconciliation negative controls satisfied with `controls_filtered: false`, all **four** verifier phases OK (`backfill`, `pre-057`, `post-057`, and the `post-058` phase R6-R6 §D1b added), **9 of 9** ledger and fixture-mode refusal probes satisfied, and the fresh chain and the upgrade path converging on ONE schema fingerprint. **The VALUE is not published here.** R6-R6's §D1 fix changes the schema — `pd_evidence_version_known` is replaced and the column default moves — so every fingerprint recorded before it, `2fb41662…` included, describes a superseded schema. A new one is a CI fact, and run 32459475019 at `8444240` is that fact — 4 of 4 jobs, the upgrade-drill job among them. This clause read "no GREEN CI run measures this work" while the first two R6 attempts were red; that was true then and is false now, and §1 carries the corrected state (§6)                                                                                                                                                                          |
@@ -1289,8 +1307,7 @@ declares `MINIMUM_TESTS` and `MINIMUM_SUITES`; `tests/ci-gates.test.ts` refuses 
 above the `describe(` declarations that exist and a test floor below the `test(`
 declarations that exist.
 
-**THREE FLOOR FIGURES ARE IN PLAY, THEY ARE NOT THE SAME NUMBER, AND THIS REPORT NAMES THE
-ONE IT USES RATHER THAN CHOOSING SILENTLY.** They are:
+**THREE FLOOR FIGURES ARE IN PLAY AND THIS REPORT NAMES THE ONE IT USES RATHER THAN CHOOSING SILENTLY.** They are:
 
 | Where it is written             | The figure                                                                                        | What kind of statement it is                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -1452,7 +1469,7 @@ load, so five green runs are evidence of determinism and not a proof of it. The 
 named above are closed by construction — no new backend can attach once connections are
 withdrawn, and the drop is issued only after the server reports none attached — and the
 remaining assurance is a green exact-SHA CI run, which §4 requires and which **now exists**:
-run 32465933403 at `b628e0a`, four of four jobs (§1).
+the run §1 names, four of four jobs.
 
 **G5 — the revert proof.** `scripts/check-census-prose.ts` exits 0 as shipped. Flip the
 report's position token and it exits 1 naming both halves of the disagreement; flip the
@@ -1475,7 +1492,8 @@ git status --porcelain --untracked-files=all
 
 The first command measures the whole delta from the cumulative acceptance base `cac9b21` to
 the working tree, excluding this report so that editing the report cannot move the figure.
-The second lists what is UNCOMMITTED against `HEAD`. **The evidence commit is `b628e0a`**,
+The second lists what is UNCOMMITTED against `HEAD`. **The evidence commit is the one §1
+names**,
 the FBL-020-R6 work itself, and what sits above it is the documentation-only closeout that
 names it together with its run — which is why `repository_head_relation` reads
 `HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT` rather than naming a SHA it cannot know.
@@ -1901,7 +1919,7 @@ register with reproduction detail is `docs/identity/KNOWN-LIMITATIONS.md`.
    by database CHECK. **`step_up_token_uses` (migration 050) is dead weight** — no longer
    written or read; dropping it is a future migration.
 
-8. **FOUR disclosed gaps are open, all of them guard scaffolding carried from R4**: three
+8. **FIVE disclosed gaps are open, all of them guard scaffolding carried from R4**: three
    declared residue shapes of the audit-inventory gate that are described accurately but have
    no fixture; one audit-inventory rule (the variant-overflow branch) with no test; the same
    untested-rule shape in the sibling owned-mutation gate; and a shared-resolver header that
@@ -1974,7 +1992,7 @@ Not risks. Not residual. **Work that is not done.**
 
 3. **THE CI GATE IS DISCHARGED, AND WHAT THAT DOES AND DOES NOT MEAN IS STATED HERE RATHER
    THAN LEFT TO BE READ INTO IT.** Run 32190154935 measured `174c789` for FBL-020-R5, and
-   run 32465933403 measures `b628e0a` for FBL-020-R6 — four of four jobs each — so the entry
+   the run named in §1 measures the R6 evidence commit — four of four jobs each — so the entry
    this list used to carry, asserting that the R5 CI run was not discharged, is **withdrawn
    as false** and is quoted where it is withdrawn, in §10; so is its successor, which said no
    green run measured the R6 work. **A green run is evidence for the controls it exercised
@@ -2050,8 +2068,8 @@ Not risks. Not residual. **Work that is not done.**
    `submission.status`, and `scripts/check-final-state.ts` refuses any other status while
    `blueprint_section_3_1.status` is `OPEN`.
 
-**So four gates remain undischarged: live WorkOS certification, acceptance of the census, a
-CI run covering the FBL-020-R6 working tree, and §3.1's supply of the Version 2.0 blueprint
+**So three gates remain undischarged: live WorkOS certification, acceptance of the census, and
+§3.1 — the CI gate is DISCHARGED by the run §1 names. What that run covers is the FBL-020-R6 working tree, and §3.1's supply of the Version 2.0 blueprint
 into the project record.** Three of the four cannot be discharged from inside this
 repository at all. **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN.**
 
@@ -2201,7 +2219,7 @@ had stopped being true rather than a wording preference.
 | `docs/identity/DATA-DICTIONARY.md`                     | "this document is one of the **nine** §3.6 documents"                                                          | one of the **ten** reconciled documents — §4.4 added the requirement map, which was itself one of the four rejected for a stale final state                                                                        |
 | `tests/delivery-documentation.test.ts`                 | test name _the nine documents §3.6 names exist and all speak of this revision_                                 | _the ten reconciled documents exist and all speak of this revision_; the requirement map is in the list, and its citations of test names are masked so a citation is not read as a claim                           |
 | The requirement map, `R5-§2.2`                         | "the drops are by-hand experiments … not entries in the mutation registry"                                     | `scripts/database-control-mutations.ts` drops each database control from a copy of the migrated database and CI gates on zero survivors. `mutation-kill.ts` still carries none, and says why                       |
-| The requirement map, `R5-§4-verification-gates`        | "a green run at the final head is what discharges them, and **no such run exists** while nothing is committed" | Two exist — run 32190154935 at `174c789` for R5 and run 32465933403 at `b628e0a` for R6, 4 of 4 jobs each. The R6 work is not uncommitted: it IS `b628e0a`                                                         |
+| The requirement map, `R5-§4-verification-gates`        | "a green run at the final head is what discharges them, and **no such run exists** while nothing is committed" | Green runs exist for both orders — 32190154935 at `174c789` for R5, and the run §1 names for R6, 4 of 4 jobs each. The R6 work is not uncommitted; §1.1 lists every commit in the range                            |
 | The requirement map, `R5-§4-verification-gates`        | the mutation totals retyped inside a verdict                                                                   | Removed. The totals are published once, in §5 of this report, and read from the artifact by `scripts/check-published-figures.ts`                                                                                   |
 | The requirement map, `R5-§3.6-document-reconciliation` | "All **nine** documents exist…"                                                                                | All **ten**                                                                                                                                                                                                        |
 | This report, §5 gate table                             | "Migrations `000`, `049`–`056` vs `cac9b21` — byte-identical"                                                  | `000`, `049`–`057` vs `174c789`, with the `cac9b21` comparison kept for the subset it is true of                                                                                                                   |
@@ -2343,9 +2361,10 @@ Every "old" value in this column is a figure this repository really did publish.
 
 ## 11. Position
 
-FBL-000 closed → FBL-010 closed → **FBL-020 IN PROGRESS. THE FINAL CODE-BEARING COMMIT IS
-`b628e0a9f4bb95970c7a7c6e9a657edcd43e4e37` AND ITS EXACT-SHA `.github/workflows/ci.yml` RUN
-32465933403 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL**; **THE ONE-COMMIT BUDGET WAS VIOLATED:
+FBL-000 closed → FBL-010 closed → **FBL-020 IN PROGRESS.** The final code-bearing commit and
+the run that measured it are stated in §1 and are deliberately **not restated here** — §1
+declares itself the only place this document states them, and this section used to break that
+by publishing a superseded pair. **THE ONE-COMMIT BUDGET WAS VIOLATED:
 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
 DOES NOT CURE THE VIOLATION** (§1.1); **THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA
 RUN NAMED ABOVE MEASURED IT, AND NO UNCOMMITTED WORK SITS ON TOP OF IT** — at the third
@@ -2356,8 +2375,8 @@ repository and whether the two reviewer project copies hold them is not observab
 who must act and what they must verify on arrival are in §8.4 and
 `docs/orders/BLUEPRINT-PROVENANCE.md`) → live WorkOS certification **NOT
 DISCHARGED** (no credentials, §8.1) → the census **REPORTED, NOT ACCEPTED** (§8.2) → a CI
-a GREEN run measuring the R6 work **DISCHARGED** by run 32465933403 at `b628e0a` (§8.3),
-which is evidence for the controls it exercised and is not acceptance → FBL-030 **not started**, and nothing in
+a GREEN run measuring the R6 work **DISCHARGED** by the run named in §1 (§8.3), which is
+evidence for the controls it exercised and is not acceptance → FBL-030 **not started**, and nothing in
 this revision touches it.
 
 **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN.** This report is not a claim

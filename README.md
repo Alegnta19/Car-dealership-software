@@ -345,8 +345,8 @@ stands anywhere in this repository as a governing status.
 
 **THE FINAL CODE-BEARING COMMIT IS `f113fad7c0487aada4773612322208714661a52c` AND ITS
 EXACT-SHA `.github/workflows/ci.yml` RUN 32474578625 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
-That commit IS the FBL-020-R6 work, measured by its own run at the third attempt; the first
-two, `0fe4ae7` and `242e24a`, **both FAILED their runs** and are recorded rather than dropped.
+That commit IS the FBL-020-R6 work, measured by its own run. Earlier attempts failed their own
+runs — `0fe4ae7` and `242e24a` among them — and every one is recorded rather than dropped.
 A green run is evidence for the controls it exercised and is not acceptance. The one-commit
 budget was violated under both orders: nine code-bearing commits where each allowed one, four
 of them red. §1 and §1.1 of `docs/FBL-020-DELIVERY-REPORT.md` carry the tables, and
