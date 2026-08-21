@@ -110,8 +110,8 @@
     }
   ],
   "evidence_commit_sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
-  "repository_head_relation": "HEAD_IS_THE_EVIDENCE_COMMIT",
-  "repository_head_relation_meaning": "git rev-list <evidence_commit_sha>..HEAD is EMPTY, so the commit the green run measured is the tip of this repository. scripts/check-final-state.ts recomputes that and fails when the declaration and git disagree. This is the check FBL-020-R5 could not survive: once 174c789 was pushed, a report still naming 0e99ecd as HEAD was measurably wrong, and nothing measured it.",
+  "repository_head_relation": "HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT",
+  "repository_head_relation_meaning": "The R6 code-bearing commit sits ON TOP of the evidence commit this record names, so the exact-SHA run recorded here MEASURES THE EVIDENCE COMMIT AND NOT THIS HEAD. That is the honest state of a commit whose own run has not happened yet: a run cannot exist for a commit before the commit does. R6 §5 permits one documentation-only closeout, and naming this head together with its own exact-SHA run is exactly what that closeout is for. Until then no document may say the recorded run measures this head — that claim is what R5 was rejected for and what this gate exists to refuse.",
   "working_tree": {
     "state": "UNCOMMITTED_ON_TOP_OF_THE_EVIDENCE_COMMIT",
     "what_is_uncommitted": "FBL-020-R6 §1 through §4",

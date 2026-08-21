@@ -802,9 +802,16 @@ export function finalStateProblems(
    * regions and an occurrence in one is therefore an assertion, never a quotation.
    */
   for (const file of ALSO_SCANNED) {
-    const full = join(ROOT, file);
-    if (!existsSync(full)) continue;
-    const scanned = normalize(readFileSync(full, 'utf8'));
+    /*
+     * From `documents`, never from disk. `finalStateProblems` is PURE over the map it is
+     * handed — that is what lets the suite stage a document, and what lets the gate run
+     * against a `--depth 1` clone by reading that clone's files. An earlier revision of this
+     * loop called readFileSync(join(ROOT, …)) and broke both at once: it scanned the working
+     * repository while the caller was asking about somewhere else.
+     */
+    const text = documents[file];
+    if (text === undefined) continue;
+    const scanned = normalize(text);
     for (const forbidden of FORBIDDEN)
       if (scanned.includes(normalize(forbidden.sentence)))
         problems.push(
@@ -843,6 +850,12 @@ export function finalStateProblems(
 export function readDocuments(root = ROOT): Record<string, string> {
   const documents: Record<string, string> = {};
   for (const file of GOVERNED) documents[file] = readFileSync(join(root, file), 'utf8');
+  // The wider forbidden-scan surface. Optional: a shallow clone or a staged fixture may
+  // not carry every one, and a file that is absent is simply not scanned.
+  for (const file of ALSO_SCANNED) {
+    const full = join(root, file);
+    if (existsSync(full)) documents[file] = readFileSync(full, 'utf8');
+  }
   return documents;
 }
 

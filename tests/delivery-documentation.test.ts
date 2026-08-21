@@ -1885,17 +1885,36 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
      */
     const ahead = cloneFacts();
     ahead.aheadOfEvidence = ['a'.repeat(40)];
+    /*
+     * FBL-020-R6: the record itself now declares HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT,
+     * because the R6 commit sits on top of the commit the recorded run measured. The
+     * property under test is unchanged — git decides, not the record — so the CLAIM is
+     * staged here rather than read from a record that happens to agree with git today.
+     */
+    const claimsTip = {
+      ...state,
+      repository_head_relation: 'HEAD_IS_THE_EVIDENCE_COMMIT' as const,
+    };
     assert.ok(
-      finalStateProblems(state, ahead, docs).some((p) =>
+      finalStateProblems(claimsTip, ahead, docs).some((p) =>
         p.includes('commit(s) sit on top of the evidence commit'),
       ),
       'a record claiming the evidence commit is the tip must fail once it is not',
     );
 
+    /*
+     * The reverse direction. Both sides are STAGED for the same reason as above: the real
+     * git facts now genuinely have HEAD ahead of the evidence commit, so a record declaring
+     * AHEAD agrees with them and raises nothing. The property is that the gate refuses a
+     * declaration git contradicts — in either direction — not that today's tree happens to
+     * contradict one of them.
+     */
+    const atTip = cloneFacts();
+    atTip.aheadOfEvidence = [];
     const behind = clone();
     behind.repository_head_relation = 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT';
     assert.ok(
-      finalStateProblems(behind, facts, docs).some((p) =>
+      finalStateProblems(behind, atTip, docs).some((p) =>
         p.includes('is empty — the evidence commit IS the tip'),
       ),
       'and the declaration is checked in BOTH directions',
@@ -1981,9 +2000,16 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
         output.includes('The delivery documents state ONE final state'),
         'and the gate must PASS: a fetch depth is not a finding about the delivery',
       );
-      // The limb R5 was rejected over is DERIVED from HEAD alone, so it still runs here.
+      /*
+       * The limb R5 was rejected over is DERIVED from HEAD alone, so it still runs here.
+       * Assert that a relation is DECIDED, not which one: the record legitimately reads
+       * HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT between a code-bearing commit and its own run,
+       * and pinning the other value made this test a statement about today rather than
+       * about the property.
+       */
       assert.ok(
-        output.includes('HEAD_IS_THE_EVIDENCE_COMMIT'),
+        output.includes('HEAD_IS_THE_EVIDENCE_COMMIT') ||
+          output.includes('HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT'),
         'the head relation must still be decided on a shallow clone',
       );
       assert.ok(
