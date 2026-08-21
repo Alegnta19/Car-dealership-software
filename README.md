@@ -343,11 +343,13 @@ twice.)
 Nothing in this README closes one, and no "closed"/"discharged" claim about an R5 clause
 stands anywhere in this repository as a governing status.
 
-**THE FINAL CODE-BEARING COMMIT IS `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32190154935 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
-The FBL-020-R6 work sits ON TOP of it, committed as `0fe4ae7` and `242e24a`, and **both of
-those runs FAILED** — so no green run measures it. The one-commit budget was violated under
-both orders: six code-bearing commits where each allowed one, four of them red. §1 and §1.1 of `docs/FBL-020-DELIVERY-REPORT.md` carry the tables, and
+**THE FINAL CODE-BEARING COMMIT IS `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32459475019 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL.**
+That commit IS the FBL-020-R6 work, measured by its own run at the third attempt; the first
+two, `0fe4ae7` and `242e24a`, **both FAILED their runs** and are recorded rather than dropped.
+A green run is evidence for the controls it exercised and is not acceptance. The one-commit
+budget was violated under both orders: six code-bearing commits where each allowed one, four
+of them red. §1 and §1.1 of `docs/FBL-020-DELIVERY-REPORT.md` carry the tables, and
 **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN** — §3.1 requires the governing
 Version 2.0 blueprint in both designated project copies; the document itself is committed here
 at `docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx`, and whether

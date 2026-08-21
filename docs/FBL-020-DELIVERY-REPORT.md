@@ -150,8 +150,8 @@ sentence by sentence. R5 was rejected for exactly the defect that gate now catch
 checked-in final state had stopped being true and every figure gate stayed green, because
 none of the false sentences was a number.
 
-**THE FINAL CODE-BEARING COMMIT IS `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32190154935 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32459475019 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions, read individually rather than inferred from the run
 level:
 
@@ -162,31 +162,51 @@ level:
 | `container build (digest-pinned base)`                       | **success** |
 | `secret scan (genuine full history)`                         | **success** |
 
-| Property                                 | Value                                                |
-| ---------------------------------------- | ---------------------------------------------------- |
-| Workflow                                 | `.github/workflows/ci.yml`                           |
-| Run / number / attempt                   | 32190154935 / 50 / 1                                 |
-| `head_sha` equals commit?                | **YES** — `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` |
-| Jobs / non-success                       | **4 / 0**                                            |
-| Is that commit this repository's `HEAD`? | **YES** — `git rev-list 174c789..HEAD` is empty      |
+**TWO GREEN RUNS ARE IN PLAY AND THE TABLE NAMES BOTH**, because naming only one is how this
+section went stale. Until this closeout it described run 32190154935 alone and answered "is
+that commit this repository's `HEAD`?" with **YES** — true when written, false from the moment
+`0fe4ae7` was pushed, and sitting inside the very section that calls itself the only place the
+final commit is stated. That is finding C4's own defect class, in the paragraph that records
+it.
+
+| Property                       | FBL-020-R5 evidence run                              | FBL-020-R6 evidence run                              |
+| ------------------------------ | ---------------------------------------------------- | ---------------------------------------------------- |
+| Workflow                       | `.github/workflows/ci.yml`                           | `.github/workflows/ci.yml`                           |
+| Run / number / attempt         | 32190154935 / 50 / 1                                 | 32459475019 / 55 / 1                                 |
+| `head_sha` equals commit?      | **YES** — `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **YES** — `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` |
+| Jobs / non-success             | **4 / 0**                                            | **4 / 0**                                            |
+| Is it the EVIDENCE commit now? | No — superseded by the R6 evidence commit            | **YES** — this is the delivery                       |
+
+**NEITHER ROW ANSWERS "IS IT `HEAD`?", AND THAT IS DELIBERATE.** `HEAD` is the
+documentation-only closeout that names the R6 run, which sits one commit above the evidence
+commit; a run cannot exist for a commit before the commit does, so no record written into a
+commit can claim that commit is measured. The relation between `HEAD` and the evidence commit
+is published in exactly one place, `repository_head_relation` in
+`docs/evidence/FBL-020-FINAL-STATE.json`, and `scripts/check-final-state.ts` decides it from
+git rather than accepting the record's word for it.
 
 **THE R5 CI GATE IS DISCHARGED at that commit**, and that sentence is worth reading exactly
 as narrowly as it is written. It says the exact-SHA run exists, that its `head_sha` is the
 code-bearing commit, and that every job in it succeeded. **It is not acceptance of R5**,
 which the review has explicitly withheld — a green run is valid evidence for the controls it
 exercised and for nothing more — and it is not evidence about work the run did not measure.
-**THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN EARLIER
-COMMIT AND NOT IT.** Until the operator authorised a different transfer path, this paragraph
+**THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, AND NO
+UNCOMMITTED WORK SITS ON TOP OF IT.** Until the operator authorised a different transfer path, this paragraph
 said the opposite and was correct in saying it: R6 §1–§4 sat in the working tree and nothing
-had been pushed. They are now committed as `0fe4ae7` and `242e24a`, **and both of their
-exact-SHA runs FAILED** — 32450787623 and 32452596992, the same one job of four red each
-time. §1.1 records them with per-job conclusions and with what broke.
+had been pushed. They are committed now. The first two attempts, `0fe4ae7` and `242e24a`,
+**both FAILED their exact-SHA runs** — 32450787623 and 32452596992, the same one job of four
+red each time — and the third, `8444240`, is the commit named above. §1.1 records all three
+with per-job conclusions and with what broke in each.
 
-**NO GREEN CI RUN MEASURES THE FBL-020-R6 WORK**, which is why the evidence commit named
-above is deliberately still `174c789`: it is the last commit whose own exact-SHA run
-concluded success, and moving that label onto a red commit would be the FBL-020-R5 defect
-with a fresh SHA in it. Every gate in §5 was ALSO executed locally against a real
-PostgreSQL 16 on `127.0.0.1:55434`; a local run is not a CI run and is not offered as one.
+**A GREEN CI RUN NOW MEASURES THE FBL-020-R6 WORK, AT THE THIRD ATTEMPT.** While the first
+two were red the evidence commit stayed at `174c789` — the last commit whose own run had
+concluded success — because moving that label onto a red commit would be the FBL-020-R5
+defect with a fresh SHA in it. It has moved now, and it has moved onto a commit its own run
+measured. **A green third attempt does not un-fail the first two**, and neither is dropped:
+§1.1 keeps both with per-job conclusions and with what broke in each. Every gate in §5 was
+ALSO executed locally against a real PostgreSQL 16 on `127.0.0.1:55434` — including
+`check-final-state` in a full checkout, in a real `--depth 1` clone and in a tree copy with
+no `.git`; a local run is not a CI run and is not offered as one.
 
 **WHAT THE REVIEW HAS ACCEPTED, recorded because a reader is owed the boundary from both
 sides.** The review states that both supplied source archives represent `174c789` and that
@@ -227,8 +247,9 @@ BOTH directions, so a commit git holds and the record omits fails the build.
 | 3   | `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **32190154935** (50)   | **SUCCESS** — 4 of 4 jobs |
 | 4   | `0fe4ae70f0553fd32195eda2c617315f5ab19e51` | **32450787623**        | **FAILURE** — 1 of 4 jobs |
 | 5   | `242e24a8a2517a0d343199a49e736890b34ca2f7` | **32452596992**        | **FAILURE** — 1 of 4 jobs |
+| 6   | `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` | **32459475019** (55)   | **SUCCESS** — 4 of 4 jobs |
 
-Rows 1–3 are FBL-020-R5 and rows 4–5 are FBL-020-R6. **What broke in each R6 run is named
+Rows 1–3 are FBL-020-R5 and rows 4–6 are FBL-020-R6. **What broke in each R6 run is named
 rather than left as a conclusion.** In `0fe4ae7`, the final-state gate this order added read
 its widened forbidden-sentence scan from DISK instead of from the document map it is handed,
 breaking the purity `finalStateProblems` depends on and taking five subtests with it — the
@@ -261,20 +282,20 @@ exactly what no document in this repository may do, and the same claim in its ot
 is already in `scripts/check-final-state.ts`'s `FORBIDDEN` list. Who must act, and exactly
 what they must verify on arrival, are in §8.4 and `docs/orders/BLUEPRINT-PROVENANCE.md`.
 
-| Question                           | This tree                                             |
-| ---------------------------------- | ----------------------------------------------------- |
-| Last GREEN code-bearing commit     | `174c789` — `HEAD` is `242e24a`, two commits above it |
-| Exact-SHA CI run for that commit   | 32190154935 — **SUCCESS, 4 of 4 jobs**                |
-| A GREEN run for the R6 work?       | **No** — committed, and both its runs FAILED (§1.1)   |
-| `npm run build`                    | 0 TypeScript errors                                   |
-| Full suite                         | see §5 — zero failed, cancelled, skipped or todo      |
-| `npm run architecture:check`       | green                                                 |
-| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                            |
-| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)       |
-| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8)  |
-| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)         |
-| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)                |
-| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                  |
+| Question                           | This tree                                                |
+| ---------------------------------- | -------------------------------------------------------- |
+| Final code-bearing commit          | `8444240` — the R6 work itself, measured by its own run  |
+| Exact-SHA CI run for that commit   | 32459475019 — **SUCCESS, 4 of 4 jobs**                   |
+| A GREEN run for the R6 work?       | **Yes**, at the third attempt — the first two red (§1.1) |
+| `npm run build`                    | 0 TypeScript errors                                      |
+| Full suite                         | see §5 — zero failed, cancelled, skipped or todo         |
+| `npm run architecture:check`       | green                                                    |
+| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                               |
+| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)          |
+| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8)     |
+| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)            |
+| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)                   |
+| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                     |
 
 <!--final-state:withdrawn-->
 
@@ -1182,10 +1203,10 @@ TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:55434/dealership_test" \
 | `scripts/mutation-kill.ts`                   | **55 declared / 55 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `scripts/check-published-figures.ts`         | every figure in this report and in the requirement map equals the artifact or constant it derives from (§5.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `scripts/database-control-mutations.ts`      | **<!--fig:db_controls_declared-->25<!--/fig--> declared / <!--fig:db_controls_killed-->25<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `scripts/check-final-state.ts`               | **exit 0** — the record matches git (three commits, three subjects, the range in both directions), the run data is internally consistent, the evidence commit IS this repository's `HEAD`, and all five governed documents restate the same final state (§1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `scripts/check-final-state.ts`               | **exit 0** — the record matches git (**six** commits, six subjects, the range in both directions, plus the ahead-of-evidence list checked against `git rev-list <evidence>..HEAD`), the run data is internally consistent, and all five governed documents restate the same final state (§1). It does NOT assert that the evidence commit is `HEAD`: `HEAD` is the documentation-only closeout above it, which is what `repository_head_relation` records                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | …the same gate on a tree copy with NO `.git` | **exit 0**, printing `git history: ABSENT (this tree is not a git repository)` and naming the head relation together with the four history limbs as unrun. This is the NAMED TRAP'S SIXTH APPEARANCE — what a developer tree has and another checkout does not, after four gitignored-artifact instances and one shallow clone. `scripts/mutation-kill.ts` builds exactly this environment on every run (`isolatedCopy()` excludes `.git` on purpose), and `readGitFacts` called `git rev-parse HEAD` unguarded, so every test driving this gate was red inside the copy BEFORE any mutation was applied; run 32452596992 died there with a battery in which every declared test passed. A non-repository is NOT a harsher shallow clone — a shallow clone still answers `rev-parse HEAD` and still decides the head relation — and the two are asserted apart. The named test `the gate SURVIVES a tree copy with NO .git, and says the head relation did not run` BUILDS the copy the way the runner does rather than reasoning about it, and proves the DOCUMENT half still bites there by corrupting the record inside the copy and requiring the gate to fail |
 | …the same gate on a REAL `--depth 1` clone   | **exit 0**, printing `git history: SHALLOW` and naming the four limbs that could not run there. That is the R6 gate's finding C2 closed and PROVED rather than reasoned about: the named test `the gate SURVIVES a real --depth 1 clone, and says which limbs did not run` makes the clone with git and runs the real gate against it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Populated upgrade drill + fingerprints       | green end to end on two independent drill databases: retained fixture digests OK, **12 of 12** reconciliation negative controls satisfied with `controls_filtered: false`, all **four** verifier phases OK (`backfill`, `pre-057`, `post-057`, and the `post-058` phase R6-R6 §D1b added), **9 of 9** ledger and fixture-mode refusal probes satisfied, and the fresh chain and the upgrade path converging on ONE schema fingerprint. **The VALUE is not published here.** R6-R6's §D1 fix changes the schema — `pd_evidence_version_known` is replaced and the column default moves — so every fingerprint recorded before it, `2fb41662…` included, describes a superseded schema. A new one is a CI fact, and no GREEN CI run measures this work; §1 records that state and does not paper over it (§6)                                                                                                                                                                                                                                                                                                                                                        |
+| Populated upgrade drill + fingerprints       | green end to end on two independent drill databases: retained fixture digests OK, **12 of 12** reconciliation negative controls satisfied with `controls_filtered: false`, all **four** verifier phases OK (`backfill`, `pre-057`, `post-057`, and the `post-058` phase R6-R6 §D1b added), **9 of 9** ledger and fixture-mode refusal probes satisfied, and the fresh chain and the upgrade path converging on ONE schema fingerprint. **The VALUE is not published here.** R6-R6's §D1 fix changes the schema — `pd_evidence_version_known` is replaced and the column default moves — so every fingerprint recorded before it, `2fb41662…` included, describes a superseded schema. A new one is a CI fact, and run 32459475019 at `8444240` is that fact — 4 of 4 jobs, the upgrade-drill job among them. This clause read "no GREEN CI run measures this work" while the first two R6 attempts were red; that was true then and is false now, and §1 carries the corrected state (§6)                                                                                                                                                                          |
 | Migrations `000`, `049`–`057` vs `174c789`   | byte-identical (§4.2); `000` and `049`–`056` are also byte-identical to `cac9b21`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **NO FIGURE IN THIS TABLE IS TYPED BY HAND ANY MORE.** Every one of them is now read from
@@ -1261,19 +1282,26 @@ ONE IT USES RATHER THAN CHOOSING SILENTLY.** They are:
 | FBL-020-R5 Appendix A item 9    | <!--fig:order_appendix_tests-->525<!--/fig--> / <!--fig:order_appendix_suites-->57<!--/fig-->     | a quality condition on a count the implementer had already reported, not a second floor |
 | `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->652<!--/fig--> / <!--fig:floor_suites-->64<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
 
-**THE DECLARED FLOOR IS THE MEASURED TOTAL, AND IT WAS SIX BELOW IT UNTIL THIS REVISION.**
-`MINIMUM_TESTS` stood at 646 while the battery measured <!--fig:suite_tests-->653<!--/fig-->,
-inside a constant whose own docstring says a floor is raised to what a measured run reports
-"rather than left with slack". 646 was right when it was written — 642 plus the four tests
-findings C1, C2 and C7 added — and the corrective waves after it added six more without
-moving it. Six tests of slack still catches a suite that collapses, but it silently permits
-six tests to be deleted, which is what a floor exists to refuse. **The constant is raised to
-the measurement rather than the docstring softened**, and `scripts/check-published-figures.ts`
-holds every restatement of it in this report and in the requirement map to the source.
+**THE DECLARED FLOOR WAS SIX BELOW THE MEASUREMENT AND IS NOW ONE BELOW IT, AND THE REMAINING
+GAP IS DISCLOSED RATHER THAN ROUNDED AWAY.** `MINIMUM_TESTS` stood at 646 while the battery
+measured 652, inside a constant whose own docstring says a floor is raised to what a measured
+run reports "rather than left with slack". 646 was right when it was written — 642 plus the
+four tests findings C1, C2 and C7 added — and the corrective waves after it added six more
+without moving it, so it was raised to 652.
+
+**IT IS 652 AND THE BATTERY NOW MEASURES <!--fig:suite_tests-->653<!--/fig-->, ONE TEST OF
+SLACK**, because this order's last wave added the named test that proves the final-state gate
+survives a tree copy with no `.git`. Raising the constant is a change to
+`scripts/parse-test-summary.ts`, and this is the FBL-020-§5 documentation-only closeout, which
+carries no code — so the slack is **reported here instead of silently carried**, and raising
+the constant belongs to whichever order next touches code. One test of slack still fails a
+suite that collapses; it permits exactly one test to be deleted unnoticed, and that is the
+cost of not changing code in a closeout. `scripts/check-published-figures.ts` holds every
+restatement of both numbers in this report and in the requirement map to their sources.
 
 **This tree satisfies all three, so there is no practical conflict to resolve** — it clears
-§4's 459 / 47 and Appendix A's 525 / 57 with room, and it MEETS the declared floor exactly,
-which is what pinning a floor to a measurement means rather than a coincidence. What did need resolving is which number the constant NAMED "the order's own
+§4's 459 / 47 and Appendix A's 525 / 57 with room, and it clears the declared floor of 652 by
+one test rather than meeting it exactly — see the disclosure above. What did need resolving is which number the constant NAMED "the order's own
 floor" should carry. It carried 315 / 29 — FBL-020-R4 §7's figures — and earlier revisions
 recorded that as a standing finding in the map's `R5-§4-verification-gates` verdict rather
 than correcting it. **It is corrected here**: `ORDER_MINIMUM_TESTS = 459` and
@@ -1406,8 +1434,8 @@ Identical in every column. **What this does not prove:** the failure was intermi
 load, so five green runs are evidence of determinism and not a proof of it. The mechanisms
 named above are closed by construction — no new backend can attach once connections are
 withdrawn, and the drop is issued only after the server reports none attached — and the
-remaining assurance is a green exact-SHA CI run, which §4 requires and which **does not
-exist**: the work IS committed now, and both of its runs failed (§1.1).
+remaining assurance is a green exact-SHA CI run, which §4 requires and which **now exists**:
+run 32459475019 at `8444240`, four of four jobs (§1).
 
 **G5 — the revert proof.** `scripts/check-census-prose.ts` exits 0 as shipped. Flip the
 report's position token and it exits 1 naming both halves of the disagreement; flip the
@@ -1430,12 +1458,12 @@ git status --porcelain --untracked-files=all
 
 The first command measures the whole delta from the cumulative acceptance base `cac9b21` to
 the working tree, excluding this report so that editing the report cannot move the figure.
-The second lists what is UNCOMMITTED against `HEAD`. **`HEAD` is
-`242e24a8a2517a0d343199a49e736890b34ca2f7`, and it is NOT the evidence commit**: the evidence
-commit is `174c789`, two commits below it, because that is the last one whose exact-SHA run
-was green. `docs/evidence/FBL-020-FINAL-STATE.json` records both facts — the relation between
-them is the field `repository_head_relation` — and every governed document restates them from
-there rather than keeping its own copy.
+The second lists what is UNCOMMITTED against `HEAD`. **The evidence commit is `8444240`**,
+the FBL-020-R6 work itself, and what sits above it is the documentation-only closeout that
+names it together with its run — which is why `repository_head_relation` reads
+`HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT` rather than naming a SHA it cannot know.
+`docs/evidence/FBL-020-FINAL-STATE.json` records both facts and every governed document
+restates them from there rather than keeping its own copy.
 
 **WHY THE DIFFSTAT IS GONE TOO, AND NOT MERELY THE UNTRACKED COUNT.** R5's version of this
 paragraph published `164 tracked files changed, +40,796 / −2,413` beside a command that
@@ -1927,18 +1955,22 @@ Not risks. Not residual. **Work that is not done.**
    is withdrawn; `docs/evidence/FBL-020-R6-MIGRATION-PREFLIGHT.md` records the change and
    why it was made.
 
-3. **NO GREEN CI RUN MEASURES THE FBL-020-R6 WORK.** This entry is narrower than the one it
-   replaces, and the narrowing is the point. The R5 CI gate IS discharged at its final
-   code-bearing commit — run 32190154935 measured `174c789` and every one of its four jobs
-   succeeded (§1) — so the entry this list used to carry, asserting that the R5 CI run was
-   not discharged, is **withdrawn as false** and is quoted where it is withdrawn, in §10.
-   What remains undischarged is different and is stated exactly: FBL-020-R6 §1–§4 are
-   COMMITTED, at `0fe4ae7` and `242e24a`, and both of their exact-SHA runs FAILED. A run
+3. **THE CI GATE IS DISCHARGED, AND WHAT THAT DOES AND DOES NOT MEAN IS STATED HERE RATHER
+   THAN LEFT TO BE READ INTO IT.** Run 32190154935 measured `174c789` for FBL-020-R5, and
+   run 32459475019 measures `8444240` for FBL-020-R6 — four of four jobs each — so the entry
+   this list used to carry, asserting that the R5 CI run was not discharged, is **withdrawn
+   as false** and is quoted where it is withdrawn, in §10; so is its successor, which said no
+   green run measured the R6 work. **A green run is evidence for the controls it exercised
+   and for nothing more.** It is not acceptance, it does not close §3.1, it does not
+   discharge live WorkOS certification, and it does not cure the commit-budget violation —
+   two earlier R6 commits failed their own runs and are recorded, not dropped. A run
    measures a commit rather
    than a working tree. Every R6 gate was executed locally against a real PostgreSQL 16;
    that is corroboration, not a CI run, and it is not offered as one. **The one-commit
-   budget was also VIOLATED** — three code-bearing commits, two of them red — which §1.1
-   records as a violation rather than as a mitigated footnote.
+   budget was also VIOLATED** — six code-bearing commits, four of them red, across the two
+   orders — which §1.1 records as a violation rather than as a mitigated footnote. This
+   clause published three and two until this closeout, which made the report state the
+   budget at two values at once; §1.1's table is the authority and it enumerates all six.
 
 4. **§3.1 IS OPEN, AND WHAT KEEPS IT OPEN CHANGED UNDER FBL-020-R6.** This section
    previously listed three gates and omitted this one, which left the report's own canonical
@@ -2140,24 +2172,24 @@ reviewer needs to check the delivery lived only in a chat transcript. That is cl
 Each of these was checked against the tree before it was changed, and each is a claim that
 had stopped being true rather than a wording preference.
 
-| Where                                                  | Claim as it stood                                                                                              | What it is now                                                                                                                                                                               |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docs/identity/AUTH-FLOWS.md`                          | "**One of the nine reaches no test.**" — of the nine login failure reasons                                     | **All nine reach a test.** §4.2 closed `session_establishment_failed` with a route-level test and a registered mutation                                                                      |
-| `docs/identity/KNOWN-LIMITATIONS.md`                   | "**Five** items are open here", the fifth being the untested `session_establishment_failed` exit               | **Four**, all guard scaffolding carried from R4. The fifth is closed, and the bullet that described it is replaced by what closed it                                                         |
-| This report, §7 item 8                                 | "**FIVE disclosed gaps are open**"                                                                             | **Four.** Same closure                                                                                                                                                                       |
-| This report, §10.1                                     | "§7 item 8: Four guard-scaffolding gaps → **Five** disclosed gaps"                                             | Back to **four** — the row now records that the fifth was found by that pass and closed by this one                                                                                          |
-| `tests/login-admission.test.ts` comment                | "`session_establishment_failed` — NOT COVERED BY ANY TEST"                                                     | Names the test that covers it and the mutation that keeps it covered                                                                                                                         |
-| `docs/identity/DATA-DICTIONARY.md`                     | the `057` digest is produced "at commit `0e99ecd`"                                                             | at `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`, which is `HEAD`. The digest is unchanged, because `057` is frozen                                                                             |
-| `docs/identity/DATA-DICTIONARY.md`                     | "Every migration in this repository is committed — `git status --short migrations/` reports nothing"           | Every migration **through `057`** is committed; `058` is UNTRACKED, by instruction, and has no `HEAD` blob to compare against                                                                |
-| `docs/identity/DATA-DICTIONARY.md`                     | "this document is one of the **nine** §3.6 documents"                                                          | one of the **ten** reconciled documents — §4.4 added the requirement map, which was itself one of the four rejected for a stale final state                                                  |
-| `tests/delivery-documentation.test.ts`                 | test name _the nine documents §3.6 names exist and all speak of this revision_                                 | _the ten reconciled documents exist and all speak of this revision_; the requirement map is in the list, and its citations of test names are masked so a citation is not read as a claim     |
-| The requirement map, `R5-§2.2`                         | "the drops are by-hand experiments … not entries in the mutation registry"                                     | `scripts/database-control-mutations.ts` drops each database control from a copy of the migrated database and CI gates on zero survivors. `mutation-kill.ts` still carries none, and says why |
-| The requirement map, `R5-§4-verification-gates`        | "a green run at the final head is what discharges them, and **no such run exists** while nothing is committed" | One exists — run 32190154935 at `174c789`, 4 of 4 jobs — and it measured that commit and not the uncommitted R6 work                                                                         |
-| The requirement map, `R5-§4-verification-gates`        | the mutation totals retyped inside a verdict                                                                   | Removed. The totals are published once, in §5 of this report, and read from the artifact by `scripts/check-published-figures.ts`                                                             |
-| The requirement map, `R5-§3.6-document-reconciliation` | "All **nine** documents exist…"                                                                                | All **ten**                                                                                                                                                                                  |
-| This report, §5 gate table                             | "Migrations `000`, `049`–`056` vs `cac9b21` — byte-identical"                                                  | `000`, `049`–`057` vs `174c789`, with the `cac9b21` comparison kept for the subset it is true of                                                                                             |
-| This report, §5.1                                      | the battery's growth attributed to "S3 … and FBL-020-R6 §1.1/§1.2 added two"                                   | …and §4.5 added the fifteen that drive the final-state gate. The size itself is read from the file, never typed                                                                              |
-| `README.md`                                            | "**six** gates exist to make the evidence mechanical"                                                          | **Seven**, and the seventh is the one that reads sentences rather than numbers                                                                                                               |
+| Where                                                  | Claim as it stood                                                                                              | What it is now                                                                                                                                                                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docs/identity/AUTH-FLOWS.md`                          | "**One of the nine reaches no test.**" — of the nine login failure reasons                                     | **All nine reach a test.** §4.2 closed `session_establishment_failed` with a route-level test and a registered mutation                                                                                            |
+| `docs/identity/KNOWN-LIMITATIONS.md`                   | "**Five** items are open here", the fifth being the untested `session_establishment_failed` exit               | **Four**, all guard scaffolding carried from R4. The fifth is closed, and the bullet that described it is replaced by what closed it                                                                               |
+| This report, §7 item 8                                 | "**FIVE disclosed gaps are open**"                                                                             | **Four.** Same closure                                                                                                                                                                                             |
+| This report, §10.1                                     | "§7 item 8: Four guard-scaffolding gaps → **Five** disclosed gaps"                                             | Back to **four** — the row now records that the fifth was found by that pass and closed by this one                                                                                                                |
+| `tests/login-admission.test.ts` comment                | "`session_establishment_failed` — NOT COVERED BY ANY TEST"                                                     | Names the test that covers it and the mutation that keeps it covered                                                                                                                                               |
+| `docs/identity/DATA-DICTIONARY.md`                     | the `057` digest is produced "at commit `0e99ecd`"                                                             | at `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`. The digest is unchanged at every commit since, because `057` is frozen — the sentence named that commit as `HEAD`, which it stopped being when `0fe4ae7` was pushed |
+| `docs/identity/DATA-DICTIONARY.md`                     | "Every migration in this repository is committed — `git status --short migrations/` reports nothing"           | Every migration is committed, `058` included — it was UNTRACKED while FBL-020-R6 was uncommitted and was committed with the rest of §3, so it has a `HEAD` blob and the two digests agree                          |
+| `docs/identity/DATA-DICTIONARY.md`                     | "this document is one of the **nine** §3.6 documents"                                                          | one of the **ten** reconciled documents — §4.4 added the requirement map, which was itself one of the four rejected for a stale final state                                                                        |
+| `tests/delivery-documentation.test.ts`                 | test name _the nine documents §3.6 names exist and all speak of this revision_                                 | _the ten reconciled documents exist and all speak of this revision_; the requirement map is in the list, and its citations of test names are masked so a citation is not read as a claim                           |
+| The requirement map, `R5-§2.2`                         | "the drops are by-hand experiments … not entries in the mutation registry"                                     | `scripts/database-control-mutations.ts` drops each database control from a copy of the migrated database and CI gates on zero survivors. `mutation-kill.ts` still carries none, and says why                       |
+| The requirement map, `R5-§4-verification-gates`        | "a green run at the final head is what discharges them, and **no such run exists** while nothing is committed" | Two exist — run 32190154935 at `174c789` for R5 and run 32459475019 at `8444240` for R6, 4 of 4 jobs each. The R6 work is not uncommitted: it IS `8444240`                                                         |
+| The requirement map, `R5-§4-verification-gates`        | the mutation totals retyped inside a verdict                                                                   | Removed. The totals are published once, in §5 of this report, and read from the artifact by `scripts/check-published-figures.ts`                                                                                   |
+| The requirement map, `R5-§3.6-document-reconciliation` | "All **nine** documents exist…"                                                                                | All **ten**                                                                                                                                                                                                        |
+| This report, §5 gate table                             | "Migrations `000`, `049`–`056` vs `cac9b21` — byte-identical"                                                  | `000`, `049`–`057` vs `174c789`, with the `cac9b21` comparison kept for the subset it is true of                                                                                                                   |
+| This report, §5.1                                      | the battery's growth attributed to "S3 … and FBL-020-R6 §1.1/§1.2 added two"                                   | …and §4.5 added the fifteen that drive the final-state gate. The size itself is read from the file, never typed                                                                                                    |
+| `README.md`                                            | "**six** gates exist to make the evidence mechanical"                                                          | **Seven**, and the seventh is the one that reads sentences rather than numbers                                                                                                                                     |
 
 **One thing this pass ADDED rather than corrected — AND IT HAS SINCE BEEN OVERTAKEN, which
 is why this paragraph now reads as a correction.** §0.1 recorded that the FBL-020-R6 order
@@ -2235,7 +2267,7 @@ which is stable under `prettier --write` rather than undone by it.
 | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The governing document's status was recorded as verified-and-in-hand                                          | It is now COMMITTED here and recorded `verified-from-repository-bytes`, measured from the file; R4's claim was withdrawn in between and is not restated (§0.2)         |
 | The census finding was attributed to the architect                                                            | The census is the implementer's report and says so in its own body (§8.2)                                                                                              |
-| The R4 CI gate declared discharged in the opening paragraph and no run said to exist in §0.7                  | One state: nothing is committed, so no run exists (§1)                                                                                                                 |
+| The R4 CI gate declared discharged in the opening paragraph and no run said to exist in §0.7                  | One state, and it is now a committed one: §1 names the evidence commit and the exact-SHA run that measured it                                                          |
 | A struck-through "NOT DISCHARGED" entry re-labelled discharged in the same list                               | Deleted. Historical CI evidence lives in §9 under headings that say HISTORICAL                                                                                         |
 | The R4 artifact digests presented as the delivery's evidence                                                  | Labelled as R4's, at `2b75d8a`, in §9.3, with the final-head rule stated in §2                                                                                         |
 | `057` published at `add07aaf…` in one section and `41d8351c…` in another                                      | Withdrawn while `057` was edited in place. FBL-020-R6 §1.3 froze the file, so §4 now pins it beside the rest of the chain and prints the re-derivation command as well |
@@ -2295,18 +2327,20 @@ Every "old" value in this column is a figure this repository really did publish.
 ## 11. Position
 
 FBL-000 closed → FBL-010 closed → **FBL-020 IN PROGRESS. THE FINAL CODE-BEARING COMMIT IS
-`174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS EXACT-SHA `.github/workflows/ci.yml` RUN
-32190154935 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL**; **THE ONE-COMMIT BUDGET WAS VIOLATED:
+`8444240d1ece6297b20f7ee918bd584dcc9bdb0b` AND ITS EXACT-SHA `.github/workflows/ci.yml` RUN
+32459475019 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL**; **THE ONE-COMMIT BUDGET WAS VIOLATED:
 6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
 DOES NOT CURE THE VIOLATION** (§1.1); **THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA
-RUN NAMED ABOVE MEASURED AN EARLIER COMMIT AND NOT IT** — both R6 runs FAILED, so no green
-run measures it; and every clause is UNVERIFIED until the final
+RUN NAMED ABOVE MEASURED IT, AND NO UNCOMMITTED WORK SITS ON TOP OF IT** — at the third
+attempt, the first two having failed their own runs; and every clause is UNVERIFIED until the
+final
 package proves it → §3.1 **OPEN AND EXTERNALLY BLOCKED** (the bytes are COMMITTED in this
 repository and whether the two reviewer project copies hold them is not observable from here;
 who must act and what they must verify on arrival are in §8.4 and
 `docs/orders/BLUEPRINT-PROVENANCE.md`) → live WorkOS certification **NOT
 DISCHARGED** (no credentials, §8.1) → the census **REPORTED, NOT ACCEPTED** (§8.2) → a CI
-a GREEN run measuring the R6 work **NOT DISCHARGED** (§8.3) → FBL-030 **not started**, and nothing in
+a GREEN run measuring the R6 work **DISCHARGED** by run 32459475019 at `8444240` (§8.3),
+which is evidence for the controls it exercised and is not acceptance → FBL-030 **not started**, and nothing in
 this revision touches it.
 
 **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN.** This report is not a claim

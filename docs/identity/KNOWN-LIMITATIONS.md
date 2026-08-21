@@ -126,7 +126,7 @@ re-run the drill.
   is the counterpart — it copies the migrated database, DROPS one control (or removes one
   anchored clause from one trigger function, read out of `058` itself), requires a
   SPECIFICALLY NAMED test to die, restores the control and requires the same test to pass
-  again. Twenty-two checks, zero survivors, gated in CI — the count is
+  again. Twenty-five checks, zero survivors, gated in CI — the count is
   `grep -c "^    id: '" scripts/database-control-mutations.ts`, and it moved because R6-R6
   added the two the D1 and D4 findings needed. What `npm test` alone still does not
   catch is a later migration that quietly drops one of these controls: the battery would
@@ -307,7 +307,9 @@ re-run the drill.
 
 ## Open at FBL-020-R5 submission — disclosed, not closed
 
-**FOUR** items are open here, all of them found by R4's own final gate and still open at
+**FIVE** items are open here — the count read FOUR while five bullets stood beneath it, which
+is the same off-by-one this document exists to refuse — all of them found by R4's own final
+gate and still open at
 submission, at the repository owner's explicit instruction, rather than held for a further
 correction pass; neither R5 nor R6 closed them and neither claims to.
 
@@ -325,7 +327,7 @@ this paragraph: deleting the route's `failLoginTransaction(…, 'session_establi
 call takes that named test from pass to fail. `docs/identity/AUTH-FLOWS.md` no longer says
 one of the nine reasons reaches no test, because none does.
 
-None of the four is a runtime authorization defect. All are gaps in the **guard
+None of the five is a runtime authorization defect. All are gaps in the **guard
 scaffolding** or in the precision of a header. They are listed here so the architect can
 weigh them directly instead of discovering them.
 
@@ -411,25 +413,26 @@ revocation) is pinned by tests proven to fail when the control is reverted.
 
 ### The CI state, stated once and exactly (FBL-020-R6 §4.4)
 
-**THE FINAL CODE-BEARING COMMIT IS `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32190154935 COMPLETED WITH 4 OF 4 JOBS
+**THE FINAL CODE-BEARING COMMIT IS `8444240d1ece6297b20f7ee918bd584dcc9bdb0b` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32459475019 COMPLETED WITH 4 OF 4 JOBS
 SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.
 
-**THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN EARLIER
-COMMIT AND NOT IT.** R6 §1–§4 were committed as `0fe4ae7` and `242e24a` after the operator
-authorised a transfer path that required it, and **both of their exact-SHA runs FAILED**
-(32450787623 and 32452596992). No green CI run measures this work. The delivery report's
-"Verification evidence" section records the local runs that did measure it, and a local run
-is not a CI run.
+**THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, AND NO
+UNCOMMITTED WORK SITS ON TOP OF IT.** R6 §1–§4 were committed after the operator authorised a
+transfer path that required it. It took three attempts: `0fe4ae7` and `242e24a` **both FAILED
+their exact-SHA runs** (32450787623 and 32452596992), and `8444240` is the one the run above
+measured. A green third attempt does not un-fail the first two, and both stay in the record.
+The delivery report's "Verification evidence" section records the local runs as well, and a
+local run is not a CI run.
 
 **THE ONE-COMMIT BUDGET WAS VIOLATED: 6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
 1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
 failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
-each time, with `174c789` the green one above. Under FBL-020-R6 they are `0fe4ae7` and
-`242e24a`, 1 of 4 jobs red each time. Delivery report §1.1 carries the table and names what
-broke in each.
+each time, with `174c789` the green one for that order. Under FBL-020-R6 they are `0fe4ae7`
+and `242e24a`, 1 of 4 jobs red each time, with `8444240` the green one above. Delivery report
+§1.1 carries the table and names what broke in each.
 
 <!--final-state:withdrawn-->
 
