@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 11,
+    "used": 12,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -543,7 +543,7 @@
       },
       "FBL-020-R7": {
         "allowed": "no numeric budget (FBL-020-R7-A1 §4)",
-        "used": 2,
+        "used": 3,
         "failed_ci": 0,
         "verdict": "DISCLOSED — every R7 commit is listed above with its run, or with run: null while none exists"
       }
@@ -626,6 +626,13 @@
       "sha": "d43b8889d75e04fccb69b8d389b1ab3672ff74cd",
       "short": "d43b888",
       "subject": "R7: integrity closure — migration 059, §3 battery, DB-control mutations, §4 drill",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "969e7fe6b9d9122af7606518d103e7f5f6099ce2",
+      "short": "969e7fe",
+      "subject": "R7: drill green end-to-end, gates reconciled, requirement map, A1 adopted",
       "code_bearing": true,
       "run": null
     }
