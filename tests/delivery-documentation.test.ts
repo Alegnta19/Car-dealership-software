@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -42,6 +43,7 @@ import {
 } from '../scripts/check-published-figures';
 import {
   FORBIDDEN,
+  ALSO_SCANNED as FINAL_STATE_ALSO_SCANNED,
   GOVERNED as FINAL_STATE_GOVERNED,
   HISTORY_DEPENDENT_CHECKS,
   RECORD as FINAL_STATE_RECORD,
@@ -1665,17 +1667,36 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
   const asRecorded = (s: FinalState): GitFacts => {
     const subject: Record<string, string | undefined> = {};
     const ancestorOfHead: Record<string, boolean> = {};
-    for (const c of [s.r5_baseline, ...s.code_bearing_commits]) {
+    const above = s.commits_ahead_of_the_evidence_commit ?? [];
+    for (const c of [s.r5_baseline, ...s.code_bearing_commits, ...above]) {
       subject[c.sha] = c.subject;
       ancestorOfHead[c.sha] = true;
     }
+    /*
+     * THE STAND-IN IS DERIVED FROM THE RECORD, NOT PINNED TO ONE SHAPE OF IT.
+     *
+     * It used to hard-code `head: s.evidence_commit_sha` and `aheadOfEvidence: []` — a tree
+     * whose tip IS the evidence commit. That was true of every record this fixture had ever
+     * been handed, and it stopped being true the moment a commit was made after the last
+     * green run: the fixture then contradicted the very record it was standing in for, and
+     * reported three findings about a repository that does not exist. It failed only in a
+     * tree with no `.git` — the mutation runner's copy — because a real checkout takes the
+     * `readGitFacts` branch instead, so the whole battery went red exactly where nobody
+     * looked, and the runner reported the mutation INCONCLUSIVE rather than killed.
+     *
+     * A stand-in for git must AGREE with the record on the geometry the record declares, or
+     * it is testing a disagreement it invented itself.
+     */
     return {
-      head: s.evidence_commit_sha,
+      head: above[0]?.sha ?? s.evidence_commit_sha,
       shallow: false,
+      // This fixture stands in for a COMPLETE checkout — it hands the gate every fact a full
+      // clone would have — so it is not the no-repository case, which has its own test.
+      absent: false,
       subject,
       ancestorOfHead,
       baselineToEvidence: s.code_bearing_commits.map((c) => c.sha).reverse(),
-      aheadOfEvidence: [],
+      aheadOfEvidence: above.map((c) => c.sha),
     };
   };
   const factsFor = (s: FinalState): GitFacts => (IN_GIT_CHECKOUT ? readGitFacts(s) : asRecorded(s));
@@ -1975,7 +1996,29 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
         'a --depth 1 clone holds exactly one commit',
       );
 
-      for (const file of [...FINAL_STATE_GOVERNED, FINAL_STATE_RECORD]) {
+      /*
+       * THE CLONE IS SEEDED WITH THE TREE UNDER TEST, NOT LEFT AT THE LAST COMMIT — and
+       * `ALSO_SCANNED` belongs in that seed for the same reason `GOVERNED` always did.
+       *
+       * The clone is made from `file://ROOT`, so without this it holds whatever was last
+       * COMMITTED. That makes the test measure the previous commit while the author is
+       * asking about the tree they are about to ship: it can fail on a tree that is correct
+       * and — far worse — pass on one that is not. `GOVERNED` and the record were already
+       * copied for that reason. When FBL-020-R6 widened the forbidden-sentence scan to
+       * `ALSO_SCANNED`, those files were left out of the seed, and the omission surfaced the
+       * moment a withdrawn sentence was removed from one of them: the gate went green against
+       * the working tree and red against the clone, over a file the tree had already fixed.
+       *
+       * `existsSync` because the surface is deliberately optional — a fixture or a narrower
+       * checkout may not carry every one of these files, which is exactly why the gate's own
+       * loader skips the ones it cannot read.
+       */
+      for (const file of [
+        ...FINAL_STATE_GOVERNED,
+        FINAL_STATE_RECORD,
+        ...FINAL_STATE_ALSO_SCANNED,
+      ]) {
+        if (!existsSync(join(ROOT, file))) continue;
         mkdirSync(join(clone_, file, '..'), { recursive: true });
         copyFileSync(join(ROOT, file), join(clone_, file));
       }
@@ -2015,6 +2058,112 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
       assert.ok(
         !HISTORY_DEPENDENT_CHECKS.some((c) => c.id === 'head_relation'),
         'the head relation must never be listed as a limb a shallow clone cannot run',
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * FBL-020-R6 — THE SAME TRAP, ITS SIXTH APPEARANCE, AND A THIRD ENVIRONMENT.
+   *
+   * "What a developer tree has and another checkout does not" has been gitignored artifacts
+   * four times and a shallow clone once. This is the sixth: a tree copy that is NOT A GIT
+   * REPOSITORY. `scripts/mutation-kill.ts` builds one on every run — `isolatedCopy()`
+   * excludes `.git` deliberately — and then runs whole batteries inside it. `readGitFacts`
+   * called `git rev-parse HEAD` unguarded, so every test that drives the final-state gate
+   * was red in that copy BEFORE any mutation was applied. The runner reported the affected
+   * mutation INCONCLUSIVE rather than crediting a kill, which is the correct behaviour and
+   * which fails the step; run 32452596992 died there with a battery that was otherwise 652
+   * for 652.
+   *
+   * A NON-REPOSITORY IS NOT A HARSHER SHALLOW CLONE. A shallow clone ANSWERS
+   * `git rev-parse HEAD` and can still decide the head relation from that one commit. A
+   * non-repository answers nothing, so the head relation joins the history limbs in the
+   * not-run list. Collapsing the two would be the absence-vs-silence mistake this delivery
+   * has already had to correct twice in the census, and it is asserted apart here.
+   *
+   * Built the way the runner builds it, and NOT by reasoning about it — the order says so
+   * in as many words, and C2 was found exactly because a shallow clone had been reasoned
+   * about rather than made.
+   */
+  test('the gate SURVIVES a tree copy with NO .git, and says the head relation did not run', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'fbl020-nogit-'));
+    const copy = join(scratch, 'tree');
+    try {
+      cpSync(ROOT, copy, {
+        recursive: true,
+        filter: (src: string) => {
+          const rel = src.slice(ROOT.length).replace(/\\/g, '/').replace(/^\//, '');
+          if (rel === '') return true;
+          const first = rel.split('/')[0] as string;
+          // The same exclusions scripts/mutation-kill.ts applies, `.git` among them.
+          if (['node_modules', '.git', 'artifacts', 'dist'].includes(first)) return false;
+          return !rel.endsWith('.tsbuildinfo');
+        },
+      });
+
+      // The premise, asserted rather than assumed — as with the shallow clone above. A copy
+      // that turned out to be inside a repository would prove nothing at all.
+      assert.ok(!existsSync(join(copy, '.git')), 'the copy must not carry a .git directory');
+      assert.throws(
+        () =>
+          execFileSync('git', ['rev-parse', 'HEAD'], {
+            cwd: copy,
+            encoding: 'utf8',
+            stdio: 'pipe',
+          }),
+        'git must not resolve a HEAD here, or this tests the wrong thing',
+      );
+
+      const output = execFileSync(
+        'npx',
+        ['tsx', join(ROOT, 'scripts', 'check-final-state.ts'), '--root', copy],
+        { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32' },
+      );
+
+      assert.ok(
+        output.includes('git history: ABSENT'),
+        `the gate must SAY there is no repository, got:\n${output}`,
+      );
+      assert.ok(
+        output.includes('not run: head_relation'),
+        'the head relation cannot be decided without a HEAD, and must be NAMED as unrun ' +
+          'rather than silently skipped — the whole point of the shallow-clone limb list',
+      );
+      for (const check of HISTORY_DEPENDENT_CHECKS) {
+        assert.ok(
+          output.includes(`not run: ${check.id}`),
+          `a limb that could not run must be named, not dropped: ${check.id}`,
+        );
+      }
+      assert.ok(
+        output.includes('The delivery documents state ONE final state'),
+        'and the gate must PASS: a missing .git is not a finding about the delivery',
+      );
+      assert.ok(
+        !output.includes('fatal:'),
+        'git\'s own "fatal: not a git repository" must not leak into a PASSING gate\'s ' +
+          'output, where a reader would read it as a failure',
+      );
+      /*
+       * The half that must NOT be skipped. A non-repository can still read every document,
+       * so the document checks — which are the entire reason a battery runs inside a tree
+       * copy — have to keep running. A gate that answered "no git, nothing to say" would
+       * pass on a tree whose delivery documents contradicted the record.
+       */
+      const broken = JSON.parse(readFileSync(join(copy, FINAL_STATE_RECORD), 'utf8'));
+      broken.submission.status = 'SUBMITTABLE AS COMPLETE';
+      writeFileSync(join(copy, FINAL_STATE_RECORD), JSON.stringify(broken, null, 2));
+      assert.throws(
+        () =>
+          execFileSync(
+            'npx',
+            ['tsx', join(ROOT, 'scripts', 'check-final-state.ts'), '--root', copy],
+            { cwd: ROOT, encoding: 'utf8', shell: process.platform === 'win32', stdio: 'pipe' },
+          ),
+        'the DOCUMENT half must still bite where there is no repository, or a tree copy ' +
+          'would be a place delivery documents go unchecked',
       );
     } finally {
       rmSync(scratch, { recursive: true, force: true });

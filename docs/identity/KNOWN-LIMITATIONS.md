@@ -417,15 +417,19 @@ SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the deliv
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.
 
-**NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT
-COMMIT.** The R6 order forbids committing and pushing, so §1–§4 of R6 sit in the working
-tree; the delivery report's "Verification evidence" section records the local runs that
-measured them, and a local run is not a CI run.
+**THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN EARLIER
+COMMIT AND NOT IT.** R6 §1–§4 were committed as `0fe4ae7` and `242e24a` after the operator
+authorised a transfer path that required it, and **both of their exact-SHA runs FAILED**
+(32450787623 and 32452596992). No green CI run measures this work. The delivery report's
+"Verification evidence" section records the local runs that did measure it, and a local run
+is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 3 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
-1, 2 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** The two that failed
-were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red each time;
-the third, `174c789`, is the green one above. Delivery report §1.1 carries the table.
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
+failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
+each time, with `174c789` the green one above. Under FBL-020-R6 they are `0fe4ae7` and
+`242e24a`, 1 of 4 jobs red each time. Delivery report §1.1 carries the table and names what
+broke in each.
 
 <!--final-state:withdrawn-->
 
@@ -433,7 +437,9 @@ This section used to end: "the report's Verification evidence section records lo
 this tree, and **no CI run exists for it**. Two earlier code-bearing commits were pushed and
 both FAILED their exact-SHA `ci.yml` run." Both halves were false by the time they were
 read — a green run existed for the final commit, and three code-bearing commits existed, not
-two. `scripts/check-final-state.ts` refuses both sentences outside this block.
+two. **That count is a statement about the moment of THAT correction, not a current figure:**
+six exist now, and the live number is published above from
+`docs/evidence/FBL-020-FINAL-STATE.json`, never from this paragraph. `scripts/check-final-state.ts` refuses both sentences outside this block.
 
 <!--/final-state-->
 

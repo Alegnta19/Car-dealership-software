@@ -175,11 +175,18 @@ as narrowly as it is written. It says the exact-SHA run exists, that its `head_s
 code-bearing commit, and that every job in it succeeded. **It is not acceptance of R5**,
 which the review has explicitly withheld — a green run is valid evidence for the controls it
 exercised and for nothing more — and it is not evidence about work the run did not measure.
-**NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS
-UNCOMMITTED ON TOP OF THAT COMMIT.** The R6 order forbids committing and pushing; that
-instruction is followed, so §1–§4 of R6 sit in the working tree and run 32190154935 did not
-measure them. Every gate in §5 was executed locally against a real PostgreSQL 16 on
-`127.0.0.1:55434`. That is not a CI run and is not offered as one.
+**THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN EARLIER
+COMMIT AND NOT IT.** Until the operator authorised a different transfer path, this paragraph
+said the opposite and was correct in saying it: R6 §1–§4 sat in the working tree and nothing
+had been pushed. They are now committed as `0fe4ae7` and `242e24a`, **and both of their
+exact-SHA runs FAILED** — 32450787623 and 32452596992, the same one job of four red each
+time. §1.1 records them with per-job conclusions and with what broke.
+
+**NO GREEN CI RUN MEASURES THE FBL-020-R6 WORK**, which is why the evidence commit named
+above is deliberately still `174c789`: it is the last commit whose own exact-SHA run
+concluded success, and moving that label onto a red commit would be the FBL-020-R5 defect
+with a fresh SHA in it. Every gate in §5 was ALSO executed locally against a real
+PostgreSQL 16 on `127.0.0.1:55434`; a local run is not a CI run and is not offered as one.
 
 **WHAT THE REVIEW HAS ACCEPTED, recorded because a reader is owed the boundary from both
 sides.** The review states that both supplied source archives represent `174c789` and that
@@ -194,20 +201,47 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 3 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
-1, 2 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** The three are the
-whole of `e08af42..174c789`, and `scripts/check-final-state.ts` recomputes that range from
-git, so a record listing fewer commits than the history holds fails rather than passing
-quietly — which is the shape the R5 report shipped in.
+**THE ONE-COMMIT BUDGET WAS VIOLATED: 6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
+1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Each order allows one
+code-bearing commit plus an optional documentation-only closeout, and **both orders are
+over**: FBL-020-R5 used three, FBL-020-R6 has used three. The sixth is the commit this
+revision is made in, counted rather than deferred — a record cannot name the SHA of the
+commit that contains it, so the gate exempts `HEAD` from the ahead-of-evidence LIST and adds
+it back to the COUNT, printing a note whenever that allowance is in play. R6 §5's verbatim text is not held in
+this repository — `docs/orders/FBL-020-R6.md` Part 2 marks it derived — so its budget is
+applied on the same terms as R5 §5 and is reported rather than construed.
+
+**THIS FIGURE READ 3 UNTIL THIS REVISION, AND THE UNDERCOUNT WAS PRODUCED BY THE RECORD'S OWN
+SHAPE.** `code_bearing_commits` is checked to be exactly `e08af42..174c789`, the range the
+reported run measured. The two R6 commits were made AFTER the last green run, so they fell
+outside the counted range and were recorded nowhere — the same "lists fewer commits than the
+history holds" defect FBL-020-R5 was rejected for, reproduced inside the field built to
+disclose it. `commits_ahead_of_the_evidence_commit` now records them, and
+`scripts/check-final-state.ts` checks that list against `git rev-list <evidence>..HEAD` in
+BOTH directions, so a commit git holds and the record omits fails the build.
 
 | #   | Code-bearing commit                        | Exact-SHA `ci.yml` run | Conclusion                |
 | --- | ------------------------------------------ | ---------------------- | ------------------------- |
 | 1   | `52e1567ad67a2ccde30adc4d06ce4009b4762391` | **32162114699** (48)   | **FAILURE** — 2 of 4 jobs |
 | 2   | `0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee` | **32168154239** (49)   | **FAILURE** — 2 of 4 jobs |
 | 3   | `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` | **32190154935** (50)   | **SUCCESS** — 4 of 4 jobs |
+| 4   | `0fe4ae70f0553fd32195eda2c617315f5ab19e51` | **32450787623**        | **FAILURE** — 1 of 4 jobs |
+| 5   | `242e24a8a2517a0d343199a49e736890b34ca2f7` | **32452596992**        | **FAILURE** — 1 of 4 jobs |
 
-Both failures were the same two jobs: `typecheck, lint ratchet, build, all tests, scans`
-and `secret scan (genuine full history)`. No history was rewritten and no branch was
+Rows 1–3 are FBL-020-R5 and rows 4–5 are FBL-020-R6. **What broke in each R6 run is named
+rather than left as a conclusion.** In `0fe4ae7`, the final-state gate this order added read
+its widened forbidden-sentence scan from DISK instead of from the document map it is handed,
+breaking the purity `finalStateProblems` depends on and taking five subtests with it — the
+shallow-clone test, the artifacts-absent test and three staged-document tests. In `242e24a`
+the whole battery passed, 652 of 652, and the step after it did not: `scripts/mutation-kill.ts`
+copies the tree WITHOUT `.git`, and `readGitFacts` called `git rev-parse HEAD` unguarded, so
+every test driving the final-state gate was red inside that copy BEFORE any mutation was
+applied. The runner reported the affected mutation INCONCLUSIVE rather than crediting a kill,
+and one inconclusive result fails the step — **the named trap's sixth appearance, in its
+newest dress: a tree copy that is not a repository.**
+
+The R5 failures were the same two jobs each time: `typecheck, lint ratchet, build, all tests,
+scans` and `secret scan (genuine full history)`. No history was rewritten and no branch was
 force-pushed. Each successor commit exists only because its predecessor was RED and the
 order forbids submitting a red tree — **that is the explanation and it is not a defence.**
 The architect has ruled that disclosure does not cure the breach, so it is recorded above
@@ -227,20 +261,20 @@ exactly what no document in this repository may do, and the same claim in its ot
 is already in `scripts/check-final-state.ts`'s `FORBIDDEN` list. Who must act, and exactly
 what they must verify on arrival, are in §8.4 and `docs/orders/BLUEPRINT-PROVENANCE.md`.
 
-| Question                           | This tree                                            |
-| ---------------------------------- | ---------------------------------------------------- |
-| Final code-bearing commit          | `174c789`, and it is this repository's `HEAD`        |
-| Exact-SHA CI run for that commit   | 32190154935 — **SUCCESS, 4 of 4 jobs**               |
-| CI run for the R6 working tree?    | **No** — nothing is committed, by instruction        |
-| `npm run build`                    | 0 TypeScript errors                                  |
-| Full suite                         | see §5 — zero failed, cancelled, skipped or todo     |
-| `npm run architecture:check`       | green                                                |
-| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                           |
-| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)      |
-| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8) |
-| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)        |
-| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)               |
-| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                 |
+| Question                           | This tree                                             |
+| ---------------------------------- | ----------------------------------------------------- |
+| Last GREEN code-bearing commit     | `174c789` — `HEAD` is `242e24a`, two commits above it |
+| Exact-SHA CI run for that commit   | 32190154935 — **SUCCESS, 4 of 4 jobs**                |
+| A GREEN run for the R6 work?       | **No** — committed, and both its runs FAILED (§1.1)   |
+| `npm run build`                    | 0 TypeScript errors                                   |
+| Full suite                         | see §5 — zero failed, cancelled, skipped or todo      |
+| `npm run architecture:check`       | green                                                 |
+| `scripts/quality-ratchet.ts check` | exit 0, no baseline raised                            |
+| Migrations `000`, `049`–`057`      | canonical-LF byte-identical to `174c789` (§4.2)       |
+| Live WorkOS certification          | **LIVE WORKOS CERTIFICATION IS NOT DISCHARGED** (§8)  |
+| The census                         | **THE CENSUS IS REPORTED, NOT ACCEPTED** (§8)         |
+| §3.1, the Version 2.0 blueprint    | **OPEN AND EXTERNALLY BLOCKED** (§8.4)                |
+| Submission                         | **NOT SUBMITTABLE AS COMPLETE** (§8)                  |
 
 <!--final-state:withdrawn-->
 
@@ -324,7 +358,7 @@ this tree — once with `artifacts/` present and once with the directory MOVED A
 restored afterwards — and both runs report the same figures, which §5 publishes from the
 artifact of the first: zero failed, cancelled, skipped and todo in each, and the two runs’
 TOP-LEVEL NAME SETS ARE IDENTICAL (`diff` of the sorted `ok` lines is empty), so nothing
-silently skipped itself when its source was unreadable. This battery is <!--fig:doc_battery_tests-->46<!--/fig-->
+silently skipped itself when its source was unreadable. This battery is <!--fig:doc_battery_tests-->47<!--/fig-->
 of those tests, and FBL-020-R6 §1.1 and §4.5 are the reason the size moved: the census this delivery rests on and the final-state record it
 now also carries are COMMITTED rather than written into `artifacts/`, precisely so that a
 gate reading either reads the same bytes in both conditions. Under the absent condition the
@@ -1065,9 +1099,8 @@ sed 's/\r$//' migrations/<file>.sql | git hash-object --stdin    # canonical blo
 | `057_identity_boundary_completion.sql`       | `3105f733c0bc3c02f8f69cb320121960da822a0f` | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
 | `058_policy_evidence_reconstructable.sql`    | `3ecfb55f2eec01dfa99395cba1fea728510ee595` | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 
-**`058_policy_evidence_reconstructable.sql` is NEW IN THIS WORKING TREE AND IS NOT YET
-COMMITTED**, so its two digests are of the body on disk rather than of a blob in `HEAD`, and
-they will be re-derived when it is. It is the file §4.0's frozen-`057` position requires:
+**`058_policy_evidence_reconstructable.sql` is NEW IN FBL-020-R6 and is now COMMITTED**, so
+its two digests are of a blob in `HEAD` as well as of the body on disk, and the two agree. It is the file §4.0's frozen-`057` position requires:
 FBL-020-R6 §3's four database controls — the recorded authentication time bound to the named
 session, the matched binding required to be the exact version observed and in force and
 in-tenant and applicable, the normalized authority rows made equivalent to the array they
@@ -1137,22 +1170,23 @@ TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:55434/dealership_test" \
   npx tsx --test --test-concurrency=1 --test-reporter=tap tests/*.test.ts
 ```
 
-| Gate                                       | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run build`                            | **0 TypeScript errors**, exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Full suite                                 | **652 tests, 64 suites**, 652 passed, 0 failed / cancelled / skipped / todo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `scripts/parse-test-summary.ts`            | declared floors **652 / 64**, above every minimum below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `npm run architecture:check`               | green — dependency rules, app-SQL guard, module manifest, env confinement, role-binding effectiveness, owned mutations, audit inventory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `scripts/quality-ratchet.ts check`         | **exit 0** — tsc-strict 53 / eslint 123 / format 1, **no baseline raised**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `scripts/check-requirement-map.ts`         | OK — 44 requirements, 29 clauses, **<!--fig:map_tests-->302<!--/fig-->** mapped test names, every clause covered, 0 problems                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `scripts/reconciliation-inventory.ts`      | **107** statements in `057`; **38** reconciliations = 11 control-covered + 24 declared not-load-bearing + **3** refusal guards; **0 unaccounted**; **12** negative controls declared                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `scripts/mutation-kill.ts`                 | **55 declared / 55 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `scripts/check-published-figures.ts`       | every figure in this report and in the requirement map equals the artifact or constant it derives from (§5.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `scripts/database-control-mutations.ts`    | **<!--fig:db_controls_declared-->25<!--/fig--> declared / <!--fig:db_controls_killed-->25<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                          |
-| `scripts/check-final-state.ts`             | **exit 0** — the record matches git (three commits, three subjects, the range in both directions), the run data is internally consistent, the evidence commit IS this repository's `HEAD`, and all five governed documents restate the same final state (§1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| …the same gate on a REAL `--depth 1` clone | **exit 0**, printing `git history: SHALLOW` and naming the four limbs that could not run there. That is the R6 gate's finding C2 closed and PROVED rather than reasoned about: the named test `the gate SURVIVES a real --depth 1 clone, and says which limbs did not run` makes the clone with git and runs the real gate against it                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Populated upgrade drill + fingerprints     | green end to end on two independent drill databases: retained fixture digests OK, **12 of 12** reconciliation negative controls satisfied with `controls_filtered: false`, all **four** verifier phases OK (`backfill`, `pre-057`, `post-057`, and the `post-058` phase R6-R6 §D1b added), **9 of 9** ledger and fixture-mode refusal probes satisfied, and the fresh chain and the upgrade path converging on ONE schema fingerprint. **The VALUE is not published here.** R6-R6's §D1 fix changes the schema — `pd_evidence_version_known` is replaced and the column default moves — so every fingerprint recorded before it, `2fb41662…` included, describes a superseded schema. A new one is a CI fact and this tree has no CI run; §1 records that state and does not paper over it (§6) |
-| Migrations `000`, `049`–`057` vs `174c789` | byte-identical (§4.2); `000` and `049`–`056` are also byte-identical to `cac9b21`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Gate                                         | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run build`                              | **0 TypeScript errors**, exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Full suite                                   | the totals are published from `artifacts/test-summary.json` in §5.4 and are NOT retyped here; what this row asserts is the SHAPE the gate requires — **0 failed, 0 cancelled, 0 skipped, 0 todo**, which `scripts/parse-test-summary.ts` enforces on all eight fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `scripts/parse-test-summary.ts`              | declared floors **652 / 64**, above every minimum below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `npm run architecture:check`                 | green — dependency rules, app-SQL guard, module manifest, env confinement, role-binding effectiveness, owned mutations, audit inventory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/quality-ratchet.ts check`           | **exit 0** — tsc-strict 53 / eslint 123 / format 1, **no baseline raised**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `scripts/check-requirement-map.ts`           | OK — 44 requirements, 29 clauses, **<!--fig:map_tests-->302<!--/fig-->** mapped test names, every clause covered, 0 problems                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `scripts/reconciliation-inventory.ts`        | **107** statements in `057`; **38** reconciliations = 11 control-covered + 24 declared not-load-bearing + **3** refusal guards; **0 unaccounted**; **12** negative controls declared                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `scripts/mutation-kill.ts`                   | **55 declared / 55 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/check-published-figures.ts`         | every figure in this report and in the requirement map equals the artifact or constant it derives from (§5.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `scripts/database-control-mutations.ts`      | **<!--fig:db_controls_declared-->25<!--/fig--> declared / <!--fig:db_controls_killed-->25<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `scripts/check-final-state.ts`               | **exit 0** — the record matches git (three commits, three subjects, the range in both directions), the run data is internally consistent, the evidence commit IS this repository's `HEAD`, and all five governed documents restate the same final state (§1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| …the same gate on a tree copy with NO `.git` | **exit 0**, printing `git history: ABSENT (this tree is not a git repository)` and naming the head relation together with the four history limbs as unrun. This is the NAMED TRAP'S SIXTH APPEARANCE — what a developer tree has and another checkout does not, after four gitignored-artifact instances and one shallow clone. `scripts/mutation-kill.ts` builds exactly this environment on every run (`isolatedCopy()` excludes `.git` on purpose), and `readGitFacts` called `git rev-parse HEAD` unguarded, so every test driving this gate was red inside the copy BEFORE any mutation was applied; run 32452596992 died there with a battery in which every declared test passed. A non-repository is NOT a harsher shallow clone — a shallow clone still answers `rev-parse HEAD` and still decides the head relation — and the two are asserted apart. The named test `the gate SURVIVES a tree copy with NO .git, and says the head relation did not run` BUILDS the copy the way the runner does rather than reasoning about it, and proves the DOCUMENT half still bites there by corrupting the record inside the copy and requiring the gate to fail |
+| …the same gate on a REAL `--depth 1` clone   | **exit 0**, printing `git history: SHALLOW` and naming the four limbs that could not run there. That is the R6 gate's finding C2 closed and PROVED rather than reasoned about: the named test `the gate SURVIVES a real --depth 1 clone, and says which limbs did not run` makes the clone with git and runs the real gate against it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Populated upgrade drill + fingerprints       | green end to end on two independent drill databases: retained fixture digests OK, **12 of 12** reconciliation negative controls satisfied with `controls_filtered: false`, all **four** verifier phases OK (`backfill`, `pre-057`, `post-057`, and the `post-058` phase R6-R6 §D1b added), **9 of 9** ledger and fixture-mode refusal probes satisfied, and the fresh chain and the upgrade path converging on ONE schema fingerprint. **The VALUE is not published here.** R6-R6's §D1 fix changes the schema — `pd_evidence_version_known` is replaced and the column default moves — so every fingerprint recorded before it, `2fb41662…` included, describes a superseded schema. A new one is a CI fact, and no GREEN CI run measures this work; §1 records that state and does not paper over it (§6)                                                                                                                                                                                                                                                                                                                                                        |
+| Migrations `000`, `049`–`057` vs `174c789`   | byte-identical (§4.2); `000` and `049`–`056` are also byte-identical to `cac9b21`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **NO FIGURE IN THIS TABLE IS TYPED BY HAND ANY MORE.** Every one of them is now read from
 the run or the constant that produces it and compared against this document by
@@ -1228,7 +1262,7 @@ ONE IT USES RATHER THAN CHOOSING SILENTLY.** They are:
 | `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->652<!--/fig--> / <!--fig:floor_suites-->64<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
 
 **THE DECLARED FLOOR IS THE MEASURED TOTAL, AND IT WAS SIX BELOW IT UNTIL THIS REVISION.**
-`MINIMUM_TESTS` stood at 646 while the battery measured <!--fig:suite_tests-->652<!--/fig-->,
+`MINIMUM_TESTS` stood at 646 while the battery measured <!--fig:suite_tests-->653<!--/fig-->,
 inside a constant whose own docstring says a floor is raised to what a measured run reports
 "rather than left with slack". 646 was right when it was written — 642 plus the four tests
 findings C1, C2 and C7 added — and the corrective waves after it added six more without
@@ -1301,7 +1335,7 @@ reprinting the run.
 
 Each restoration returned `tests/delivery-documentation.test.ts` to a fully green battery,
 with zero failed, cancelled, skipped and todo. **The size is stated separately from the
-result on purpose:** those experiments ran when this battery held 26 tests, and it holds <!--fig:doc_battery_tests-->46<!--/fig-->
+result on purpose:** those experiments ran when this battery held 26 tests, and it holds <!--fig:doc_battery_tests-->47<!--/fig-->
 on this tree — S3 (§2.2) added one, FBL-020-R6 §1.1/§1.2 added two, and FBL-020-R6 §4.5 added the fifteen that drive the final-state gate.
 Restating the old size as though it were the current one is exactly the drift this section
 exists to catch, which is why the figure is READ from the file rather than typed.
@@ -1350,8 +1384,8 @@ produced rather than a line count that goes stale on the next raise:
 | `probe-phantom.tap` | a full set of `ok` lines, no `not ok`, counters claiming `fail 3`                                                                            | **1** — "a failure nobody printed is a summary nobody can check"                                                                                                                          |
 | `probe-clean.tap`   | a full set of `ok` lines and counters that agree with them                                                                                   | **0** — "Test summary gate OK."                                                                                                                                                           |
 
-The same parser on the real 652-test log of §5 prints
-`observed_ok=716 observed_not_ok=0` and exits **0**. Note that the log contains the string
+The same parser on the real battery log of §5 exits **0**, with both observation counts
+published in §5.4 from `artifacts/test-summary.json` rather than retyped here. Note that the log contains the string
 `not ok` inside two test NAMES; the observation regex is anchored to `^\s*not ok\s+[0-9]+`,
 so it does not mistake a name for a result. Both observation counts are read from
 `artifacts/test-summary.json` by the figure gate, so this sentence cannot drift from the run
@@ -1372,8 +1406,8 @@ Identical in every column. **What this does not prove:** the failure was intermi
 load, so five green runs are evidence of determinism and not a proof of it. The mechanisms
 named above are closed by construction — no new backend can attach once connections are
 withdrawn, and the drop is issued only after the server reports none attached — and the
-remaining assurance is a green exact-SHA CI run, which §4 requires and which does not exist
-while nothing is committed.
+remaining assurance is a green exact-SHA CI run, which §4 requires and which **does not
+exist**: the work IS committed now, and both of its runs failed (§1.1).
 
 **G5 — the revert proof.** `scripts/check-census-prose.ts` exits 0 as shipped. Flip the
 report's position token and it exits 1 naming both halves of the disagreement; flip the
@@ -1396,9 +1430,12 @@ git status --porcelain --untracked-files=all
 
 The first command measures the whole delta from the cumulative acceptance base `cac9b21` to
 the working tree, excluding this report so that editing the report cannot move the figure.
-The second lists what is UNCOMMITTED against `HEAD` — and `HEAD` is
-`174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`, the single value
-`docs/evidence/FBL-020-FINAL-STATE.json` records and every governed document restates.
+The second lists what is UNCOMMITTED against `HEAD`. **`HEAD` is
+`242e24a8a2517a0d343199a49e736890b34ca2f7`, and it is NOT the evidence commit**: the evidence
+commit is `174c789`, two commits below it, because that is the last one whose exact-SHA run
+was green. `docs/evidence/FBL-020-FINAL-STATE.json` records both facts — the relation between
+them is the field `repository_head_relation` — and every governed document restates them from
+there rather than keeping its own copy.
 
 **WHY THE DIFFSTAT IS GONE TOO, AND NOT MERELY THE UNTRACKED COUNT.** R5's version of this
 paragraph published `164 tracked files changed, +40,796 / −2,413` beside a command that
@@ -1476,10 +1513,10 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 
 | Figure                       | Value                                                                                                     | Read from                                                                           |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `suite_tests`                | <!--fig:suite_tests-->652<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
+| `suite_tests`                | <!--fig:suite_tests-->653<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
 | `suite_suites`               | <!--fig:suite_suites-->64<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
-| `suite_passed`               | <!--fig:suite_passed-->652<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
-| `observed_ok`                | <!--fig:observed_ok-->716<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
+| `suite_passed`               | <!--fig:suite_passed-->653<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
+| `observed_ok`                | <!--fig:observed_ok-->717<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
 | `observed_not_ok`            | <!--fig:observed_not_ok-->0<!--/fig-->                                                                    | `artifacts/test-summary.json` `observed_not_ok_lines`                               |
 | `floor_tests`                | <!--fig:floor_tests-->652<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
 | `floor_suites`               | <!--fig:floor_suites-->64<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
@@ -1509,7 +1546,7 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 | `ratchet_tsc`                | <!--fig:ratchet_tsc-->53<!--/fig-->                                                                       | `quality-baselines.json` `tsc-strict.total`                                         |
 | `ratchet_eslint`             | <!--fig:ratchet_eslint-->123<!--/fig-->                                                                   | `quality-baselines.json` `eslint.total`                                             |
 | `ratchet_format`             | <!--fig:ratchet_format-->1<!--/fig-->                                                                     | `quality-baselines.json` `format.total`                                             |
-| `doc_battery_tests`          | <!--fig:doc_battery_tests-->46<!--/fig-->                                                                 | `tests/delivery-documentation.test.ts`, `test(` declarations                        |
+| `doc_battery_tests`          | <!--fig:doc_battery_tests-->47<!--/fig-->                                                                 | `tests/delivery-documentation.test.ts`, `test(` declarations                        |
 | `blueprint_v1_bytes`         | <!--fig:blueprint_v1_bytes-->88,931<!--/fig-->                                                            | the Version 1.0 `.docx` checked in here, its own byte length                        |
 | `blueprint_v1_sha256`        | <!--fig:blueprint_v1_sha256-->d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9<!--/fig--> | the Version 1.0 `.docx` checked in here, its own digest                             |
 | `blueprint_v2_sha256`        | <!--fig:blueprint_v2_sha256-->556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf<!--/fig--> | `docs/orders/FBL-020-R5.md` Appendix A item 8 — the order text's own claimed digest |
@@ -1570,7 +1607,7 @@ artifact_ (the mutual-consistency limb, which sees the span disagreeing with the
 table's prose without consulting any artifact at all). The report was then restored from a
 byte copy taken before the edit and `diff` confirmed the restoration byte-identical, the
 gate returned exit 0, and the battery returned fully green — 26 tests, which was its size
-when that experiment was run; it holds <!--fig:doc_battery_tests-->46<!--/fig--> on this tree
+when that experiment was run; it holds <!--fig:doc_battery_tests-->47<!--/fig--> on this tree
 (§2.2 S3, plus the two FBL-020-R6 §1 tests). **No digest of this file is
 quoted here on purpose**: a checksum of the delivery report, published inside the delivery
 report, is stale the instant the next sentence is written — which is the very class §5.4
@@ -1890,14 +1927,14 @@ Not risks. Not residual. **Work that is not done.**
    is withdrawn; `docs/evidence/FBL-020-R6-MIGRATION-PREFLIGHT.md` records the change and
    why it was made.
 
-3. **NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT
-   COMMIT.** This entry is narrower than the one it replaces, and the narrowing is the
-   point. The R5 CI gate IS discharged at the final code-bearing commit — run 32190154935
-   measured `174c789` and every one of its four jobs succeeded (§1) — so the entry this list
-   used to carry, asserting that the R5 CI run was not discharged, is **withdrawn as false**
-   and is quoted where it is withdrawn, in §10. What remains
-   undischarged is different and is stated exactly: FBL-020-R6 §1–§4 are in the working
-   tree, the R6 order forbids committing and pushing, and a run measures a commit rather
+3. **NO GREEN CI RUN MEASURES THE FBL-020-R6 WORK.** This entry is narrower than the one it
+   replaces, and the narrowing is the point. The R5 CI gate IS discharged at its final
+   code-bearing commit — run 32190154935 measured `174c789` and every one of its four jobs
+   succeeded (§1) — so the entry this list used to carry, asserting that the R5 CI run was
+   not discharged, is **withdrawn as false** and is quoted where it is withdrawn, in §10.
+   What remains undischarged is different and is stated exactly: FBL-020-R6 §1–§4 are
+   COMMITTED, at `0fe4ae7` and `242e24a`, and both of their exact-SHA runs FAILED. A run
+   measures a commit rather
    than a working tree. Every R6 gate was executed locally against a real PostgreSQL 16;
    that is corroboration, not a CI run, and it is not offered as one. **The one-commit
    budget was also VIOLATED** — three code-bearing commits, two of them red — which §1.1
@@ -2178,7 +2215,7 @@ absolute ships here without a fixture proving it.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | §4.0 census provenance, and the migration preflight   | the census was taken from a tree with "none of them under `migrations/`" / "`migrations/` matches: yes" | the artifact records `migrations_match_head: false` and "`migrations/` carries 1 of them". §4.0 now states the artifact's number and what the one change means  |
 | §4.0, the migration preflight, and `058`'s own header | the artifact "says nothing of the kind" / "records no such thing" about a stale `postmaster.pid`        | the artifact records the disagreement in four evidence rows, `postmaster.pid and the running server agree on the data directory` = `false`. All three corrected |
-| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->652<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
+| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->653<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
 | §4.2 and `docs/identity/DATA-DICTIONARY.md`           | `058`'s digests published as `33c851a0…` / `bcf39d9a…`                                                  | the body had been edited since; both documents carry the re-derived values, and `architecture/migration-fixture-chains.json` declares the same one              |
 
 **NINE FORMATTING REPAIRS BELONG WITH THEM, AND ONE MECHANISM EXPLAINS ALL OF THEM.** §4.1's
@@ -2260,15 +2297,16 @@ Every "old" value in this column is a figure this repository really did publish.
 FBL-000 closed → FBL-010 closed → **FBL-020 IN PROGRESS. THE FINAL CODE-BEARING COMMIT IS
 `174c7893c8fd05d1fabf0d8ad97eafa168c35fc6` AND ITS EXACT-SHA `.github/workflows/ci.yml` RUN
 32190154935 COMPLETED WITH 4 OF 4 JOBS SUCCESSFUL**; **THE ONE-COMMIT BUDGET WAS VIOLATED:
-3 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 2 OF THEM FAILED CI, AND DISCLOSURE
-DOES NOT CURE THE VIOLATION** (§1.1); **NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH
-IS UNCOMMITTED ON TOP OF THAT COMMIT**; and every clause is UNVERIFIED until the final
+6 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED 1, 4 OF THEM FAILED CI, AND DISCLOSURE
+DOES NOT CURE THE VIOLATION** (§1.1); **THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA
+RUN NAMED ABOVE MEASURED AN EARLIER COMMIT AND NOT IT** — both R6 runs FAILED, so no green
+run measures it; and every clause is UNVERIFIED until the final
 package proves it → §3.1 **OPEN AND EXTERNALLY BLOCKED** (the bytes are COMMITTED in this
 repository and whether the two reviewer project copies hold them is not observable from here;
 who must act and what they must verify on arrival are in §8.4 and
 `docs/orders/BLUEPRINT-PROVENANCE.md`) → live WorkOS certification **NOT
 DISCHARGED** (no credentials, §8.1) → the census **REPORTED, NOT ACCEPTED** (§8.2) → a CI
-run covering the R6 tree **NOT DISCHARGED** (§8.3) → FBL-030 **not started**, and nothing in
+a GREEN run measuring the R6 work **NOT DISCHARGED** (§8.3) → FBL-030 **not started**, and nothing in
 this revision touches it.
 
 **FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN.** This report is not a claim

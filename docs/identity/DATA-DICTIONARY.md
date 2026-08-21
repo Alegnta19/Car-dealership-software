@@ -384,11 +384,9 @@ sed 's/\r$//' migrations/<file>.sql | sha256sum
 ```
 
 **Where the bytes are read from does not change the value, and `HEAD` may be used FOR THE
-COMMITTED CHAIN.** Every migration through `057` is committed — `git status --short
-migrations/` reports only the UNTRACKED `058_policy_evidence_reconstructable.sql`, which
-FBL-020-R6 §3 added and which the R6 order forbids committing — so each committed file's
-`HEAD` blob canonicalises to the same digest as the file on disk, and `058` has no `HEAD`
-blob to compare against at all. For `057`, the one this section is most often read for, both
+COMMITTED CHAIN.** Every migration is committed, `058_policy_evidence_reconstructable.sql` included — it was
+UNTRACKED while FBL-020-R6 was uncommitted, and it was committed with the rest of §3 — so
+each file's `HEAD` blob canonicalises to the same digest as the file on disk. For `057`, the one this section is most often read for, both
 of
 
 ```bash
@@ -396,8 +394,9 @@ git show HEAD:migrations/057_identity_boundary_completion.sql | sed 's/\r$//' | 
 sed 's/\r$//' migrations/057_identity_boundary_completion.sql | sha256sum
 ```
 
-produce `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` at commit
-`174c7893c8fd05d1fabf0d8ad97eafa168c35fc6`, which is this repository's `HEAD`.
+produce `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67`. `057` is frozen,
+so the digest is the same at `174c789` — the evidence commit — and at `242e24a`, which is this
+repository's `HEAD`.
 `docs/FBL-020-DELIVERY-REPORT.md` publishes the same values beside their git blob OIDs,
 under its "The migration chain" heading, measured on this tree. (This sentence named
 `0e99ecd` until FBL-020-R6 §4.4; that commit stopped being `HEAD` when `174c789` was pushed,

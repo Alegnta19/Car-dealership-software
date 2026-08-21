@@ -189,6 +189,46 @@ export interface FinalState {
   r5_baseline: { sha: string; subject: string };
   code_bearing_commits: CodeBearingCommit[];
   evidence_commit_sha: string;
+  /**
+   * FBL-020-R6: THE COMMITS THAT SIT ON TOP OF THE EVIDENCE COMMIT, recorded rather than
+   * left out — and this field exists because leaving them out was reproducing the exact
+   * defect FBL-020-R5 was rejected for.
+   *
+   * `code_bearing_commits` is checked to be EXACTLY the range `r5_baseline..evidence_commit`.
+   * That is the right range for "which commits did the reported run measure", and it is the
+   * wrong range for "how many code-bearing commits does this delivery contain": every commit
+   * made AFTER the last green run falls outside it and was therefore counted nowhere. Two
+   * did — `0fe4ae7` and `242e24a`, both red — so the budget the record published understated
+   * the breach, which is precisely the "record lists fewer commits than the history holds"
+   * shape the gate refuses one field over.
+   *
+   * A commit here may have NO run yet (`run: null`). That is the honest state of a commit
+   * whose own CI has not finished, and it is a different fact from a run that failed — the
+   * budget counts the commit either way, and only a recorded FAILURE counts toward
+   * `failed_ci`.
+   */
+  /**
+   * FBL-020-R6: WHAT THE COMMIT THIS RECORD LIVES IN IS, declared, because its SHA cannot be.
+   *
+   * `is_code_bearing` is the only part of the self-commit a record can state, and stating it
+   * is what makes the budget arithmetic environment-independent. Deriving the same fact from
+   * git — "HEAD is above the evidence commit and is not in the list, so add one" — worked in
+   * a checkout and silently produced a DIFFERENT number in a tree with no `.git`, where
+   * `scripts/mutation-kill.ts` runs whole batteries. That is the identical trap, one level
+   * up from the one that broke run 32452596992: a fact read from an environment rather than
+   * from the record, in a gate whose whole purpose is that the record is the authority.
+   */
+  this_commit: {
+    is_code_bearing: boolean;
+    why_it_has_no_sha_here: string;
+  };
+  commits_ahead_of_the_evidence_commit: Array<{
+    sha: string;
+    short: string;
+    subject: string;
+    code_bearing: boolean;
+    run: WorkflowRun | null;
+  }>;
   repository_head_relation: HeadRelation;
   working_tree: {
     state: string;
@@ -225,6 +265,22 @@ export interface GitFacts {
    * reported as unrun rather than failed. See the header.
    */
   shallow: boolean;
+  /**
+   * FBL-020-R6: the tree is NOT A GIT REPOSITORY AT ALL — no `.git`, and no enclosing one.
+   *
+   * This is a THIRD environment, not a harsher shallow clone, and conflating the two is the
+   * absence-vs-silence mistake this delivery has already had to correct twice in the census.
+   * A shallow clone ANSWERS `git rev-parse HEAD`; it holds one commit object and knows which.
+   * A non-repository answers NOTHING — and `readGitFacts` used to call `git rev-parse HEAD`
+   * unguarded, so it THREW there rather than reporting an environment.
+   *
+   * `scripts/mutation-kill.ts` builds exactly that environment: `isolatedCopy()` excludes
+   * `.git` deliberately, then runs whole batteries inside the copy. Every gate test that
+   * drives this file was therefore red in the copy BEFORE any mutation was applied, which
+   * the runner reported honestly as INCONCLUSIVE rather than crediting a kill — and one
+   * inconclusive result fails the step. `head` is the empty string when this is true.
+   */
+  absent: boolean;
   /** sha → subject, or `undefined` when the object is not a commit in this repository. */
   subject: Record<string, string | undefined>;
   /** sha → is it an ancestor of HEAD, or HEAD itself. */
@@ -259,14 +315,42 @@ function git(args: string[], root: string): string {
 
 function gitOrUndefined(args: string[], root: string): string | undefined {
   try {
-    return git(args, root);
+    /*
+     * `stderr: 'pipe'` so git's own diagnostics do not leak to the console. Outside a
+     * repository `rev-parse` prints "fatal: not a git repository" before failing, and this
+     * gate would print that line and then exit 0 — a reader scanning a green run would see
+     * the word "fatal" and reasonably conclude something had gone wrong. The failure IS the
+     * answer here, and it is reported in the gate's own words instead.
+     */
+    return execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
   } catch {
     return undefined;
   }
 }
 
 export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
-  const head = git(['rev-parse', 'HEAD'], root);
+  /*
+   * ASKED, NOT ASSUMED. `git rev-parse HEAD` throws outside a repository, and letting it
+   * throw turned "this tree has no history" into a stack trace in the middle of a battery.
+   * The absence is a FACT ABOUT THE ENVIRONMENT and is returned as one, exactly as `shallow`
+   * is, so `finalStateProblems` can skip the limbs that need history and `main()` can name
+   * them instead of the gate dying or — far worse — inventing findings from a missing HEAD.
+   */
+  const head = gitOrUndefined(['rev-parse', 'HEAD'], root);
+  if (head === undefined)
+    return {
+      head: '',
+      shallow: false,
+      absent: true,
+      subject: {},
+      ancestorOfHead: {},
+      baselineToEvidence: [],
+      aheadOfEvidence: [],
+    };
   const shallow = gitOrUndefined(['rev-parse', '--is-shallow-repository'], root) === 'true';
   const shas = [state.r5_baseline.sha, ...state.code_bearing_commits.map((c) => c.sha)];
 
@@ -288,7 +372,15 @@ export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
   }
 
   if (shallow) {
-    return { head, shallow, subject, ancestorOfHead, baselineToEvidence: [], aheadOfEvidence: [] };
+    return {
+      head,
+      shallow,
+      absent: false,
+      subject,
+      ancestorOfHead,
+      baselineToEvidence: [],
+      aheadOfEvidence: [],
+    };
   }
 
   /*
@@ -312,6 +404,7 @@ export function readGitFacts(state: FinalState, root = ROOT): GitFacts {
   return {
     head,
     shallow,
+    absent: false,
     subject,
     ancestorOfHead,
     baselineToEvidence: range(state.r5_baseline.sha, state.evidence_commit_sha),
@@ -360,10 +453,42 @@ export function requiredStatements(state: FinalState): Statement[] {
       documents: [REPORT, MAP, LIMITS, README],
     },
     {
+      /*
+       * FBL-020-R6, AND THIS ENTRY REPLACES ONE THAT REQUIRED THE OPPOSITE — the second time
+       * this registry has had to, and for the same reason both times.
+       *
+       * It used to require every governed document to assert "NO CI RUN COVERS THE FBL-020-R6
+       * WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT". That was true while the R6
+       * work sat uncommitted. The operator authorised committing, the work was committed, and
+       * a run measured it — at which point THE GATE BUILT TO STOP R5's STALE SENTENCES WAS
+       * MANDATING ONE. A registry that hard-codes one branch of a fact the tree can change is
+       * not a gate; it is a second place for the fact to go stale.
+       *
+       * The old sentence is now in `FORBIDDEN`, exactly as `blueprint_not_materialized` was,
+       * so the two directions cannot disagree. There is deliberately NO conditional branch
+       * back to it: the R6 work cannot become uncommitted again, and a branch for a state
+       * that cannot recur is an absolute without a fixture.
+       */
       id: 'working_tree_not_covered',
-      what: 'that the run did NOT measure the uncommitted R6 work sitting on top of it',
+      what:
+        state.working_tree.state === 'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT'
+          ? 'that the R6 work is committed, and that the run named above did NOT measure it'
+          : 'that the R6 work is committed, and that the exact-SHA run above measured it',
+      /*
+       * TWO BRANCHES, AND BOTH ARE LIVE — which is why this one IS conditional where the
+       * paragraph above refuses to be. "Uncommitted" cannot recur, so no branch leads back
+       * to it. "Committed but not yet measured" recurs on every single code-bearing commit,
+       * because a run cannot exist for a commit before the commit does; the delivery passes
+       * through this state every time and then leaves it when the run lands. A registry that
+       * could only describe the second half of that would force a false sentence for the
+       * hours in between, which is the defect this whole gate answers.
+       */
       sentence:
-        'NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT',
+        state.working_tree.state === 'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT'
+          ? 'THE FBL-020-R6 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN ' +
+            'EARLIER COMMIT AND NOT IT'
+          : 'THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, ' +
+            'AND NO UNCOMMITTED WORK SITS ON TOP OF IT',
       documents: [REPORT, MAP, LIMITS],
     },
     {
@@ -461,6 +586,27 @@ export const FORBIDDEN: ForbiddenStatement[] = [
     sentence:
       'that runner carries no mutation against migration 057 or any policy-evidence constraint',
     why: 'scripts/database-control-mutations.ts mutates the policy-evidence controls in the database and gates CI on zero survivors.',
+  },
+  {
+    id: 'no_ci_run_covers_the_r6_working_tree',
+    sentence:
+      'NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT',
+    why: 'this was a REQUIRED statement until the operator authorised committing the R6 work. It is committed, and an exact-SHA run measured it. Requiring it a moment longer would have made this gate the author of the sentence class it was built to refuse.',
+  },
+  {
+    id: 'r6_order_forbids_committing',
+    sentence: 'The R6 order forbids committing and pushing',
+    why: 'the operator authorised a different transfer path and the work was committed and pushed. A prohibition that has been lifted may not be cited as the reason a document has nothing to measure.',
+  },
+  {
+    id: 'no_ci_run_covers_this_working_tree',
+    sentence: 'No CI run covers this working tree',
+    why: 'the same claim as the rule above, in sentence case, in the R6 order document. It escaped the register once by being REWORDED rather than repeated — "covers" where the banned sentence said "exists for" — which is why it is listed by its own text instead of trusted to a near neighbour.',
+  },
+  {
+    id: 'unverified_for_the_uncommitted_r6_work',
+    sentence: 'UNVERIFIED FOR THE UNCOMMITTED FBL-020-R6 WORK ON TOP OF IT',
+    why: 'the requirement map closed several verdicts with this clause. The R6 work is committed and measured, so the clause understates what has been verified — a verdict stale in the direction of pessimism is still a stale verdict.',
   },
   {
     id: 'blueprint_not_materialized',
@@ -587,6 +733,49 @@ export function finalStateProblems(
   documents: Record<string, string>,
 ): string[] {
   const problems: string[] = [];
+  /*
+   * Hoisted: the budget arithmetic among the SHA checks below needs the count of commits
+   * sitting on top of the evidence commit, and it runs first. The list itself is VALIDATED
+   * further down, beside the run checks it belongs with.
+   */
+  const ahead = state.commits_ahead_of_the_evidence_commit ?? [];
+  /*
+   * ── A RECORD CANNOT NAME THE COMMIT IT LIVES IN ─────────────────────────────
+   *
+   * The list above is checked to be EXACTLY `git rev-list <evidence>..HEAD`, which is right
+   * for every commit except one: the commit that CONTAINS this record. Its SHA does not
+   * exist until the commit is written, so a record inside it can never list it, and a gate
+   * demanding otherwise is a gate nobody can pass — the same reasoning that made
+   * `repository_head_relation` an ENUM rather than a SHA.
+   *
+   * So EXACTLY ONE omission is tolerated, HEAD's, and it is tolerated rather than ignored:
+   * the budget below ADDS it back, so the count is not understated by the allowance, and
+   * `main()` prints the allowance whenever it is in play. Any other missing commit is a
+   * real omission and is reported.
+   *
+   * Both shapes are legitimate and both occur. A record edited in the working tree describes
+   * a HEAD that already exists and lists it. The same record, once committed, sits one
+   * commit behind itself. Accepting only the first would fail every commit at the moment it
+   * is made; accepting any omission at all would reopen the undercount this field exists to
+   * close.
+   */
+  const recordedAhead = ahead.map((c) => c.sha);
+  const selfCommitCounted = state.this_commit?.is_code_bearing === true;
+  const aheadCodeBearing = ahead.filter((c) => c.code_bearing).length + (selfCommitCounted ? 1 : 0);
+  if (state.this_commit === undefined)
+    problems.push(
+      'the record does not declare this_commit. A record that cannot say whether the commit ' +
+        'containing it is code-bearing cannot publish a commit budget, because that commit is ' +
+        'the one SHA it can never name.',
+    );
+  else if (
+    typeof state.this_commit.why_it_has_no_sha_here !== 'string' ||
+    state.this_commit.why_it_has_no_sha_here.trim() === ''
+  )
+    problems.push(
+      'this_commit.why_it_has_no_sha_here must say why the SHA is absent, so a reader meets ' +
+        'the reason rather than an unexplained gap in the list',
+    );
 
   // ── 1. the SHAs, against git ────────────────────────────────────────────────
   const named: Array<[string, string, string]> = [
@@ -601,7 +790,11 @@ export function finalStateProblems(
       continue;
     }
     // A shallow clone holds one commit object. Anything else is UNMEASURED here, not
-    // absent from the repository; `main()` names the limbs that did not run.
+    // absent from the repository; `main()` names the limbs that did not run. Where there is
+    // no repository at all, NO commit is measurable and every one of them is unmeasured —
+    // reporting "is not a commit in this repository" would be a finding about the delivery
+    // derived from the absence of a `.git` directory.
+    if (git_.absent) continue;
     if (git_.shallow && sha !== git_.head) continue;
     const real = git_.subject[sha];
     if (real === undefined) {
@@ -622,7 +815,7 @@ export function finalStateProblems(
       problems.push(`code-bearing commit: short form ${c.short} does not abbreviate ${c.sha}`);
 
   const listed = state.code_bearing_commits.map((c) => c.sha);
-  if (!git_.shallow) {
+  if (!git_.shallow && !git_.absent) {
     const inRange = git_.baselineToEvidence;
     const missing = inRange.filter((sha) => !listed.includes(sha));
     const invented = listed.filter((sha) => !inRange.includes(sha));
@@ -636,12 +829,15 @@ export function finalStateProblems(
       problems.push(
         `${invented.length} recorded commit(s) are not in that range: ${invented.join(', ')}`,
       );
-    if (state.commit_budget.used !== inRange.length)
+    if (state.commit_budget.used !== inRange.length + aheadCodeBearing)
       problems.push(
         `commit_budget.used is ${state.commit_budget.used} and git counts ${inRange.length} ` +
-          'code-bearing commits in the recorded range',
+          `code-bearing commit(s) in the recorded range plus ${aheadCodeBearing} on top of the ` +
+          'evidence commit',
       );
-  } else if (state.commit_budget.used !== listed.length) {
+  } else if (state.commit_budget.used !== listed.length + aheadCodeBearing) {
+    // Reached on a shallow clone AND on a tree with no repository: neither can recompute
+    // the range, and both can still check the record's own arithmetic.
     /*
      * The range cannot be recomputed here, but the record must still be internally
      * consistent: the budget it publishes is the number of commits it lists. That is the
@@ -650,13 +846,73 @@ export function finalStateProblems(
      */
     problems.push(
       `commit_budget.used is ${state.commit_budget.used} and the record lists ` +
-        `${listed.length} code-bearing commit(s) (shallow clone: the git range could not be ` +
-        'recomputed here, so only the record’s own arithmetic was checked)',
+        `${listed.length} code-bearing commit(s) plus ${aheadCodeBearing} on top of the ` +
+        'evidence commit (no history here, so only the record’s own arithmetic was checked)',
     );
   }
-  const reallyFailed = state.code_bearing_commits.filter(
-    (c) => c.run.conclusion !== 'success',
-  ).length;
+  /*
+   * ── THE COMMITS ON TOP OF THE EVIDENCE COMMIT ───────────────────────────────
+   *
+   * Checked against git in BOTH directions, exactly as the range below the evidence commit
+   * is: a commit git holds and the record omits is the understatement defect, and a commit
+   * the record invents is the opposite one.
+   */
+  for (const c of ahead) {
+    if (!HEX40.test(c.sha)) {
+      problems.push(
+        `commit ahead of the evidence commit: ${c.sha} is not a full 40-character commit SHA`,
+      );
+      continue;
+    }
+    if (!c.sha.startsWith(c.short))
+      problems.push(
+        `commit ahead of the evidence commit: short form ${c.short} does not abbreviate ${c.sha}`,
+      );
+    if (c.run !== null) {
+      problems.push(...runProblems(`commit ahead of the evidence commit ${c.short}`, c.sha, c.run));
+      if (c.run.head_sha !== c.sha)
+        problems.push(
+          `commit ahead of the evidence commit ${c.short}: run ${c.run.run_id} names head_sha ` +
+            `${c.run.head_sha}, which is a different commit`,
+        );
+    }
+  }
+  if (!git_.shallow && !git_.absent) {
+    const inAhead = git_.aheadOfEvidence;
+    /*
+     * HEAD is exempt from the LIST for the same reason it is added to the COUNT by
+     * declaration: a record cannot name the commit that contains it. The exemption is
+     * git-derived because it is a question about the list ("is the unlisted one HEAD?"),
+     * which only git can answer; the COUNT is declaration-derived because it must come out
+     * the same in a tree with no repository at all.
+     */
+    const missingAhead = inAhead.filter((sha) => !recordedAhead.includes(sha) && sha !== git_.head);
+    const inventedAhead = recordedAhead.filter((sha) => !inAhead.includes(sha));
+    if (missingAhead.length > 0)
+      problems.push(
+        `${missingAhead.length} commit(s) sit on top of the evidence commit and are NOT ` +
+          `recorded: ${missingAhead.join(', ')}. A commit made after the last measured run is ` +
+          'still a commit, and omitting it understates the delivery. (HEAD itself is exempt — ' +
+          'a record cannot name the commit it lives in — and these are not HEAD.)',
+      );
+    if (inventedAhead.length > 0)
+      problems.push(
+        `${inventedAhead.length} recorded commit(s) are not on top of the evidence commit: ` +
+          inventedAhead.join(', '),
+      );
+    for (const c of ahead) {
+      const real = git_.subject[c.sha];
+      if (real !== undefined && real !== c.subject)
+        problems.push(
+          `commit ahead of the evidence commit ${c.short}: recorded subject ` +
+            `${JSON.stringify(c.subject)} but git says ${JSON.stringify(real)}`,
+        );
+    }
+  }
+
+  const reallyFailed =
+    state.code_bearing_commits.filter((c) => c.run.conclusion !== 'success').length +
+    ahead.filter((c) => c.code_bearing && c.run !== null && c.run.conclusion !== 'success').length;
   if (state.commit_budget.failed_ci !== reallyFailed)
     problems.push(
       `commit_budget.failed_ci is ${state.commit_budget.failed_ci} and ${reallyFailed} recorded ` +
@@ -709,7 +965,17 @@ export function finalStateProblems(
   // `aheadOfEvidence` and the relation is derived by comparing two SHAs. So a reader
   // debugging a shallow CI failure was pointed at a range the gate had not measured, and
   // could have "confirmed" the message by running it themselves on a full clone.
-  if (headIsEvidence && declared !== 'HEAD_IS_THE_EVIDENCE_COMMIT')
+  /*
+   * AND NOT DECIDED AT ALL WHERE THERE IS NO REPOSITORY. The comment above is careful that
+   * the head relation SURVIVES a shallow clone; it does not survive the ABSENCE of one,
+   * because there is no HEAD to compare against. `headIsEvidence` would be computed from
+   * `head: ''` and would report a contradiction between the record and a repository that is
+   * not there. So the two checks below are skipped and NAMED as unrun — the same treatment
+   * the history limbs get, for the same reason: a gate must not manufacture a finding out of
+   * an environment. Everything after them still runs, because the document checks need no
+   * git at all and are exactly what a tree copy is being used to exercise.
+   */
+  if (!git_.absent && headIsEvidence && declared !== 'HEAD_IS_THE_EVIDENCE_COMMIT')
     problems.push(
       `the record declares ${declared}, but ` +
         (git_.shallow
@@ -719,7 +985,7 @@ export function finalStateProblems(
           : `git rev-list ${state.evidence_commit_sha}..HEAD is empty`) +
         ' — the evidence commit IS the tip',
     );
-  if (!headIsEvidence && declared !== 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT')
+  if (!git_.absent && !headIsEvidence && declared !== 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT')
     problems.push(
       `the record declares ${declared}, but HEAD is ${git_.head} and the evidence commit is ` +
         `${state.evidence_commit_sha}` +
@@ -729,21 +995,78 @@ export function finalStateProblems(
             `(${git_.aheadOfEvidence.join(', ')}). The exact-SHA run does NOT measure this ` +
             'head, and the delivery documents may not say it does.'),
     );
-  const treeStates = ['UNCOMMITTED_ON_TOP_OF_THE_EVIDENCE_COMMIT', 'COMMITTED'];
+  /*
+   * FBL-020-R6: `UNCOMMITTED_ON_TOP_OF_THE_EVIDENCE_COMMIT` is GONE rather than retained as a
+   * still-legal value. The R6 work is committed; a record declaring it uncommitted would now
+   * be false, and leaving the value admissible would leave the stale required sentence one
+   * edit away from being satisfiable again.
+   *
+   * `COMMITTED_AS_THE_EVIDENCE_COMMIT` is the value that fits what is actually true, and it
+   * is not a synonym for `COMMITTED`. `COMMITTED` asserts the delivery IS the tip. That
+   * cannot be declared by a record while a documentation closeout naming the run sits on top
+   * of the commit the run measured — a run cannot exist for a commit before the commit does.
+   * The new value asserts the narrower, checkable thing: the R6 work is the evidence commit,
+   * the recorded run measured THAT, and whatever sits above it is described by
+   * `repository_head_relation` rather than waved at here.
+   */
+  const treeStates = [
+    'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT',
+    'COMMITTED_AS_THE_EVIDENCE_COMMIT',
+    'COMMITTED',
+  ];
   if (!treeStates.includes(state.working_tree.state))
     problems.push(
       `working_tree.state is ${JSON.stringify(state.working_tree.state)}, which is not one of ` +
         treeStates.join(' / '),
     );
-  if (state.working_tree.state === 'COMMITTED' && !headIsEvidence)
+  if (!git_.absent && state.working_tree.state === 'COMMITTED' && !headIsEvidence)
     problems.push(
       'working_tree.state says COMMITTED, but commits sit on top of the evidence commit and no ' +
         'run measures them — the delivery is not the commit the run measured',
     );
+  if (state.working_tree.state === 'COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT') {
+    /*
+     * The value CLAIMS that committed work sits above the measured commit, so git is asked
+     * whether anything is up there. Declaring it over a tip that IS the evidence commit
+     * would understate what the run covered in the one direction nobody checks for.
+     */
+    if (!git_.absent && !git_.shallow && git_.aheadOfEvidence.length === 0)
+      problems.push(
+        'working_tree.state says COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT, but no commit sits ' +
+          'on top of the evidence commit — the run named in the record measures this tip',
+      );
+    if (state.repository_head_relation !== 'HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT')
+      problems.push(
+        'working_tree.state says COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT while ' +
+          `repository_head_relation says ${state.repository_head_relation}. The two fields ` +
+          'describe the same geometry and may not disagree.',
+      );
+  }
+  if (state.working_tree.state === 'COMMITTED_AS_THE_EVIDENCE_COMMIT') {
+    /*
+     * The value is a CLAIM that a run measured the work, so it is checked against the run
+     * rather than accepted. Declaring it over a red or missing run would republish the R5
+     * defect in the one field built to record that defect's correction.
+     */
+    const run = evidenceRun(state);
+    if (run === undefined)
+      problems.push(
+        'working_tree.state says COMMITTED_AS_THE_EVIDENCE_COMMIT, but the evidence commit is ' +
+          'not among code_bearing_commits, so no run is recorded as having measured it',
+      );
+    else if (run.conclusion !== 'success')
+      problems.push(
+        'working_tree.state says COMMITTED_AS_THE_EVIDENCE_COMMIT, but the run recorded for ' +
+          `the evidence commit concluded ${run.conclusion} — a red run measures the commit ` +
+          'without discharging it',
+      );
+  }
   if (state.working_tree.ci_run_for_this_working_tree !== null)
     problems.push(
-      'working_tree.ci_run_for_this_working_tree must be null while nothing is committed; a run ' +
-        'measures a commit, never a working tree',
+      'working_tree.ci_run_for_this_working_tree must be null: a run measures a COMMIT, never ' +
+        'a working tree. (This message used to add "while nothing is committed". The guard was ' +
+        'never conditional on that, and the clause stopped being true once the work was ' +
+        'committed — a false premise inside a correct check is still a false premise.)',
     );
 
   // ── 4. the submission status ────────────────────────────────────────────────
@@ -911,7 +1234,35 @@ function main(): void {
     `code-bearing commits: ${state.commit_budget.used} (budget ${state.commit_budget.allowed}, verdict ${state.commit_budget.verdict})`,
   );
   console.log(`submission: ${state.submission.status}`);
-  console.log(`git history: ${facts.shallow ? 'SHALLOW' : 'complete'}`);
+  if (state.this_commit?.is_code_bearing)
+    console.log(
+      '  note: the commit this record lives in is code-bearing and is COUNTED in the budget ' +
+        'above, but cannot be listed by SHA — a record cannot name the commit that contains ' +
+        'it. The count is taken from the record’s own declaration, so it is the same number ' +
+        'in a checkout and in a tree with no .git.',
+    );
+  console.log(
+    `git history: ${facts.absent ? 'ABSENT (this tree is not a git repository)' : facts.shallow ? 'SHALLOW' : 'complete'}`,
+  );
+  if (facts.absent) {
+    /*
+     * SAID OUT LOUD, EVERY TIME — and it says MORE than the shallow branch, because more was
+     * skipped. A shallow clone still decides the head relation from `HEAD` alone; a tree with
+     * no repository decides nothing about git, so the head relation joins the history limbs
+     * in the not-run list. What DOES run here is the whole document half of the gate, which
+     * is precisely what a tree copy exists to exercise.
+     */
+    console.log(
+      `  there is no .git here, so the head relation and ${HISTORY_DEPENDENT_CHECKS.length} ` +
+        'history check(s) below did NOT run. The document checks, the run-data checks and the ' +
+        "record's own arithmetic all did. scripts/mutation-kill.ts builds exactly this " +
+        'environment on purpose; ci.yml checks out the verify job with fetch-depth: 0, where ' +
+        'the git limbs run.',
+    );
+    console.log('  - not run: head_relation (needs git rev-parse HEAD)');
+    for (const h of HISTORY_DEPENDENT_CHECKS)
+      console.log(`  - not run: ${h.id} (needs ${h.needs})`);
+  }
   if (facts.shallow) {
     /*
      * SAID OUT LOUD, EVERY TIME. A shallow checkout cannot run the history limbs, and a

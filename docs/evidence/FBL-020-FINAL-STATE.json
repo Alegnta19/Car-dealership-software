@@ -111,32 +111,47 @@
   ],
   "evidence_commit_sha": "174c7893c8fd05d1fabf0d8ad97eafa168c35fc6",
   "repository_head_relation": "HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT",
-  "repository_head_relation_meaning": "The R6 code-bearing commit sits ON TOP of the evidence commit this record names, so the exact-SHA run recorded here MEASURES THE EVIDENCE COMMIT AND NOT THIS HEAD. That is the honest state of a commit whose own run has not happened yet: a run cannot exist for a commit before the commit does. R6 §5 permits one documentation-only closeout, and naming this head together with its own exact-SHA run is exactly what that closeout is for. Until then no document may say the recorded run measures this head — that claim is what R5 was rejected for and what this gate exists to refuse.",
+  "repository_head_relation_meaning": "The FBL-020-R6 commits sit ON TOP of the evidence commit this record names, so the exact-SHA run recorded against that commit MEASURES IT AND NOT THIS HEAD. The evidence commit is deliberately NOT moved to the newest commit: it is the last commit whose own exact-SHA run concluded success, and moving the label to a commit whose run was red would be the R5 defect with a fresh SHA in it. Every commit above it is recorded in commits_ahead_of_the_evidence_commit, with its own run and its own conclusion, so the budget counts them and no reader has to infer them.",
   "working_tree": {
-    "state": "UNCOMMITTED_ON_TOP_OF_THE_EVIDENCE_COMMIT",
-    "what_is_uncommitted": "FBL-020-R6 §1 through §4",
+    "state": "COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT",
+    "what_is_committed": "FBL-020-R6 §1 through §4",
     "ci_run_for_this_working_tree": null,
-    "why_nothing_is_committed": "the FBL-020-R6 implementation order instructs the implementation not to commit and not to push. That instruction is followed, and the consequence is stated rather than left for the reviewer to infer: run 32190154935 measured 174c789 and did NOT measure the FBL-020-R6 changes sitting on top of it.",
-    "how_the_r6_work_was_verified_instead": "every gate was executed locally against a real PostgreSQL 16 on 127.0.0.1:55434. That is not a CI run and is not offered as one."
+    "how_it_was_transferred": "the FBL-020-R6 order instructed the implementation not to commit and not to push. The operator subsequently authorised a different transfer path — committing into the repository — in order to place the governing Version 2.0 blueprint where a reader of this tree can open it. The R6 work was committed under that authorisation. The earlier statement that the order forbids committing is WITHDRAWN as a description of the present state; it was true when written and is quoted in withdrawn_claims.",
+    "what_measured_it": "run 32450787623 measured 0fe4ae7 and FAILED; run 32452596992 measured 242e24a and FAILED. Both are recorded above with per-job conclusions. NO GREEN RUN MEASURES THE FBL-020-R6 WORK, and this record does not imply one.",
+    "how_the_r6_work_was_verified_besides": "every gate was executed locally against a real PostgreSQL 16 on 127.0.0.1:55434. That is not a CI run and is not offered as one."
   },
   "commit_budget": {
     "allowed": 1,
-    "used": 3,
-    "failed_ci": 2,
+    "used": 6,
+    "failed_ci": 4,
     "verdict": "VIOLATED",
     "disclosure_does_not_cure_the_violation": true,
-    "note": "FBL-020-R5 §5 allows ONE code-bearing commit plus an optional documentation-only closeout. Three code-bearing commits exist. Each of the first two was RED in CI and the order forbids submitting a red tree, so each successor exists to close a failure rather than to add scope — that is the explanation, not a defence, and the architect has ruled that disclosing the count does not cure the breach. It is recorded here as a VIOLATION."
+    "per_order": {
+      "FBL-020-R5": {
+        "allowed": 1,
+        "used": 3,
+        "failed_ci": 2,
+        "verdict": "VIOLATED"
+      },
+      "FBL-020-R6": {
+        "allowed": 1,
+        "used": 3,
+        "failed_ci": 2,
+        "verdict": "VIOLATED"
+      }
+    },
+    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used three, so the budget is breached under BOTH — six code-bearing commits stand between the R5 baseline and this tip, and four of the six failed their own exact-SHA run. THE SIXTH IS THE COMMIT THIS RECORD LIVES IN, and it is counted rather than deferred: a record cannot name the SHA of the commit that contains it, so scripts/check-final-state.ts exempts HEAD from the ahead-of-evidence LIST and adds it back to the COUNT, printing a note whenever that allowance is in play. THE AGGREGATE USED TO STOP AT THREE, and that was an undercount produced by the record's own shape: code_bearing_commits is checked to be exactly r5_baseline..evidence_commit, so every commit made after the last GREEN run fell outside the counted range and was recorded nowhere. That is the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closes it, and the gate now checks that list against git in both directions. Each successor commit exists to close a failure rather than to add scope — that is the explanation and it is not a defence. R6 §5's verbatim text is NOT held in this repository (docs/orders/FBL-020-R6.md Part 2 marks it derived), so its budget is applied on the same terms as R5 §5 and is reported, not construed."
   },
   "submission": {
     "status": "NOT SUBMITTABLE AS COMPLETE",
     "blocking": [
       "Section 3.1: the supply obligation is DISCHARGED AS FAR AS THIS REPOSITORY CAN DISCHARGE IT. The governing Version 2.0 bytes are committed at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, tracked by git, and filename, byte length, SHA-256, title, version and governing §14.3 are each VERIFIED FROM THOSE BYTES by tests/delivery-documentation.test.ts — so the document is reviewable by anyone who can read this repository, which is what R6 §4.6 conditions closure on. What the two designated project copies outside this repository hold is UNKNOWN HERE, in either direction, and this record will not assert it — including not asserting it against itself. Whether the committed bytes satisfy §4.6 wording about \"both project copies\" is the reviewer decision, not this repository.",
       "LIVE WORKOS CERTIFICATION IS NOT DISCHARGED: no live provider credentials exist in this environment.",
-      "No CI run covers the FBL-020-R6 working tree, because nothing is committed.",
+      "NO GREEN CI RUN MEASURES THE FBL-020-R6 WORK. It is committed, and both of its exact-SHA runs FAILED — 32450787623 at 0fe4ae7 and 32452596992 at 242e24a. The evidence commit named in this record is the last GREEN one and predates that work.",
       "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
-      "The one-commit budget was VIOLATED — three code-bearing commits where the order allowed one."
+      "The one-commit budget was VIOLATED under BOTH orders — six code-bearing commits where each order allowed one."
     ],
-    "status_reason": "Live WorkOS certification is undischarged and no CI run covers this tree. Section 3.1 is no longer among the reasons — see blocking[0]."
+    "status_reason": "Live WorkOS certification is undischarged and no GREEN CI run measures the committed FBL-020-R6 work. Section 3.1 is no longer among the reasons — see blocking[0]."
   },
   "blueprint_section_3_1": {
     "status": "OPEN",
@@ -181,6 +196,82 @@
     "The order forbids committing, so no commit exists to measure",
     "that runner carries no mutation against migration 057 or any policy-evidence constraint",
     "The operator has supplied the Version 2.0 bytes to the reviewer twice.",
-    "THE VERSION 2.0 BLUEPRINT BYTES WERE NOT MATERIALIZED IN THE REVIEW WORKSPACE, AND THE ONLY ACCESSIBLE PROJECT COPIES REMAIN THE VERSION 1.0 FILE"
+    "THE VERSION 2.0 BLUEPRINT BYTES WERE NOT MATERIALIZED IN THE REVIEW WORKSPACE, AND THE ONLY ACCESSIBLE PROJECT COPIES REMAIN THE VERSION 1.0 FILE",
+    "NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT",
+    "The R6 order forbids committing and pushing",
+    "No CI run covers this working tree",
+    "UNVERIFIED FOR THE UNCOMMITTED FBL-020-R6 WORK ON TOP OF IT"
+  ],
+  "this_commit": {
+    "is_code_bearing": true,
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit carries changes to scripts/check-final-state.ts and tests/delivery-documentation.test.ts, so it IS code-bearing and is counted in commit_budget.used — it is simply not listed by SHA in commits_ahead_of_the_evidence_commit, which lists only commits that already existed. scripts/check-final-state.ts takes the count from THIS declaration rather than from git, so the arithmetic comes out the same in a full checkout, in a shallow clone, and in the tree copy with no .git that scripts/mutation-kill.ts runs its batteries inside."
+  },
+  "commits_ahead_of_the_evidence_commit": [
+    {
+      "sha": "0fe4ae70f0553fd32195eda2c617315f5ab19e51",
+      "short": "0fe4ae7",
+      "subject": "FBL-020-R6: identity boundary closure",
+      "code_bearing": true,
+      "run": {
+        "run_id": 32450787623,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "0fe4ae70f0553fd32195eda2c617315f5ab19e51",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "why_it_failed": "the final-state gate this order added read its wider forbidden-sentence scan from DISK instead of from the document map it is handed, which broke the purity `finalStateProblems` depends on and took five subtests with it — the shallow-clone test, the artifacts-absent test and three staged-document tests."
+    },
+    {
+      "sha": "242e24a8a2517a0d343199a49e736890b34ca2f7",
+      "short": "242e24a",
+      "subject": "FBL-020-R6: correct the final-state gate for the run that measured it red",
+      "code_bearing": true,
+      "run": {
+        "run_id": 32452596992,
+        "workflow_path": ".github/workflows/ci.yml",
+        "head_sha": "242e24a8a2517a0d343199a49e736890b34ca2f7",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "why_it_failed": "the whole test battery passed (652/652) and the step AFTER it did not: `scripts/mutation-kill.ts` copies the tree WITHOUT `.git`, and `readGitFacts` called `git rev-parse HEAD` unguarded, so every test driving the final-state gate was red inside that copy BEFORE any mutation was applied. The runner reported the affected mutation as INCONCLUSIVE rather than crediting a kill, and one inconclusive result fails the step. This is the named trap's SIXTH appearance — what a developer tree has and another checkout does not — in its newest dress: a tree copy that is not a repository."
+    }
   ]
 }
