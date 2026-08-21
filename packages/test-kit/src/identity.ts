@@ -5,7 +5,7 @@
  * links, role bindings and reauthentication grants the new auth stack needs.
  */
 import { randomUUID } from 'node:crypto';
-import { query } from '@dealer/database';
+import { query, withTransaction } from '@dealer/database';
 import { resetConfigForTests } from '@dealer/platform';
 import {
   DEFAULT_MFA_CERTIFICATION_VALIDITY_SECONDS,
@@ -567,6 +567,7 @@ export async function mintReauthGrant(input: {
   // /auth/reauth/callback does — with the state and PKCE verifier the START
   // generated — rather than reaching past it.
   const claimed = await claimReauthentication({
+    presentedPurpose: 'reauth',
     nonce: started.nonce,
     state: started.state,
     codeVerifier: started.codeVerifier,
@@ -694,6 +695,71 @@ export async function sessionBindingFor(
  * tenants directly (rather than through seedTenantIdentity) still needs one.
  * Idempotent, and safe for the NULL-tenant platform scope.
  */
+/**
+ * FBL-020-R7 §3.2 — MOVES A LIVE SUPPORT WINDOW INTO THE PAST, the only way left.
+ *
+ * The expiry suites used to stage "the clock has passed this window" with an
+ * UPDATE that pulled `granted_at`/`expires_at` backwards. Migration 059 makes a
+ * session's window IMMUTABLE — an approval's window may never be edited after
+ * the fact — so the staging is now a REBUILD: the production-created request and
+ * session rows are re-recorded VERBATIM, with only their instants shifted, and
+ * every write travels through the declared fixture primitive. The reborn rows
+ * satisfy every R7 rule on their own terms: the decision instant moves with the
+ * grant instant, and the shifted window still spans exactly the duration the
+ * request asked for.
+ *
+ * The shifted window is `[now-61m, now-31m)` against a decision at `now-61m`, so
+ * a 30-minute approval stays a 30-minute approval — just one that ended half an
+ * hour ago.
+ */
+export async function shiftSupportWindowIntoThePast(supportSessionId: string): Promise<void> {
+  await withTransaction(async (executor) => {
+    await executor.query(
+      `CREATE TEMP TABLE _shift_session ON COMMIT DROP AS
+         SELECT * FROM support_access_sessions WHERE support_session_id = $1`,
+      [supportSessionId],
+    );
+    await executor.query(
+      `CREATE TEMP TABLE _shift_request ON COMMIT DROP AS
+         SELECT r.* FROM support_access_requests r
+           JOIN _shift_session s ON s.request_id = r.request_id`,
+    );
+    await fixtureAuthorizationStateWrite(
+      'simulate-authorization-drift',
+      `DELETE FROM support_access_sessions WHERE support_session_id = $1`,
+      [supportSessionId],
+      { executor },
+    );
+    await fixtureAuthorizationStateWrite(
+      'simulate-authorization-drift',
+      `DELETE FROM support_access_requests
+        WHERE request_id IN (SELECT request_id FROM _shift_request)`,
+      [],
+      { executor },
+    );
+    await executor.query(`UPDATE _shift_request SET decided_at = NOW() - INTERVAL '61 minutes'`);
+    await executor.query(
+      `UPDATE _shift_session
+          SET granted_at = NOW() - INTERVAL '61 minutes',
+              expires_at = NOW() - INTERVAL '61 minutes'
+                           + make_interval(mins => (SELECT requested_duration_minutes
+                                                      FROM _shift_request))`,
+    );
+    await fixtureAuthorizationStateWrite(
+      'simulate-authorization-drift',
+      `INSERT INTO support_access_requests SELECT * FROM _shift_request`,
+      [],
+      { executor },
+    );
+    await fixtureAuthorizationStateWrite(
+      'simulate-authorization-drift',
+      `INSERT INTO support_access_sessions SELECT * FROM _shift_session`,
+      [],
+      { executor },
+    );
+  });
+}
+
 export async function ensureActiveConnection(tenantId: string | null): Promise<void> {
   await fixtureAuthorizationStateWrite(
     'seed-authorization-state',

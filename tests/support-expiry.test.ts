@@ -9,6 +9,7 @@ import {
   resetDatabase,
   seedTenantViaService,
   skipIntegration,
+  shiftSupportWindowIntoThePast,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
@@ -145,20 +146,12 @@ describe(
     }
 
     /**
-     * Moves a live window into the past. A DECLARED fixture bypass, and it has to be:
-     * there is no production service that ends a window early without revoking it, which
-     * is exactly the state this suite needs. Only the clock moves — no status, no
-     * version, no audit row.
+     * Moves a live window into the past — through the R7 rebuild, because the
+     * window itself is immutable now (§3.2). Only the clock moves: the reborn
+     * rows carry the same ids, values, versions and attribution.
      */
     async function lapse(supportSessionId: string): Promise<void> {
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_sessions
-            SET granted_at = NOW() - INTERVAL '90 minutes',
-                expires_at = NOW() - INTERVAL '31 minutes'
-          WHERE support_session_id = $1`,
-        [supportSessionId],
-      );
+      await shiftSupportWindowIntoThePast(supportSessionId);
     }
 
     async function sessionRow(supportSessionId: string): Promise<{

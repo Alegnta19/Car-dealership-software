@@ -838,12 +838,127 @@ export const MUTATIONS: Mutation[] = [
       'the login success transition requires the transaction to be unexpired in ' +
       'DATABASE TIME at the moment of completion',
     file: 'packages/identity-access/src/login-transaction.ts',
-    from:
-      '        -- FBL-020-R6 §2.3: LOGIN EXPIRY, ENFORCED AT COMPLETION, IN DATABASE TIME.\n' +
-      '        AND expires_at > NOW()\n',
+    from: '        AND expires_at > live.t\n',
     to: '',
     testFile: 'tests/login-admission.test.ts',
     testName: 'a login claimed before expiry and completed after it is refused WITHOUT any sweep',
+  },
+  {
+    /*
+     * FBL-020-R7 §2.1 — the completion clock. Reverting `live.t` to `now()` puts the
+     * predicate back on the TRANSACTION-START clock, so a custody transaction that
+     * outlives the expiry completes anyway — exactly the defect R7 §2.1 closes, and
+     * exactly what the named test stages by freezing NOW() while the wall moves.
+     */
+    id: 'login_completion_uses_transaction_start_time',
+    control:
+      'the login success transition is judged against ONE fresh clock_timestamp() ' +
+      'instant — the actual completion moment — never the frozen transaction start',
+    file: 'packages/identity-access/src/login-transaction.ts',
+    from: '       FROM (SELECT clock_timestamp() AS t) AS live\n',
+    to: '       FROM (SELECT now() AS t) AS live\n',
+    testFile: 'tests/login-admission.test.ts',
+    testName:
+      'login completion refuses after DB wall time crosses expiry inside the already-open admission transaction',
+  },
+  {
+    /*
+     * FBL-020-R7 §2.2 — the deleted default, reintroduced. An omitted purpose reads
+     * as the leg's own again, so the resealed no-purpose cookie completes.
+     */
+    id: 'login_missing_callback_purpose_assumed',
+    control:
+      'a callback that presents NO purpose is a purpose MISMATCH — absence is never ' +
+      'read as agreement',
+    file: 'packages/identity-access/src/login-transaction.ts',
+    from:
+      '    const presentedPurpose =\n' +
+      "      typeof input.presentedPurpose === 'string' ? input.presentedPurpose : null;\n",
+    to:
+      '    const presentedPurpose =\n' +
+      "      typeof input.presentedPurpose === 'string' ? input.presentedPurpose : input.purpose;\n",
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)',
+  },
+  {
+    /*
+     * FBL-020-R7 §2.2 — the route may not PRE-SCREEN the defect. A route-level 401
+     * for a missing purpose spends nothing: the row stays pending, no audit event
+     * is written, and the next attempt can still claim it — which is what the named
+     * test's terminal-row and single-event assertions refuse.
+     */
+    id: 'login_route_rejects_missing_purpose_before_lifecycle',
+    control:
+      'the login callback route forwards a valid handle INTO the lifecycle service ' +
+      'and never judges the presented purpose itself',
+    file: 'apps/api/src/routes/auth.ts',
+    from:
+      "    const handle = typeof txn.login_txn_id === 'string' ? txn.login_txn_id : null;\n" +
+      "    if (handle === null) throw new UnauthorizedError('Authentication failed');\n",
+    to:
+      "    const handle = typeof txn.login_txn_id === 'string' ? txn.login_txn_id : null;\n" +
+      "    if (handle === null) throw new UnauthorizedError('Authentication failed');\n" +
+      "    if (typeof txn.purpose !== 'string') throw new UnauthorizedError('Authentication failed');\n",
+    testFile: 'tests/login-admission.test.ts',
+    testName: 'a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)',
+  },
+  {
+    /* FBL-020-R7 §2.2 — the step-up leg's deleted default, reintroduced. */
+    id: 'stepup_missing_callback_purpose_assumed',
+    control:
+      'a step-up callback that presents NO purpose is a purpose MISMATCH — absence ' +
+      'is never read as agreement',
+    file: 'packages/identity-access/src/reauthentication.ts',
+    from: "    if (input.presentedPurpose !== 'reauth') {\n",
+    to: "    if ((input.presentedPurpose ?? 'reauth') !== 'reauth') {\n",
+    testFile: 'tests/reauth-callback-lifecycle.test.ts',
+    testName: 'a step-up callback whose sealed cookie carries NO PURPOSE ends its transaction',
+  },
+  {
+    /* FBL-020-R7 §2.2 — the step-up route may not pre-screen the defect either. */
+    id: 'stepup_route_rejects_missing_purpose_before_lifecycle',
+    control:
+      'the step-up callback route forwards a valid handle INTO the lifecycle ' +
+      'service and never judges the presented purpose itself',
+    file: 'apps/api/src/routes/auth.ts',
+    from:
+      "    const handle = typeof txn.nonce === 'string' ? txn.nonce : null;\n" +
+      "    if (handle === null) throw new UnauthorizedError('Reauthentication failed');\n",
+    to:
+      "    const handle = typeof txn.nonce === 'string' ? txn.nonce : null;\n" +
+      "    if (handle === null) throw new UnauthorizedError('Reauthentication failed');\n" +
+      "    if (typeof txn.purpose !== 'string') throw new UnauthorizedError('Reauthentication failed');\n",
+    testFile: 'tests/reauth-callback-lifecycle.test.ts',
+    testName: 'a step-up callback whose sealed cookie carries NO PURPOSE ends its transaction',
+  },
+  {
+    /*
+     * FBL-020-R7 §2.3 — the PKCE refusal relabelled a state refusal again. The
+     * refusal still happens; the REASON lies, and the named test pins the truth.
+     */
+    id: 'stepup_pkce_mismatch_mislabeled_as_state',
+    control:
+      'a step-up PKCE-verifier mismatch is recorded under its OWN terminal reason, ' +
+      'never as a state mismatch',
+    file: 'packages/identity-access/src/reauthentication.ts',
+    from: "      return terminate('callback_pkce_mismatch');\n",
+    to: "      return terminate('callback_state_mismatch');\n",
+    testFile: 'tests/identity-lifecycle-audit.test.ts',
+    testName:
+      'the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback',
+  },
+  {
+    /* FBL-020-R7 §2.3 — the redirect refusal relabelled a state refusal again. */
+    id: 'stepup_redirect_mismatch_mislabeled_as_state',
+    control:
+      'a step-up callback-URI mismatch is recorded under its OWN terminal reason, ' +
+      'never as a state mismatch',
+    file: 'packages/identity-access/src/reauthentication.ts',
+    from: "      return terminate('callback_redirect_mismatch');\n",
+    to: "      return terminate('callback_state_mismatch');\n",
+    testFile: 'tests/identity-lifecycle-audit.test.ts',
+    testName:
+      'the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback',
   },
   {
     id: 'login_custody_survives_a_refused_success',

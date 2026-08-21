@@ -311,10 +311,13 @@ export interface LoginTransactionClaim {
   /**
    * FBL-020-R6 §2.1 — the purpose the SEALED COOKIE carried, when it differs from
    * the leg's. Omitted, the cookie is taken to have agreed with the leg, which is
-   * what every caller that has nothing else to say means. It is compared, never
-   * trusted: the row's purpose is the authority and both must equal it.
+   * what the callback actually carried, and NOTHING stands in for it — FBL-020-R7
+   * §2.2 removed the default that let an omitted value mean "the cookie agreed".
+   * `null` is the closed value: the callback did not present a purpose, and a
+   * transaction that requires one cannot be satisfied by silence. It is compared,
+   * never trusted: the row's purpose is the authority and both must equal it.
    */
-  readonly presentedPurpose?: string | null;
+  readonly presentedPurpose: string | null;
   readonly nonce: string | null;
   readonly codeVerifier: string | null;
   /**
@@ -454,15 +457,19 @@ export async function claimLoginTransactionAtomically(
     /*
      * THE FIVE BINDING COMPARISONS, each with its own terminal reason (§2.2).
      *
-     * `presentedPurpose` defaults to the leg's own purpose: a caller with nothing
-     * else to say is saying "the cookie agreed with me". Both it and the leg must
+     * `presentedPurpose` is what the callback ACTUALLY presented — FBL-020-R7 §2.2
+     * deleted the default that read an omitted value as the leg's own purpose,
+     * because a comparison whose missing side is filled in with the expected answer
+     * is not a comparison. Missing, non-string and wrong are all the same terminal
+     * fact: `callback_purpose_mismatch`. Both the presented value and the leg must
      * equal the ROW's purpose — the row is the authority and neither side of the
      * comparison is allowed to be the only one consulted.
      *
      * A `null` presented value is a MISMATCH, never a skipped comparison: "the
      * callback did not present this" cannot satisfy "the transaction requires it".
      */
-    const presentedPurpose = input.presentedPurpose ?? input.purpose;
+    const presentedPurpose =
+      typeof input.presentedPurpose === 'string' ? input.presentedPurpose : null;
     const rowPurpose = String(existing.purpose);
     const terminal = async (reason: LoginTransactionFailureReason): Promise<null> => {
       await failLoginTransactionWithin(executor, loginTxnId, reason);
@@ -569,10 +576,18 @@ export type LoginSuccessOutcome =
  * expired in the meantime. Nothing swept it, so nothing contradicted it: the sweep
  * only ages rows nobody is holding, and this one was `consuming`.
  *
- * `expires_at > NOW()` is now part of the predicate. `NOW()` is PostgreSQL's
- * transaction timestamp — the database's clock, not this process's, and not a
- * timestamp that travelled through JavaScript — so the answer cannot drift with a
- * host clock and cannot be argued with by a caller.
+ * `expires_at > live.t` is part of the predicate, where `live.t` is ONE fresh
+ * `clock_timestamp()` instant read by the UPDATE itself — FBL-020-R7 §2.1. R6 used
+ * `NOW()` here, and `NOW()` is the TRANSACTION-START timestamp: correct for a
+ * statement that runs in its own transaction, and wrong for this one, which runs
+ * inside the admission's custody transaction. A custody transaction opened one
+ * millisecond before `expires_at` could take arbitrarily long — a slow provider
+ * exchange happens BEFORE the transaction opens, but admission, session insert and
+ * custody sealing all happen inside it — and `NOW()` would still answer with the
+ * moment the transaction began. The live instant is the database's wall clock, not
+ * this process's, and not a timestamp that travelled through JavaScript, so the
+ * answer cannot drift with a host clock and cannot be argued with by a caller;
+ * `consumed_at` records the SAME instant the expiry was decided against.
  *
  * ── §2.5: WHY THIS TAKES AN EXECUTOR ───────────────────────────────────────
  *
@@ -594,13 +609,21 @@ export async function succeedLoginTransactionWithin(
   const { loginTxnId } = input;
   const result = await executor.query(
     `UPDATE login_transactions
-        SET status = 'succeeded', consumed_at = NOW(), consumed_outcome = 'succeeded',
+        SET status = 'succeeded', consumed_at = live.t, consumed_outcome = 'succeeded',
             tenant_id = $2::uuid,
             user_link_id = $3::uuid,
             connection_id = COALESCE($4::uuid, connection_id)
+       FROM (SELECT clock_timestamp() AS t) AS live
       WHERE login_txn_id = $1 AND status = 'consuming'
-        -- FBL-020-R6 §2.3: LOGIN EXPIRY, ENFORCED AT COMPLETION, IN DATABASE TIME.
-        AND expires_at > NOW()
+        -- FBL-020-R7 §2.1: LOGIN EXPIRY, ENFORCED AT COMPLETION, IN LIVE DATABASE
+        -- TIME. R6 used NOW() here, which is the TRANSACTION-START timestamp: a
+        -- custody transaction opened before expiry could complete minutes after it
+        -- and still satisfy \`expires_at > NOW()\`, because NOW() never moved. The
+        -- one fresh instant \`live.t\` is read from clock_timestamp() by this very
+        -- statement and used for BOTH the predicate and \`consumed_at\`, so the
+        -- moment the row records as its consumption is the same moment the expiry
+        -- was decided against — never JavaScript time, never the frozen start.
+        AND expires_at > live.t
         -- A transaction that was OPENED against a known identity — the reauth
         -- purpose is — may only succeed as THAT identity. A disagreement is a
         -- refusal, never an overwrite: this statement records who was admitted,
@@ -616,8 +639,12 @@ export async function succeedLoginTransactionWithin(
     // the caller's transaction has already written to it (the claim) or is about to
     // terminalize it; a wrong classification would be a mislabelled audit row, and
     // this read is what stops that.
+    // FBL-020-R7 §2.1: the refusal is CLASSIFIED against the live clock for the
+    // same reason the predicate uses it — inside this still-open transaction,
+    // NOW() is frozen at its start, so a row the UPDATE just refused as expired
+    // would read as un-expired here and be mislabelled `not_consuming`.
     const observed = await executor.query(
-      `SELECT status, (expires_at <= NOW()) AS is_expired,
+      `SELECT status, (expires_at <= clock_timestamp()) AS is_expired,
               (tenant_id IS NULL OR tenant_id IS NOT DISTINCT FROM $2::uuid) AS tenant_ok,
               (user_link_id IS NULL OR user_link_id = $3::uuid) AS link_ok
          FROM login_transactions WHERE login_txn_id = $1`,

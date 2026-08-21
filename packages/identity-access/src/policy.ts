@@ -59,11 +59,19 @@ export const POLICY_VERSION = 'fbl-020.1';
  * re-authenticated records an instant that is no longer the session's — and it
  * is CORRECT evidence of the instant that was true when the decision was taken.
  * Version 3 is therefore what "including an authentication instant bound exactly
- * to the named session" is called, 058 raises the floor to it so no writer can
- * claim version 2 and inherit the historic exemption, and the INSERT below writes
- * it.
+ * to the named session" is called, and 058 raised the floor to it.
+ *
+ * FBL-020-R7 §3 — VERSION 4 adds the structurally-judged rules: the actor-type
+ * label bound to the actor's real scope, delegation decided without action
+ * names, the database-validated resource leaf, the effective organization chain
+ * at the actual write instant, and liveness at `clock_timestamp()`. THE SCHEMA
+ * IS THE AUTHORITY ON WHAT "CURRENT" MEANS: migration 059 sets the column
+ * default and the floor trigger, and the INSERT below deliberately OMITS the
+ * column so this constant cannot disagree with the database — it survives as
+ * the number documents and tests name, and `tests/identity-evidence.test.ts`
+ * pins it to what the schema actually writes.
  */
-export const CURRENT_EVIDENCE_VERSION = 3;
+export const CURRENT_EVIDENCE_VERSION = 4;
 
 /**
  * FBL-020-R3 — how long a provider authentication counts as FRESH for the
@@ -578,6 +586,14 @@ export function createPolicyEngine(options: {
     mfaAssurance: MfaAssuranceClassification;
     supportRequestId?: string | null | undefined;
     /**
+     * FBL-020-R7 §3.3 — the OPERATIONAL target tenant of a control-plane
+     * decision, stored apart from the authorization-bound `tenant_id`. A
+     * platform-scoped allow names NO authorization tenant (the structural rule
+     * `pd_v4_control_plane_is_structural` refuses one); which tenant the
+     * control-plane action was ABOUT is metadata, and this is its column.
+     */
+    controlPlaneTargetTenantId?: string | null | undefined;
+    /**
      * FBL-020-R5 §2 — the AUDIT copy of the delegated window, and only that.
      *
      * The EVIDENCE column `policy_decisions.support_session_expires_at` is no
@@ -639,6 +655,16 @@ export function createPolicyEngine(options: {
     // evidence row, so a served support request cannot exist without its audit
     // row and an audit row cannot exist for a decision that was never recorded.
     const auditsSupportUse = input.decision === 'allow' && input.supportSessionId !== null;
+    // FBL-020-R7 §3.3 — the control-plane target-tenant column is named ONLY when
+    // there is a target to record. A row with no target carries no information in
+    // that column, and omitting it keeps the shipped writer operable across the
+    // 058→059 upgrade window (the §4 drill drives this writer against a real 058
+    // database BEFORE 059 is applied — exactly the state a production deploy
+    // passes through). A platform decision that DOES carry a target is 059-born
+    // and correctly requires 059's schema.
+    const namesTargetTenant = (input.controlPlaneTargetTenantId ?? null) !== null;
+    const targetColumn = namesTargetTenant ? ' control_plane_target_tenant_id,' : '';
+    const targetPlaceholder = namesTargetTenant ? '$23,' : '';
     return withTransaction(async (executor) => {
       const result = await executor.query(
         `INSERT INTO policy_decisions
@@ -646,13 +672,13 @@ export function createPolicyEngine(options: {
           scope_level, scope_id, decision, reason_code, policy_version, request_id,
           support_session_id, matched_role_binding_ids, matched_authorization_versions,
           freshness_classification, mfa_assurance_classification, correlation_id,
-          support_request_id, connection_id, session_id, actor_provider_subject,
-          auth_time, support_session_expires_at, evidence_version)
+          support_request_id, connection_id, session_id, actor_provider_subject,${targetColumn}
+          auth_time, support_session_expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+               ${targetPlaceholder}
                (SELECT s.auth_time FROM identity_sessions s WHERE s.session_id = $21),
                (SELECT s.expires_at FROM support_access_sessions s
-                 WHERE s.support_session_id = $13),
-               ${CURRENT_EVIDENCE_VERSION})
+                 WHERE s.support_session_id = $13))
        RETURNING decision_id`,
         [
           input.tenantId,
@@ -677,6 +703,7 @@ export function createPolicyEngine(options: {
           input.credential?.connectionId ?? null,
           input.credential?.sessionId ?? null,
           input.credential?.providerSubject ?? null,
+          ...(namesTargetTenant ? [input.controlPlaneTargetTenantId] : []),
         ],
       );
       const decisionId = String((result.rows[0] as Row).decision_id);
@@ -972,7 +999,16 @@ export function createPolicyEngine(options: {
         const match = bindings.find((b) => def.allowedRoles.includes(b.role) && covers(b));
         if (match !== undefined) {
           const decisionId = await record({
-            tenantId: targetTenantId,
+            /*
+             * FBL-020-R7 §3.3 — a control-plane ALLOW is authorized by PLATFORM
+             * authority, so its authorization tenant is NULL, structurally. The
+             * tenant the action was ABOUT (platform.tenant.provision names one)
+             * is operational metadata and travels in its own column below —
+             * recording it in `tenant_id` was exactly the shape that made the
+             * action-name bypass necessary, and both are gone together.
+             */
+            tenantId: null,
+            controlPlaneTargetTenantId: targetTenantId,
             actorUserLinkId: actor.userLinkId,
             actorType,
             action: def.action,

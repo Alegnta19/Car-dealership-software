@@ -88,9 +88,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { closePool, query } from '@dealer/database';
+import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
   createActionCatalog,
+  createOrganizationUnit,
   createPolicyEngine,
   createSession,
   grantRole,
@@ -730,6 +732,260 @@ async function afterMigration058(outPath: string | undefined, logPath: string | 
   if (result !== 'OK') process.exitCode = 1;
 }
 
+/**
+ * STAGE `after-059` — THE SHIPPED ENGINE, AS THE RUNTIME ROLE, AGAINST 059.
+ *
+ * FBL-020-R7 §4.4's half of the drill: after 059 is applied on the used database,
+ * the CURRENT writer must still be the thing that satisfies the new rules — not a
+ * probe. This stage therefore drives `createPolicyEngine().decide()` on a REAL
+ * Fixed Ops resource, with THE REAL resolver (`resolveServiceResourceScope`, which
+ * now reads migration 059's `resource_org_leaf` registry), and it does so AS THE
+ * RUNTIME ROLE: the process must be started with
+ * `DATABASE_RUNTIME_ROLE=dealership_runtime`, so every statement in it runs under
+ * the role production runs under — the one that CANNOT write the normalized child
+ * table itself (§3.7). It asserts:
+ *
+ *   1. the connection really is the runtime role (`current_user`), so the stage
+ *      cannot silently prove superuser behavior;
+ *   2. the decision is an ALLOW at `evidence_version` 4 — the DEFAULT the schema
+ *      now owns, on an INSERT that deliberately omits the column;
+ *   3. the persisted `resource_rooftop_id` equals the database's OWN resolution of
+ *      the resource — the §3.4 snapshot, written by the trigger, not the caller;
+ *   4. its recorded `auth_time` still EQUALS the named session's current value;
+ *   5. the matched-binding array was NORMALIZED into child rows even though the
+ *      writing role holds no INSERT on that table — §3.7's database-owned
+ *      SECURITY DEFINER path, exercised by the production writer on the upgraded
+ *      database.
+ */
+async function afterMigration059(outPath: string | undefined, logPath: string | undefined) {
+  const lines: string[] = [];
+  const say = (text: string): void => {
+    lines.push(text);
+    console.log(text);
+  };
+
+  const has059Trigger = await scalar(
+    `SELECT COUNT(*)::int AS n FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = 'trg_policy_decisions_v4_structure'`,
+  );
+  if (has059Trigger !== 1) {
+    throw new Error(
+      'after-059 activity refused: trg_policy_decisions_v4_structure is absent, so migration ' +
+        '059 has not been applied and there is nothing for this stage to exercise',
+    );
+  }
+
+  const connectedAs = ((await query(`SELECT current_user AS u`)).rows[0] as { u: unknown }).u;
+  if (String(connectedAs) !== 'dealership_runtime') {
+    throw new Error(
+      `after-059 activity refused: connected as ${String(connectedAs)} — this stage exists to ` +
+        'prove the PRODUCTION role writes v4 evidence, so it must run with ' +
+        'DATABASE_RUNTIME_ROLE=dealership_runtime (the pool then assumes the runtime role at ' +
+        'connection startup, exactly as production does)',
+    );
+  }
+  say('after-059 activity: connected as dealership_runtime');
+
+  const actor = (
+    await query(
+      `SELECT ul.user_link_id, ul.tenant_id, s.session_id
+       FROM user_links ul
+       JOIN identity_sessions s ON s.user_link_id = ul.user_link_id
+      WHERE ul.provider_user_id LIKE 'user_post057_%' AND ul.status = 'activated'
+        AND s.revoked_at IS NULL AND s.expires_at > NOW()
+      ORDER BY s.issued_at DESC LIMIT 1`,
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (actor.length !== 1) {
+    throw new Error(
+      'after-059 activity refused: the `between` stage left no live session for its ' +
+        'administrator, so the earlier drill stages did not run against this database',
+    );
+  }
+  const userLinkId = String((actor[0] as Record<string, unknown>).user_link_id);
+  const tenantId = String((actor[0] as Record<string, unknown>).tenant_id);
+  const sessionId = String((actor[0] as Record<string, unknown>).session_id);
+
+  // A REAL Fixed Ops resource of this tenant, and the rooftop the DATABASE says
+  // it lives under — read through the same one registry the trigger uses.
+  //
+  // The drill's legacy Fixed Ops seed lives in the RETAINED tenant, which 055
+  // correctly kept at `pending_configuration` — truthful history, but a dead
+  // chain by §3.5, so nothing in it can anchor a version-4 resource ALLOW. The
+  // resource is therefore established in the drill's own ACTIVE tenant, through
+  // the SAME attributed organization mutations production uses (each created,
+  // audited and versioned by the between-stage administrator), plus one Fixed
+  // Ops repair order seeded the way every Fixed Ops row in this drill is seeded.
+  // Idempotent: a re-run finds the rows the first run left.
+  let ro = (
+    await query(
+      `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
+        ORDER BY ro_id LIMIT 1`,
+      [tenantId],
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (ro.length === 0) {
+    const group = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'dealer_group',
+      parentId: tenantId,
+      name: 'R7 Drill Group',
+      status: 'active',
+    });
+    const entity = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'legal_entity',
+      parentId: group.unitId,
+      name: 'R7 Drill Entity LLC',
+      status: 'active',
+    });
+    const rooftop = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'rooftop',
+      parentId: entity.unitId,
+      name: 'R7 Drill Rooftop',
+      status: 'active',
+    });
+    await query(
+      `INSERT INTO repair_orders
+         (ro_id, tenant_id, location_id, appointment_id, mdm_customer_id, mdm_vehicle_id, status)
+       VALUES ($1, $2, $3, NULL, $4, $5, 'checked_in')`,
+      [randomUUID(), tenantId, rooftop.unitId, randomUUID(), randomUUID()],
+    );
+    say('after-059 activity: organization chain and repair order established in the drill tenant');
+    ro = (
+      await query(
+        `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
+          ORDER BY ro_id LIMIT 1`,
+        [tenantId],
+      )
+    ).rows as Array<Record<string, unknown>>;
+  }
+  if (ro.length !== 1) {
+    throw new Error(
+      'after-059 activity refused: no repair order for the drill tenant even after the ' +
+        'stage established one — the §3.4 resource path cannot be exercised',
+    );
+  }
+  const roId = String((ro[0] as Record<string, unknown>).ro_id);
+  const roRooftop = String((ro[0] as Record<string, unknown>).location_id);
+
+  const engine = createPolicyEngine({
+    catalog: createActionCatalog([
+      {
+        action: 'service.ro.view',
+        description: 'read a repair order',
+        resourceType: 'repair_order',
+        allowedRoles: ['tenant_admin'],
+      },
+    ]),
+    // THE REAL RESOLVER — the one production wires in — which now resolves
+    // through migration 059's `resource_org_leaf`, the same authority the
+    // evidence trigger validates the snapshot against.
+    resolveResourceScope: resolveServiceResourceScope,
+  });
+  const outcome = await engine.decide({
+    actor: { userLinkId, actorScope: 'dealership', tenantId },
+    action: 'service.ro.view',
+    sessionId,
+    resource: { type: 'repair_order', id: roId },
+  });
+
+  const failures: string[] = [];
+  if (outcome.decision !== 'allow') {
+    failures.push(
+      `the engine returned ${outcome.decision} (${outcome.reasonCode}) after 059 — a ` +
+        'migration that broke ordinary authorization must not pass this drill',
+    );
+  }
+  const written = (
+    await query(
+      `SELECT d.evidence_version::int AS evidence_version,
+              d.resource_rooftop_id::text AS resource_rooftop_id,
+              (d.auth_time = s.auth_time) AS binds_its_session,
+              (d.session_id = $2) AS names_the_session,
+              cardinality(d.matched_role_binding_ids)::int AS array_len,
+              (SELECT COUNT(*)::int FROM policy_decision_matched_bindings c
+                WHERE c.decision_id = d.decision_id) AS normalized_rows
+       FROM policy_decisions d JOIN identity_sessions s ON s.session_id = d.session_id
+      WHERE d.decision_id = $1`,
+      [outcome.decisionId, sessionId],
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (written.length !== 1) {
+    failures.push('the decision the engine reported is not readable beside its session');
+  } else {
+    const row = written[0] as Record<string, unknown>;
+    if (Number(row.evidence_version) !== 4) {
+      failures.push(
+        `the engine wrote evidence_version ${String(row.evidence_version)}; after 059 the ` +
+          'schema DEFAULT is 4 and the writer omits the column, so anything else means the ' +
+          'writer and the schema disagree about what current evidence is',
+      );
+    }
+    if (String(row.resource_rooftop_id) !== roRooftop) {
+      failures.push(
+        `the decision's resource_rooftop_id is ${String(row.resource_rooftop_id)}, and the ` +
+          `database's own resolution of the resource is ${roRooftop} — the §3.4 snapshot must ` +
+          'be the validated leaf',
+      );
+    }
+    if (row.names_the_session !== true) {
+      failures.push('the engine did not record the session the request presented');
+    }
+    if (row.binds_its_session !== true) {
+      failures.push(
+        'the engine recorded an authentication time that is NOT its named session’s current ' +
+          'one — §3.1 must hold for the v4 writer exactly as it did for v3',
+      );
+    }
+    if (Number(row.array_len) < 1) {
+      failures.push('the ALLOW claims no matched binding, so §3.7’s path was not exercised');
+    } else if (Number(row.normalized_rows) !== Number(row.array_len)) {
+      failures.push(
+        `the array names ${String(row.array_len)} binding(s) but ${String(row.normalized_rows)} ` +
+          'normalized child row(s) exist — the SECURITY DEFINER normalization did not run for ' +
+          'the runtime role, so §3.7’s database-owned write path is broken',
+      );
+    }
+  }
+
+  const result = failures.length === 0 ? 'OK' : 'FAILED';
+  for (const failure of failures) say('after-059 activity FAILURE: ' + failure);
+  const counts = await census();
+  say(
+    `after-059 activity: the shipped engine wrote decision ${outcome.decisionId} ` +
+      `(${outcome.decision}/${outcome.reasonCode}) as dealership_runtime; versions now ` +
+      `${JSON.stringify(counts.decisions_by_evidence_version)}`,
+  );
+  say(`after-059 activity result: ${result}`);
+
+  write(
+    outPath,
+    logPath,
+    {
+      generator: 'scripts/upgrade-post-057-activity.ts',
+      order: 'FBL-020-R7 §4.4',
+      stage: 'after-059 (the shipped engine, as the runtime role, against 059)',
+      tenant_id: tenantId,
+      session_id: sessionId,
+      decision_id: outcome.decisionId,
+      decision: outcome.decision,
+      reason_code: outcome.reasonCode,
+      resource_id: roId,
+      resource_rooftop_id: roRooftop,
+      census: counts,
+      failures,
+      result,
+    },
+    lines,
+  );
+  if (result !== 'OK') process.exitCode = 1;
+}
+
 function write(
   outPath: string | undefined,
   logPath: string | undefined,
@@ -752,14 +1008,19 @@ function write(
  * refuses for `--phase`.
  */
 const stage = arg('--stage') ?? 'between';
-if (stage !== 'between' && stage !== 'after-058') {
+if (stage !== 'between' && stage !== 'after-058' && stage !== 'after-059') {
   console.error(
-    'usage: upgrade-post-057-activity.ts [--stage=between|after-058] [--out f] [--log f]',
+    'usage: upgrade-post-057-activity.ts [--stage=between|after-058|after-059] [--out f] [--log f]',
   );
   process.exit(2);
 }
 
-(stage === 'between' ? main() : afterMigration058(arg('--out'), arg('--log')))
+(stage === 'between'
+  ? main()
+  : stage === 'after-058'
+    ? afterMigration058(arg('--out'), arg('--log'))
+    : afterMigration059(arg('--out'), arg('--log'))
+)
   .catch((err) => {
     console.error(err);
     process.exitCode = 1;

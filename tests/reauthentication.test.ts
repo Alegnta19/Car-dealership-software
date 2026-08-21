@@ -138,6 +138,7 @@ describe(
       // exactly the sequence /auth/reauth/callback performs. Tests that are about
       // the claim itself call `claimReauthentication` directly.
       const claimed = await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: started.nonce,
         state: started.state,
         codeVerifier: started.codeVerifier,

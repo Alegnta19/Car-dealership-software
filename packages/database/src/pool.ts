@@ -307,12 +307,18 @@ function clientHasTakenConnectionError(client: PoolClient): boolean {
 function serverSideTimeouts(
   statementTimeoutMs: number,
   idleInTransactionTimeoutMs: number,
+  runtimeRole: string | null,
 ): { options?: string } {
   const settings: string[] = [];
   if (statementTimeoutMs > 0) settings.push(`-c statement_timeout=${statementTimeoutMs}`);
   if (idleInTransactionTimeoutMs > 0) {
     settings.push(`-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`);
   }
+  // FBL-020-R7 §3.7 — the runtime role is a STARTUP parameter, not a
+  // post-connect statement: the backend assumes it before the first query, so
+  // no code path can run ahead of the switch and there is nothing to race. The
+  // value is config-validated as a strict identifier before it gets here.
+  if (runtimeRole !== null) settings.push(`-c role=${runtimeRole}`);
   return settings.length === 0 ? {} : { options: settings.join(' ') };
 }
 
@@ -327,7 +333,11 @@ export function getPool(): Pool {
     max: config.pgPoolMax,
     idleTimeoutMillis: config.pgPoolIdleMs,
     connectionTimeoutMillis: config.pgPoolConnectMs,
-    ...serverSideTimeouts(config.pgStatementTimeoutMs, config.pgIdleInTransactionTimeoutMs),
+    ...serverSideTimeouts(
+      config.pgStatementTimeoutMs,
+      config.pgIdleInTransactionTimeoutMs,
+      config.databaseRuntimeRole,
+    ),
     ...(config.pgSslRequire ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 

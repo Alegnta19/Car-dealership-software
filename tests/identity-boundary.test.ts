@@ -402,6 +402,7 @@ describe(
      */
     async function claimStepUp(started: StartedReauthentication): Promise<void> {
       const claimed = await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: started.nonce,
         state: started.state,
         codeVerifier: started.codeVerifier,
@@ -437,6 +438,7 @@ describe(
         redirectUri: 'http://127.0.0.1:3000/auth/callback',
         state: started.state,
         purpose: 'login' as const,
+        presentedPurpose: 'login',
         nonce: started.nonce,
         codeVerifier: started.codeVerifier,
       };
@@ -468,6 +470,7 @@ describe(
       );
       assert.equal(
         await claimLoginTransactionAtomically({
+          presentedPurpose: 'login',
           loginTxnId: started.loginTxnId,
           redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
@@ -547,6 +550,7 @@ describe(
           redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
           purpose: 'login' as const,
+          presentedPurpose: 'login',
           nonce: started.nonce,
           codeVerifier: started.codeVerifier,
         },
@@ -1968,6 +1972,9 @@ describe(
     test('support revocation is authorized, scoped and attributable', async () => {
       const requester = await makePlatformLink('user_r3_rev_req');
       const outsider = await makeLink('user_r3_outsider');
+      // FBL-020-R7 §3.2: a session exists only under an APPROVED, decided request,
+      // so the fixture approves for real — separation of duty and the request-bound
+      // grant included — before the session can exist at all.
       const request = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
         `INSERT INTO support_access_requests
@@ -1977,12 +1984,35 @@ describe(
          RETURNING request_id`,
         [tenantId, requester],
       );
+      const revRequestId = String((request.rows[0] as { request_id: unknown }).request_id);
+      {
+        const decider = await bootstrapAdministrator(tenantId);
+        await mintReauthGrant({
+          tenantId,
+          userLinkId: decider,
+          action: 'identity.support.approve',
+          resourceType: 'support_access_request',
+          resourceId: revRequestId,
+        });
+        await fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2
+                       AND g.action = 'identity.support.approve'
+                       AND g.resource_id = $1)
+            WHERE request_id = $1`,
+          [revRequestId, decider],
+        );
+      }
       const session = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)
          VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
          RETURNING support_session_id`,
-        [String((request.rows[0] as { request_id: unknown }).request_id), tenantId, requester],
+        [revRequestId, tenantId, requester],
       );
       const sessionId = String(
         (session.rows[0] as { support_session_id: unknown }).support_session_id,
@@ -2408,6 +2438,10 @@ describe(
       // and the DATABASE says so INDEPENDENTLY of the application: migration 057
       // carries a partial unique index, so a second request can never name a
       // grant that already approved one, whatever the code above does.
+      // FBL-020-R7 §3.2 answers this FIRST now: the grant is bound to the exact
+      // request it names, so re-pointing another request at it dies at the
+      // request-binding trigger before the unique index is even consulted. The
+      // 057 partial unique index still stands beneath as the structural backstop.
       await assert.rejects(
         fixtureAuthorizationStateWrite(
           'simulate-authorization-drift',
@@ -2418,8 +2452,11 @@ describe(
             WHERE request_id = $1`,
           [otherRequest.requestId, wrongAction.requestId],
         ),
-        (err: unknown) => (err as { code?: unknown }).code === '23505',
-        'the unique index refuses a second approval against one grant',
+        (err: unknown) =>
+          (err as { message?: string }).message?.includes(
+            'a grant approves exactly the request it names',
+          ) === true,
+        'a second request cannot name a grant that already approved another',
       );
 
       // (d) THE SAME GRANT CANNOT APPROVE TWICE. The grant below is spent once

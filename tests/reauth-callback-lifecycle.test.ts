@@ -20,6 +20,7 @@ import {
   TENANT_ADMIN_ROLE,
   expireStaleReauthenticationTransactions,
   openCookiePayload,
+  sealCookiePayload,
   type CodeExchangeResult,
   type IdentityProviderPort,
 } from '@dealer/identity-access';
@@ -109,6 +110,9 @@ describe(
       readonly state: string;
       readonly oidcNonce: string;
       readonly reauthTxnId: string;
+      /** FBL-020-R7 §2.2: the plaintexts needed to RESEAL a cookie with a key removed. */
+      readonly nonce: string;
+      readonly codeVerifier: string;
     }
 
     /** Drives the REAL `POST /auth/reauth/start` and opens the cookie it sealed. */
@@ -131,6 +135,8 @@ describe(
         state: String(payload.state),
         oidcNonce: String(payload.oidc_nonce),
         reauthTxnId: body.data.reauth_txn_id,
+        nonce: String(payload.nonce),
+        codeVerifier: String(payload.code_verifier),
       };
     }
 
@@ -286,6 +292,71 @@ describe(
       assert.equal(
         after.terminal_reason,
         'callback_state_mismatch',
+        'the FIRST terminal fact wins; nothing overwrites it',
+      );
+    });
+
+    /**
+     * ── FBL-020-R7 §2.2, THE STEP-UP LEG: A SEALED COOKIE WITH NO PURPOSE AT ALL ──
+     *
+     * R6 read an omitted purpose as "the cookie said `reauth`", so this exact cookie
+     * satisfied the purpose comparison without ever making it. Absence is now a
+     * `callback_purpose_mismatch` of its own: the ROUTE forwards the valid handle
+     * and a `null` presented purpose — it does not pre-screen the defect — and the
+     * LIFECYCLE SERVICE terminalizes the row it names, with one audit event.
+     */
+    test('a step-up callback whose sealed cookie carries NO PURPOSE ends its transaction', async () => {
+      const admin = await seedAdmin();
+      const leg = await startStepUp(admin.token);
+      // A provider that WOULD succeed, so the refusal cannot be an accident.
+      useIdentityProviderForTests(
+        fakeExchange({ subject: admin.providerUserId, oidcNonce: leg.oidcNonce }),
+      );
+
+      // The leg's OWN handle, state, verifier and nonce, resealed under the server
+      // key with the `purpose` key OMITTED ENTIRELY. Only the server can mint such a
+      // cookie, which is exactly why the row — not the route — has to judge it.
+      const resealed = sealCookiePayload(
+        {
+          state: leg.state,
+          code_verifier: leg.codeVerifier,
+          nonce: leg.nonce,
+          oidc_nonce: leg.oidcNonce,
+        },
+        env.cookiePassword,
+      );
+      const res = await fetch(`${base}/auth/reauth/callback?code=any-code&state=${leg.state}`, {
+        headers: { cookie: `dealer_reauth_txn=${encodeURIComponent(resealed)}` },
+        redirect: 'manual',
+      });
+      const text = await res.text();
+      assert.equal(res.status, 401);
+      assert.equal(
+        (JSON.parse(text) as { error?: { code?: string } }).error?.code,
+        'unauthorized',
+        'the neutral answer',
+      );
+      assert.equal(await grantCount(), 0);
+
+      const row = await stepUpRow(leg.reauthTxnId);
+      assert.equal(row.state, 'failed', 'the transaction the callback named must END');
+      assert.equal(row.terminal_reason, 'callback_purpose_mismatch');
+      assert.deepEqual(
+        await stepUpEvents(leg.reauthTxnId),
+        ['identity.reauthentication.started', 'identity.reauthentication.failed'],
+        'exactly one terminal audit event',
+      );
+
+      // …and the CORRECT callback afterwards — the original, complete cookie —
+      // loses as the replay it now is.
+      const late = await completeLeg(leg);
+      assert.equal(late.status, 401, 'the correct callback arriving afterwards must lose');
+      assert.equal(await grantCount(), 0);
+      const after = await stepUpRow(leg.reauthTxnId);
+      assert.equal(after.state, 'failed');
+      assert.equal(
+        after.terminal_reason,
+        'callback_purpose_mismatch',
         'the FIRST terminal fact wins; nothing overwrites it',
       );
     });

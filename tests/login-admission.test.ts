@@ -15,7 +15,7 @@ import {
   type IdentityTestEnv,
   fixtureAuthorizationStateWrite,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, withTransaction } from '@dealer/database';
 import { ROLES } from '@dealer/contracts';
 import {
   NOT_IMPERSONATED,
@@ -26,6 +26,7 @@ import {
   openCookiePayload,
   sealCookiePayload,
   startLoginTransaction,
+  succeedLoginTransactionWithin,
   type CodeExchangeResult,
   type IdentityProviderPort,
   type VerifiedAccessToken,
@@ -255,6 +256,7 @@ describe(
         redirectUri: 'http://127.0.0.1:3000/auth/callback',
       });
       const claimed = await claimLoginTransactionAtomically({
+        presentedPurpose: 'login',
         loginTxnId: started.loginTxnId,
         state: started.state,
         purpose: 'login',
@@ -1153,6 +1155,107 @@ describe(
      * run at the END purely as a control: it must find nothing left to age, which is
      * what makes "no sweep was involved" a measured fact rather than a promise.
      */
+    /**
+     * ── FBL-020-R7 §2.1: THE COMPLETION CLOCK IS THE WALL, NOT THE TRANSACTION START ──
+     *
+     * R6's completion predicate compared `expires_at` against `NOW()`, and `NOW()`
+     * is frozen at the moment the surrounding transaction BEGAN. The admission runs
+     * the success transition inside its own custody transaction — deliberately, per
+     * §2.5 — so everything that happens inside that transaction (the admission
+     * checks, the session insert, the credential sealing) consumed wall time that
+     * `NOW()` never saw. A login that expired DURING its own custody transaction
+     * completed anyway, and `consumed_at` recorded a moment before the expiry as if
+     * the completion had happened then.
+     *
+     * This test builds that exact geometry and proves BOTH premises inside one
+     * still-open transaction: the frozen transaction clock says the row is alive,
+     * the live wall clock says it is expired — and the completion must side with
+     * the wall.
+     */
+    test('login completion refuses after DB wall time crosses expiry inside the already-open admission transaction', async () => {
+      const advisor = await seedActor(env.issuer, {
+        tenantId: tenant,
+        roles: [ROLES.SERVICE_ADVISOR],
+      });
+      const started = await startLoginTransaction({
+        purpose: 'login',
+        redirectUri: 'http://127.0.0.1:3000/auth/callback',
+        returnTo: '/',
+      });
+      const claimed = await claimLoginTransactionAtomically({
+        loginTxnId: started.loginTxnId,
+        redirectUri: 'http://127.0.0.1:3000/auth/callback',
+        state: started.state,
+        purpose: 'login',
+        presentedPurpose: 'login',
+        nonce: started.nonce,
+        codeVerifier: started.codeVerifier,
+      });
+      assert.ok(claimed, 'the leg must be CONSUMING, exactly as the admission holds it');
+
+      await withTransaction(async (executor) => {
+        // Inside this transaction NOW() is frozen at BEGIN. Pull the expiry to a
+        // few hundred milliseconds ahead of the LIVE clock — still ahead of the
+        // frozen one — then let the wall cross it while the transaction stays open.
+        await executor.query(
+          `UPDATE login_transactions
+              SET expires_at = clock_timestamp() + INTERVAL '350 milliseconds'
+            WHERE login_txn_id = $1`,
+          [started.loginTxnId],
+        );
+        await executor.query(`SELECT pg_sleep(0.7)`);
+
+        // THE PREMISE, MEASURED RATHER THAN ASSUMED: the transaction clock still
+        // calls the row alive, and the wall clock has crossed its expiry. If either
+        // half fails, the test proves nothing and must say so.
+        const probe = await executor.query(
+          `SELECT (expires_at > NOW()) AS alive_by_txn_clock,
+                  (expires_at <= clock_timestamp()) AS expired_by_wall_clock
+             FROM login_transactions WHERE login_txn_id = $1`,
+          [started.loginTxnId],
+        );
+        const facts = probe.rows[0] as {
+          alive_by_txn_clock: boolean;
+          expired_by_wall_clock: boolean;
+        };
+        assert.equal(facts.alive_by_txn_clock, true, 'premise: NOW() has not reached the expiry');
+        assert.equal(
+          facts.expired_by_wall_clock,
+          true,
+          'premise: clock_timestamp() has crossed the expiry',
+        );
+
+        const outcome = await succeedLoginTransactionWithin(executor, {
+          loginTxnId: started.loginTxnId,
+          tenantId: tenant,
+          userLinkId: advisor.userLinkId,
+          connectionId: null,
+        });
+        assert.equal(outcome.recorded, false, 'the completion must side with the WALL clock');
+        assert.equal(
+          outcome.recorded === false ? outcome.refusal : 'recorded',
+          'expired',
+          'and the refusal must be CLASSIFIED as the expiry it is',
+        );
+      });
+
+      // The refusal wrote nothing: the row is untouched (still consuming, never
+      // consumed) and no success audit exists for a login that never succeeded.
+      const row = await fullTxnRow(started.loginTxnId);
+      assert.equal(row.status, 'consuming', 'the refused UPDATE moved nothing');
+      assert.equal(row.consumed_at, null, 'no consumption instant was recorded');
+      const succeededEvents = await query(
+        `SELECT COUNT(*)::int AS n FROM audit_events
+          WHERE event_type = 'identity.login.succeeded' AND entity_id = $1`,
+        [started.loginTxnId],
+      );
+      assert.equal(
+        Number((succeededEvents.rows[0] as { n: number }).n),
+        0,
+        'no login-success audit survives the refusal',
+      );
+    });
+
     test('a login claimed before expiry and completed after it is refused WITHOUT any sweep', async () => {
       const advisor = await seedActor(env.issuer, {
         tenantId: tenant,
@@ -1326,6 +1429,27 @@ describe(
           sealCookiePayload(
             {
               purpose: 'reauth',
+              login_txn_id: txn.loginTxnId,
+              state: txn.state,
+              code_verifier: txn.codeVerifier,
+              oidc_nonce: txn.oidcNonce,
+            },
+            env.cookiePassword,
+          ),
+      },
+      {
+        title: 'a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)',
+        reason: 'callback_purpose_mismatch',
+        query: (txn) => `code=any-code&state=${txn.state}`,
+        // The SAME handle, state, verifier and nonce, resealed under the server key
+        // with the `purpose` key OMITTED ENTIRELY. R6 read an omitted purpose as
+        // "the cookie agreed with this leg", so this exact cookie completed logins;
+        // FBL-020-R7 §2.2 makes absence a mismatch of its own. The route forwards
+        // the valid handle and a `null` presented purpose — it does NOT pre-screen —
+        // and the lifecycle service terminalizes the row it names.
+        cookie: (txn) =>
+          sealCookiePayload(
+            {
               login_txn_id: txn.loginTxnId,
               state: txn.state,
               code_verifier: txn.codeVerifier,

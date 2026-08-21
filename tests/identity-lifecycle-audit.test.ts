@@ -220,6 +220,7 @@ describe(
           redirectUri: LOGIN_REDIRECT,
           state: started.state,
           purpose: 'login' as const,
+          presentedPurpose: 'login',
           nonce: started.nonce,
           codeVerifier: started.codeVerifier,
         },
@@ -327,24 +328,50 @@ describe(
         nonce: started.nonce,
         state: started.state,
         codeVerifier: started.codeVerifier,
+        presentedPurpose: 'reauth',
         callbackUri: TEST_REAUTH_CALLBACK_URI,
       };
 
-      // each perturbation TERMINATES the leg, so each needs its own transaction
-      for (const [label, bad] of [
-        ['a wrong OAuth state', { ...good, state: 'not-the-stored-state' }],
-        ['a wrong PKCE verifier', { ...good, codeVerifier: 'not-the-stored-verifier' }],
-        ['a wrong callback', { ...good, callbackUri: 'http://127.0.0.1:3000/auth/callback' }],
+      // Each perturbation TERMINATES the leg, so each needs its own transaction —
+      // and each is recorded under the reason for the binding that ACTUALLY failed,
+      // FBL-020-R7 §2.3. R6 recorded all three as `callback_state_mismatch`, and
+      // this test pinned that mislabelling as though it were the property. The
+      // perturbation is applied to the FRESH leg's own correct values: presenting a
+      // different leg's state alongside a wrong verifier would be a genuine state
+      // mismatch, and the truthful classifier would be right to say so.
+      for (const [label, perturbation, expectedReason] of [
+        ['a wrong OAuth state', { state: 'not-the-stored-state' }, 'callback_state_mismatch'],
+        [
+          'a wrong PKCE verifier',
+          { codeVerifier: 'not-the-stored-verifier' },
+          'callback_pkce_mismatch',
+        ],
+        [
+          'a wrong callback',
+          { callbackUri: 'http://127.0.0.1:3000/auth/callback' },
+          'callback_redirect_mismatch',
+        ],
       ] as const) {
         const fresh = await startStepUp();
         assert.equal(
-          await claimReauthentication({ ...bad, nonce: fresh.nonce }),
+          await claimReauthentication(
+            Object.assign(
+              {
+                nonce: fresh.nonce,
+                state: fresh.state,
+                codeVerifier: fresh.codeVerifier,
+                presentedPurpose: 'reauth',
+                callbackUri: TEST_REAUTH_CALLBACK_URI,
+              },
+              perturbation,
+            ),
+          ),
           null,
           `${label} must not claim`,
         );
         const row = await stepUpRow(fresh.transaction.reauthTxnId);
         assert.equal(row.state, 'failed', `${label} leaves a TERMINAL row`);
-        assert.equal(row.terminal_reason, 'callback_state_mismatch');
+        assert.equal(row.terminal_reason, expectedReason, `${label} is recorded truthfully`);
         assert.notEqual(row.terminal_at, null);
       }
 
@@ -374,6 +401,7 @@ describe(
       const second = await startStepUp();
       assert.ok(
         await claimReauthentication({
+          presentedPurpose: 'reauth',
           nonce: second.nonce,
           state: second.state,
           codeVerifier: second.codeVerifier,
@@ -397,6 +425,7 @@ describe(
         const started = await startStepUp();
         assert.ok(
           await claimReauthentication({
+            presentedPurpose: 'reauth',
             nonce: started.nonce,
             state: started.state,
             codeVerifier: started.codeVerifier,
@@ -468,6 +497,7 @@ describe(
       assert.equal(uncertified?.mfaPolicyCertified, false);
       const noCert = await startStepUp({ requiredAssurance: 'fresh_and_mfa_policy' });
       await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: noCert.nonce,
         state: noCert.state,
         codeVerifier: noCert.codeVerifier,
@@ -484,6 +514,7 @@ describe(
       assert.equal((await findActiveConnectionById(connectionId))?.mfaPolicyCertified, true);
       const good = await startStepUp({ requiredAssurance: 'fresh_and_mfa_policy' });
       await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: good.nonce,
         state: good.state,
         codeVerifier: good.codeVerifier,
@@ -507,6 +538,7 @@ describe(
       );
       const stale = await startStepUp({ requiredAssurance: 'fresh_and_mfa_policy' });
       await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: stale.nonce,
         state: stale.state,
         codeVerifier: stale.codeVerifier,
@@ -878,6 +910,7 @@ describe(
         redirectUri: LOGIN_REDIRECT,
         state: ok.state,
         purpose: 'login' as const,
+        presentedPurpose: 'login',
         nonce: ok.nonce,
         codeVerifier: ok.codeVerifier,
       };
@@ -953,6 +986,7 @@ describe(
       );
       assert.ok(
         await claimReauthentication({
+          presentedPurpose: 'reauth',
           nonce: step.nonce,
           state: step.state,
           codeVerifier: step.codeVerifier,
@@ -988,6 +1022,7 @@ describe(
       const failing = await startStepUp();
       assert.ok(
         await claimReauthentication({
+          presentedPurpose: 'reauth',
           nonce: failing.nonce,
           state: failing.state,
           codeVerifier: failing.codeVerifier,
@@ -1008,6 +1043,7 @@ describe(
         nonce: replayed.nonce,
         state: replayed.state,
         codeVerifier: replayed.codeVerifier,
+        presentedPurpose: 'reauth',
         callbackUri: TEST_REAUTH_CALLBACK_URI,
       };
       assert.ok(await claimReauthentication(replayArgs));

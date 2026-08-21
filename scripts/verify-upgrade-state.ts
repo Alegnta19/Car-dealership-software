@@ -76,9 +76,12 @@
 import { writeFileSync } from 'fs';
 import { closePool, query, withTransaction } from '@dealer/database';
 
-type Phase = 'backfill' | 'pre-057' | 'post-057' | 'post-058';
+type Phase = 'backfill' | 'pre-057' | 'post-057' | 'post-058' | 'post-059';
 
-const PHASES: readonly Phase[] = ['backfill', 'pre-057', 'post-057', 'post-058'];
+const PHASES: readonly Phase[] = ['backfill', 'pre-057', 'post-057', 'post-058', 'post-059'];
+
+/** The phases at which the drill has deliberately ADDED rows between censuses. */
+const GROWTH_PHASES: readonly Phase[] = ['post-058', 'post-059'];
 
 /** The nine identity tables whose population is the subject of the §6 drill. */
 const CENSUS_TABLES = [
@@ -643,8 +646,8 @@ function fail(message: string): void {
   failures.push(message);
 }
 
-async function scalar(sql: string): Promise<number> {
-  return Number((await query(sql)).rows[0]?.n ?? -1);
+async function scalar(sql: string, params: readonly unknown[] = []): Promise<number> {
+  return Number((await query(sql, [...params])).rows[0]?.n ?? -1);
 }
 
 /** 050's two CHECKs over the legacy free-text columns must stay NOT VALID. */
@@ -727,9 +730,17 @@ async function assertOrganizationBackfill(): Promise<void> {
    * the tenant ids that appear in legacy Fixed Ops data asserts exactly the
    * property 055 is responsible for, and asserts it in every phase.
    */
+  // FBL-020-R7: scoped one step further, to tenants WITHOUT an attributed
+  // creator. A tenant created after 055 through the sanctioned bootstrap
+  // (`created_by_user_link_id` set, a 056 column present in every phase this
+  // runs in) that later accumulates Fixed Ops rows is ordinary production life
+  // — the after-059 drill stage creates exactly that — and says nothing about
+  // what 055 did to the LEGACY tenants, which are the ones 055 backfilled and
+  // which no attributed actor created.
   const activatedByBackfill = await scalar(
     `SELECT COUNT(*)::int AS n FROM tenants t
       WHERE t.status <> 'pending_configuration'
+        AND t.created_by_user_link_id IS NULL
         AND t.tenant_id IN (
           SELECT tenant_id FROM service_appointments UNION
           SELECT tenant_id FROM repair_orders UNION
@@ -865,7 +876,7 @@ async function assertFixturePresent(counts: Record<string, number>): Promise<voi
  */
 async function assertReconciledState(phase: Phase): Promise<void> {
   const applicable = RECONCILED_STATE.filter(
-    (entry) => phase === 'post-058' || entry.from === '057',
+    (entry) => GROWTH_PHASES.includes(phase) || entry.from === '057',
   );
   if (applicable.length === 0) {
     fail(`${phase}: no reconciliation expectations are applicable — the filter cannot be empty`);
@@ -915,23 +926,23 @@ function assertCountsPreserved(
     const a = after[table] ?? -1;
     if (b <= 0) fail(`${phase}: before-count for ${table} is ${b} — the drill ran on no data`);
     else if (a <= 0) fail(`${phase}: after-count for ${table} is ${a} — rows disappeared`);
-    else if (phase === 'post-058' ? a < b : a !== b)
+    else if (GROWTH_PHASES.includes(phase) ? a < b : a !== b)
       // Worded so no interpolation follows the word "from": a message shaped like
       // `… from ${x} …` is indistinguishable from a table position to a static reader,
       // and check-role-binding-effectiveness.ts correctly refuses what it cannot resolve.
       fail(`${phase}: ${table} held ${b} row(s) before and ${a} after — nothing may be deleted`);
     else console.log(`${phase}-count=${table} before=${b} after=${a}`);
   }
-  if (phase === 'post-058') {
+  if (GROWTH_PHASES.includes(phase)) {
     const b = before.policy_decisions ?? -1;
     const a = after.policy_decisions ?? -1;
     if (a <= b)
       fail(
-        `post-058: policy_decisions held ${b} row(s) before and ${a} after — the post-057 ` +
-          'activity stage wrote no evidence, so 058 was measured against the pre-057 fixture ' +
-          'alone and its §3.1 rule was once again unreachable',
+        `${phase}: policy_decisions held ${b} row(s) before and ${a} after — the activity ` +
+          'stage this phase follows wrote no evidence, so the migration was once again ' +
+          'measured against rows its rules cannot reach',
       );
-    else console.log(`post-058-activity-added-decisions=${a - b}`);
+    else console.log(`${phase}-activity-added-decisions=${a - b}`);
   }
 }
 
@@ -974,14 +985,14 @@ async function probeRefusal(sql: string, params: readonly unknown[] = []): Promi
  * is precisely whether the floor moved from 2 to 3 — which "version 1 is refused"
  * cannot distinguish.
  */
-async function assertEvidenceVersionFloor(phase: Phase, minimum: 2 | 3): Promise<void> {
+async function assertEvidenceVersionFloor(phase: Phase, minimum: 2 | 3 | 4): Promise<void> {
   const insert = (version: number): [string, unknown[]] => [
     `INSERT INTO policy_decisions
        (actor_type, action, decision, reason_code, policy_version, evidence_version)
      VALUES ('system', 'platform.probe', 'deny', 'PROBE', 'v1', $1)`,
     [version],
   ];
-  for (const below of [1, 2].filter((v) => v < minimum)) {
+  for (const below of [1, 2, 3].filter((v) => v < minimum)) {
     const [sql, params] = insert(below);
     const detail = await probeRefusal(sql, params);
     if (detail === null)
@@ -1020,7 +1031,7 @@ async function assertEvidenceVersionFloor(phase: Phase, minimum: 2 | 3): Promise
  * own §3.2 pre-check uses, written the same way, so this cannot pass while that
  * would have failed.
  */
-async function assertNormalizedEvidenceIsEquivalent(): Promise<void> {
+async function assertNormalizedEvidenceIsEquivalent(phase: Phase): Promise<void> {
   const diverged = await scalar(
     `SELECT COUNT(*)::int AS n FROM (
        SELECT d.decision_id
@@ -1045,11 +1056,11 @@ async function assertNormalizedEvidenceIsEquivalent(): Promise<void> {
   );
   if (diverged !== 0)
     fail(
-      `post-058: ${diverged} decision(s) hold normalized authority evidence that is not ` +
+      `${phase}: ${diverged} decision(s) hold normalized authority evidence that is not ` +
         'equivalent to their own matched-binding array — 058 §0 either over-derived, ' +
         'under-derived or re-ordered, or a later write diverged from the array beside it',
     );
-  else console.log('post-058-normalized-equivalence=every-decision-matches-its-own-array');
+  else console.log(`${phase}-normalized-equivalence=every-decision-matches-its-own-array`);
 }
 
 /**
@@ -1074,7 +1085,7 @@ async function assertNormalizedEvidenceIsEquivalent(): Promise<void> {
  * INSERT regardless of version, so a row at evidence_version 3 naming a superseded
  * version would mean the rule was BYPASSED rather than that history was tolerated.
  */
-async function assertSupersededVersionHistorySurvived(): Promise<void> {
+async function assertSupersededVersionHistorySurvived(phase: Phase): Promise<void> {
   // role-binding-effectiveness-opt-out(all-bindings-including-ineffective): this counts stored
   // EVIDENCE rows and joins each to its binding by PRIMARY KEY to read the version that binding
   // now carries. The interesting half is precisely the REVOKED bindings — a revocation is what
@@ -1095,7 +1106,7 @@ async function assertSupersededVersionHistorySurvived(): Promise<void> {
   evidence.superseded_binding_version_rows = rows;
   if (rows < 1) {
     fail(
-      'post-058: NO stored authority row names a binding version below the one that binding ' +
+      `${phase}: NO stored authority row names a binding version below the one that binding ` +
         'now carries, so 058 was applied to a database on which §3.3 had no history to ' +
         'tolerate — the case this phase exists to prove is untested',
     );
@@ -1103,13 +1114,13 @@ async function assertSupersededVersionHistorySurvived(): Promise<void> {
   }
   if (Number(row.at_version_3) !== 0) {
     fail(
-      `post-058: ${row.at_version_3} authority row(s) at evidence_version 3 name a superseded ` +
+      `${phase}: ${row.at_version_3} authority row(s) at evidence_version 3 or above name a superseded ` +
         'binding version — version 3 is written under the exact-version rule, so this is a ' +
         'bypassed control rather than tolerated history',
     );
     return;
   }
-  console.log(`post-058-superseded-binding-version-rows=${rows}`);
+  console.log(`${phase}-superseded-binding-version-rows=${rows}`);
 }
 
 /**
@@ -1134,7 +1145,7 @@ async function assertSupersededVersionHistorySurvived(): Promise<void> {
  *      accepted. Both halves, because a rule that refused everything would satisfy
  *      the first alone.
  */
-async function assertAuthTimeExemptionAndBinding(): Promise<void> {
+async function assertAuthTimeExemptionAndBinding(phase: Phase): Promise<void> {
   const drift = (
     await query(
       `SELECT COUNT(*)::int AS total,
@@ -1149,14 +1160,14 @@ async function assertAuthTimeExemptionAndBinding(): Promise<void> {
   evidence.auth_time_exempt_decisions = Number(drift.total);
   if (Number(drift.total) < 1)
     fail(
-      'post-058: NO stored decision records an authentication time that differs from its ' +
+      `${phase}: NO stored decision records an authentication time that differs from its ` +
         "session's current one, so 058 was applied to a database on which §3.1 had nothing to " +
         'tolerate — the exemption this phase exists to prove is untested',
     );
-  else console.log(`post-058-auth-time-exempt=${drift.total}`);
+  else console.log(`${phase}-auth-time-exempt=${drift.total}`);
   if (Number(drift.at_version_3) !== 0)
     fail(
-      `post-058: ${drift.at_version_3} decision(s) at evidence_version 3 record an authentication ` +
+      `${phase}: ${drift.at_version_3} decision(s) at evidence_version 3 or above record an authentication ` +
         'time that is not their session’s — version 3 is the version that binds it exactly, so ' +
         'this is a violated rule rather than an exempted history',
     );
@@ -1175,7 +1186,7 @@ async function assertAuthTimeExemptionAndBinding(): Promise<void> {
     )
   ).rows as Array<Record<string, string>>;
   if (live.length !== 1) {
-    fail('post-058: the drill left no live, fully bound session to probe the §3.1 rule with');
+    fail(`${phase}: the drill left no live, fully bound session to probe the §3.1 rule with`);
     return;
   }
   const s = live[0] as Record<string, string>;
@@ -1191,10 +1202,10 @@ async function assertAuthTimeExemptionAndBinding(): Promise<void> {
   );
   if (wrong === null)
     fail(
-      'post-058: policy_decisions accepted a NEW decision recording an authentication time the ' +
+      `${phase}: policy_decisions accepted a NEW decision recording an authentication time the ` +
         'session it names never had — the §3.1 binding trigger is not in force',
     );
-  else console.log(`post-058-auth-time-bound=refused detail=${JSON.stringify(wrong)}`);
+  else console.log(`${phase}-auth-time-bound=refused detail=${JSON.stringify(wrong)}`);
   const right = await probeRefusal(
     `INSERT INTO policy_decisions ${columns} VALUES ${values}
        (SELECT s2.auth_time FROM identity_sessions s2 WHERE s2.session_id = $3))`,
@@ -1202,10 +1213,261 @@ async function assertAuthTimeExemptionAndBinding(): Promise<void> {
   );
   if (right !== null)
     fail(
-      'post-058: policy_decisions REFUSED a NEW decision that recorded its named session’s OWN ' +
+      `${phase}: policy_decisions REFUSED a NEW decision that recorded its named session’s OWN ` +
         `authentication time — the rule refuses everything rather than binding: ${right}`,
     );
-  else console.log('post-058-auth-time-bound=accepts-the-session-own-instant');
+  else console.log(`${phase}-auth-time-bound=accepts-the-session-own-instant`);
+}
+
+/**
+ * `post-059` phase: MIGRATION 059'S INTEGRITY CLOSURE IS IN FORCE, ON THIS DATABASE.
+ *
+ * Four legs, each failing separately:
+ *
+ *   1. OBJECTS — every trigger, constraint, column, function and role 059 declares
+ *      exists, and the R6-era GUC writer guard is GONE (059 §7 replaces it with the
+ *      privilege system, so its survival would mean two writers disagree about who
+ *      guards the child table).
+ *   2. PRIVILEGES — the runtime role holds no DML on the normalized child table,
+ *      cannot assume the evidence owner, and the SECURITY DEFINER normalizer is
+ *      owned by that owner. `scripts/upgrade-precheck-refusals.ts` proves the §0
+ *      prechecks FIRE; this proves what they protect stands afterwards.
+ *   3. RETAINED ROWS — the five §0 precheck queries, re-asked here, find zero
+ *      violations: the invariants hold on everything the drill retained.
+ *   4. THE WRITTEN RECORD — versions 2, 3 and 4 are all present (history preserved,
+ *      the current writer current), nothing outside 1–4 exists, the column DEFAULT
+ *      is 4, and one live probe confirms a dealership link still cannot file a
+ *      support delegation on this very database.
+ */
+async function assertIntegrityClosureState(phase: Phase): Promise<void> {
+  const expectTriggers = [
+    'trg_sar_requester_is_platform',
+    'trg_sas_actor_is_platform',
+    'trg_sar_authority_immutable',
+    'trg_sas_authority_immutable',
+    'trg_sas_bounded_by_approval',
+    'trg_sar_grant_is_the_approval',
+    'trg_policy_decisions_v4_structure',
+    'trg_pdmb_live_and_reaches_the_resource',
+    'trg_policy_decisions_support_live',
+  ];
+  for (const trigger of expectTriggers) {
+    const n = await scalar(
+      `SELECT COUNT(*)::int AS n FROM pg_trigger WHERE NOT tgisinternal AND tgname = $1`,
+      [trigger],
+    );
+    if (n !== 1) fail(`${phase}: trigger ${trigger} is not in force (found ${n})`);
+    else console.log(`${phase}-trigger=${trigger}`);
+  }
+  const goneTrigger = await scalar(
+    `SELECT COUNT(*)::int AS n FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = 'trg_pdmb_authorized_writer'`,
+  );
+  if (goneTrigger !== 0)
+    fail(
+      `${phase}: trg_pdmb_authorized_writer still exists — 059 §7 replaces the forgeable GUC ` +
+        'guard with the privilege system, and a surviving copy would be a second, weaker writer rule',
+    );
+  else console.log(`${phase}-guc-guard=gone`);
+
+  // [name, validated] — the tuple key is deliberately NOT VALID (059 §1: it is
+  // enforced in full for every new write while tolerating append-only ended
+  // history nothing can lawfully change); everything else validates cleanly.
+  const expectConstraints: ReadonlyArray<[string, boolean]> = [
+    ['uq_sar_request_tenant_requester', true],
+    ['sas_actor_is_the_approved_requester', false],
+    ['pd_resource_rooftop_in_tenant', true],
+    ['pd_v4_support_tenant_allow_is_delegated', true],
+    ['pd_v4_control_plane_is_structural', true],
+    ['pd_v4_target_tenant_is_metadata', true],
+    ['pd_v4_identified_actor_names_a_tenant', true],
+    ['pd_v4_resource_allow_names_its_rooftop', true],
+  ];
+  for (const [constraint, validated] of expectConstraints) {
+    const n = await scalar(
+      `SELECT COUNT(*)::int AS n FROM pg_constraint WHERE conname = $1 AND convalidated = $2`,
+      [constraint, validated],
+    );
+    if (n !== 1)
+      fail(
+        `${phase}: constraint ${constraint} is not in force ` +
+          `(expected convalidated=${validated})`,
+      );
+    else console.log(`${phase}-constraint=${constraint} validated=${validated}`);
+  }
+  for (const fn of [
+    'org_ancestry_all',
+    'org_chain_defect',
+    'org_ancestry_effective',
+    'resource_org_leaf',
+  ]) {
+    const n = await scalar(`SELECT COUNT(*)::int AS n FROM pg_proc WHERE proname = $1`, [fn]);
+    if (n !== 1) fail(`${phase}: authority function ${fn}() is missing (found ${n})`);
+    else console.log(`${phase}-authority-function=${fn}`);
+  }
+  const goneFn = await scalar(
+    `SELECT COUNT(*)::int AS n FROM pg_proc
+      WHERE proname = 'policy_decision_matched_bindings_have_one_writer'`,
+  );
+  if (goneFn !== 0) fail(`${phase}: the GUC guard function still exists`);
+
+  // (2) THE PRIVILEGE MODEL.
+  const roleModel = (
+    await query(
+      `SELECT
+         (SELECT NOT rolcanlogin FROM pg_roles WHERE rolname = 'dealership_runtime') AS runtime_nologin,
+         (SELECT NOT rolcanlogin FROM pg_roles WHERE rolname = 'dealership_evidence_owner') AS owner_nologin,
+         pg_has_role('dealership_runtime', 'dealership_evidence_owner', 'member') AS runtime_is_member,
+         has_table_privilege('dealership_runtime', 'policy_decision_matched_bindings', 'INSERT') AS runtime_can_insert,
+         has_table_privilege('dealership_evidence_owner', 'policy_decision_matched_bindings', 'INSERT') AS owner_can_insert,
+         (SELECT p.prosecdef FROM pg_proc p
+           WHERE p.proname = 'policy_decisions_normalize_matched_bindings') AS normalizer_secdef,
+         (SELECT r.rolname FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+           WHERE p.proname = 'policy_decisions_normalize_matched_bindings') AS normalizer_owner`,
+    )
+  ).rows[0] as Record<string, unknown>;
+  if (roleModel.runtime_nologin !== true) fail(`${phase}: dealership_runtime must exist NOLOGIN`);
+  if (roleModel.owner_nologin !== true)
+    fail(`${phase}: dealership_evidence_owner must exist NOLOGIN`);
+  if (roleModel.runtime_is_member !== false)
+    fail(`${phase}: the runtime role can assume the evidence owner — §3.7's separation is gone`);
+  if (roleModel.runtime_can_insert !== false)
+    fail(`${phase}: the runtime role holds INSERT on the normalized child table`);
+  if (roleModel.owner_can_insert !== true)
+    fail(`${phase}: the evidence owner holds no INSERT, so nothing can normalize`);
+  if (roleModel.normalizer_secdef !== true)
+    fail(`${phase}: the normalizer is not SECURITY DEFINER, so it writes with caller rights`);
+  if (String(roleModel.normalizer_owner) !== 'dealership_evidence_owner')
+    fail(
+      `${phase}: the normalizer is owned by ${String(roleModel.normalizer_owner)}, not the ` +
+        'evidence owner',
+    );
+  console.log(`${phase}-role-model=runtime-without-child-DML, owner-normalizes, no-membership`);
+
+  // (3) THE FIVE §0 INVARIANTS, RE-ASKED, over everything this database retains.
+  // The same LIVE scoping the §0 prechecks use: rows that no longer assert a
+  // delegation are append-only history the migration tolerates by design (the
+  // tuple key is NOT VALID over them), so counting them here would fail the
+  // drill over 057 §5's own documented supersession outcome.
+  const invariants: ReadonlyArray<[string, string]> = [
+    [
+      'every LIVE session actor is the approved requester',
+      `SELECT COUNT(*)::int AS n FROM support_access_sessions s
+        JOIN support_access_requests r ON r.request_id = s.request_id
+       WHERE s.revoked_at IS NULL AND s.expired_at IS NULL
+         AND s.expires_at > clock_timestamp()
+         AND s.actor_user_link_id IS DISTINCT FROM r.requester_user_link_id`,
+    ],
+    [
+      'every LIVE support requester and actor is a platform link',
+      `SELECT COUNT(*)::int AS n FROM (
+         SELECT 1 FROM support_access_requests r
+           JOIN user_links ul ON ul.user_link_id = r.requester_user_link_id
+          WHERE r.status IN ('pending', 'approved') AND ul.actor_scope <> 'platform'
+         UNION ALL
+         SELECT 1 FROM support_access_sessions s
+           JOIN user_links ul ON ul.user_link_id = s.actor_user_link_id
+          WHERE s.revoked_at IS NULL AND s.expired_at IS NULL
+            AND s.expires_at > clock_timestamp()
+            AND ul.actor_scope <> 'platform') x`,
+    ],
+    [
+      'no LIVE session precedes its decision',
+      `SELECT COUNT(*)::int AS n FROM support_access_sessions s
+        JOIN support_access_requests r ON r.request_id = s.request_id
+       WHERE s.revoked_at IS NULL AND s.expired_at IS NULL
+         AND s.expires_at > clock_timestamp()
+         AND (r.decided_at IS NULL OR s.granted_at < r.decided_at)`,
+    ],
+    [
+      'no LIVE session outlives its requested duration',
+      `SELECT COUNT(*)::int AS n FROM support_access_sessions s
+        JOIN support_access_requests r ON r.request_id = s.request_id
+       WHERE s.revoked_at IS NULL AND s.expired_at IS NULL
+         AND s.expires_at > clock_timestamp()
+         AND s.expires_at > s.granted_at + make_interval(mins => r.requested_duration_minutes)`,
+    ],
+    [
+      'every STANDING approval grant is the approval it claims',
+      `SELECT COUNT(*)::int AS n FROM support_access_requests r
+        JOIN reauthentication_grants g ON g.grant_id = r.approval_grant_id
+       WHERE r.status = 'approved' AND r.approval_grant_id IS NOT NULL
+         AND (g.action <> 'identity.support.approve'
+              OR g.resource_type IS DISTINCT FROM 'support_access_request'
+              OR g.resource_id IS DISTINCT FROM r.request_id
+              OR g.assurance_level <> 'fresh_and_mfa_policy'
+              OR g.mfa_policy_certified_at_issue IS DISTINCT FROM true)`,
+    ],
+  ];
+  for (const [label, sql] of invariants) {
+    const n = await scalar(sql);
+    if (n !== 0) fail(`${phase}: ${n} retained row(s) violate: ${label}`);
+    else console.log(`${phase}-invariant-holds=${JSON.stringify(label)}`);
+  }
+
+  // (4) THE WRITTEN RECORD.
+  const versions = (
+    await query(
+      `SELECT evidence_version::int AS v, COUNT(*)::int AS n
+         FROM policy_decisions GROUP BY evidence_version ORDER BY evidence_version`,
+    )
+  ).rows as Array<{ v: number; n: number }>;
+  const byVersion = new Map(versions.map((r) => [Number(r.v), Number(r.n)]));
+  evidence.decisions_by_evidence_version = Object.fromEntries(byVersion);
+  for (const wanted of [2, 3, 4]) {
+    if ((byVersion.get(wanted) ?? 0) < 1)
+      fail(
+        `${phase}: no decision at evidence_version ${wanted} — the drill must retain each ` +
+          'era’s rows and the current writer must have written the current version',
+      );
+  }
+  for (const [v] of byVersion) {
+    if (v < 1 || v > 4) fail(`${phase}: a decision claims unknown evidence_version ${v}`);
+  }
+  console.log(`${phase}-versions=${JSON.stringify(Object.fromEntries(byVersion))}`);
+
+  const columnDefault = (
+    await query(
+      `SELECT pg_get_expr(ad.adbin, ad.adrelid) AS d
+         FROM pg_attrdef ad
+         JOIN pg_attribute a ON a.attrelid = ad.adrelid AND a.attnum = ad.adnum
+        WHERE ad.adrelid = 'policy_decisions'::regclass AND a.attname = 'evidence_version'`,
+    )
+  ).rows[0] as { d: string } | undefined;
+  if (columnDefault?.d !== '4')
+    fail(
+      `${phase}: evidence_version DEFAULT is ${JSON.stringify(columnDefault?.d)}, not 4 — the ` +
+        'schema, not the writer, owns what "current" means',
+    );
+  else console.log(`${phase}-evidence-default=4`);
+
+  // One live refusal, on THIS database: a dealership link filing a delegation.
+  const dealershipLink = (
+    await query(
+      `SELECT user_link_id::text AS id, tenant_id::text AS tenant FROM user_links
+        WHERE actor_scope = 'dealership' AND status = 'activated' AND tenant_id IS NOT NULL
+        ORDER BY user_link_id LIMIT 1`,
+    )
+  ).rows[0] as { id: string; tenant: string } | undefined;
+  if (dealershipLink === undefined) {
+    fail(`${phase}: no activated dealership link to probe the §3.1 requester rule with`);
+    return;
+  }
+  const refused = await probeRefusal(
+    `INSERT INTO support_access_requests
+       (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id,
+        reason, requested_duration_minutes)
+     VALUES ($1, $2, ARRAY['service.ro.view'], 'tenant', NULL, 'post-059 phase probe', 30)`,
+    [dealershipLink.tenant, dealershipLink.id],
+  );
+  if (refused === null)
+    fail(
+      `${phase}: this database ACCEPTED a support request filed by a dealership link — ` +
+        'the §3.1 requester rule is not in force where the drill ends',
+    );
+  else if (!refused.includes('a dealership link cannot request it'))
+    fail(`${phase}: the requester-rule refusal carries the wrong words: ${refused}`);
+  else console.log(`${phase}-requester-rule=refuses-dealership-links`);
 }
 
 function parseArgs(): { phase: Phase; out: string | undefined; before: string | undefined } {
@@ -1272,14 +1534,21 @@ async function main(): Promise<void> {
       }
     }
     await assertReconciledState(phase);
-    // The floor 057 installs is 2; 058 raises it to 3 (R6-R6 §D1). The phase says
-    // which one this database is supposed to be at, so a floor that failed to move
-    // and a floor that moved too early are both failures rather than both passes.
-    await assertEvidenceVersionFloor(phase, phase === 'post-058' ? 3 : 2);
-    if (phase === 'post-058') {
-      await assertNormalizedEvidenceIsEquivalent();
-      await assertAuthTimeExemptionAndBinding();
-      await assertSupersededVersionHistorySurvived();
+    // The floor 057 installs is 2; 058 raises it to 3 (R6-R6 §D1); 059 raises it
+    // to 4 (R7 §4). The phase says which one this database is supposed to be at,
+    // so a floor that failed to move and a floor that moved too early are both
+    // failures rather than both passes.
+    await assertEvidenceVersionFloor(
+      phase,
+      phase === 'post-059' ? 4 : phase === 'post-058' ? 3 : 2,
+    );
+    if (GROWTH_PHASES.includes(phase)) {
+      await assertNormalizedEvidenceIsEquivalent(phase);
+      await assertAuthTimeExemptionAndBinding(phase);
+      await assertSupersededVersionHistorySurvived(phase);
+    }
+    if (phase === 'post-059') {
+      await assertIntegrityClosureState(phase);
     }
   }
 

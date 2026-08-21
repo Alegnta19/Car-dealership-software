@@ -636,18 +636,22 @@ describe(
          RETURNING reauth_txn_id`,
         [tenant.tenantId, approver, sha256hex('approval-nonce'), sha256hex('approval-oidc-nonce')],
       );
+      // FBL-020-R7 §3.2: the grant NAMES THE EXACT REQUEST it approves — action,
+      // resource type, resource id, assurance and MFA certification are judged
+      // where the approval is written now, not only where a grant is consumed.
       const approvalGrant = await query(
         `INSERT INTO reauthentication_grants
-           (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
-            assurance_level, mfa_policy_certified_at_issue, consumed_at)
-         VALUES ($1, $2, $3, 'identity.support.approve', $4,
-                 NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())
+           (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
+            grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue, consumed_at)
+         VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $5,
+                 $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())
          RETURNING grant_id`,
         [
           String((approvalTxn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
           tenant.tenantId,
           approver,
           sha256hex('approval-grant'),
+          requestId,
         ],
       );
       await fixtureAuthorizationStateWrite(
@@ -659,7 +663,11 @@ describe(
         [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
       );
 
-      // a session longer than 60 minutes cannot exist
+      // a session longer than 60 minutes cannot exist — and since FBL-020-R7 §3.2,
+      // a session longer than the REQUESTED duration cannot either. The trigger
+      // (P0001) answers before the structural CHECK for this 61-minute attempt
+      // against a 30-minute request; the 055 ceiling still stands beneath it and
+      // would refuse a 61-minute window even on a 60-minute request.
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'seed-authorization-state',
@@ -667,7 +675,7 @@ describe(
          VALUES ($1, $2, $3, NOW() + INTERVAL '61 minutes')`,
           [requestId, tenant.tenantId, requester],
         ),
-        CHECK_VIOLATION,
+        RAISED,
         'over-60-minute session',
       );
       await fixtureAuthorizationStateWrite(
