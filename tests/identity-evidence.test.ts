@@ -82,24 +82,46 @@ describe(
       otherSubject: string;
       otherSessionId: string;
       otherRoleBindingId: string;
+      /**
+       * FBL-020-R7 3.1 - a REAL platform person with their own live session.
+       * The schema now binds the platform-support label, the support requester
+       * and the session actor to a link that really is platform-scope, so the
+       * support fixtures must actually BE one.
+       */
+      platformLinkId: string;
+      platformSubject: string;
+      platformConnectionId: string;
+      platformSessionId: string;
+      /** …and a SECOND real platform person, for cross-attribution adversaries. */
+      platformTwoLinkId: string;
+      platformTwoSubject: string;
+      platformTwoConnectionId: string;
+      platformTwoSessionId: string;
     }
 
     /** An activated, fully bound link in the named tenant. */
-    async function activatedLink(tenantId: string): Promise<{ linkId: string; subject: string }> {
+    async function activatedLink(
+      tenantId: string | null,
+    ): Promise<{ linkId: string; subject: string; connectionId: string }> {
       const subject = 'user_' + randomUUID();
       const r = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
         `INSERT INTO user_links
            (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
             connection_id, issuer, provider_organization_id)
-         SELECT 'dealership', $1, 'workos', $2, 'activated', NOW(),
+         SELECT $3, $1, 'workos', $2, 'activated', NOW(),
                 c.connection_id, c.issuer, c.provider_organization_id
            FROM identity_provider_connections c
-          WHERE c.tenant_id = $1 AND c.status = 'active' LIMIT 1
-         RETURNING user_link_id`,
-        [tenantId, subject],
+          WHERE c.tenant_id IS NOT DISTINCT FROM $1 AND c.status = 'active' LIMIT 1
+         RETURNING user_link_id, connection_id`,
+        [tenantId, subject, tenantId === null ? 'platform' : 'dealership'],
       );
-      return { linkId: String((r.rows[0] as Record<string, unknown>).user_link_id), subject };
+      const row = r.rows[0] as Record<string, unknown>;
+      return {
+        linkId: String(row.user_link_id),
+        subject,
+        connectionId: String(row.connection_id),
+      };
     }
 
     /** An ATTRIBUTED role grant, through the owned mutation service, never raw SQL. */
@@ -160,6 +182,18 @@ describe(
       ).rows[0] as Record<string, unknown>;
       const otherSession = await seedLocalSession(otherPerson.linkId);
 
+      // FBL-020-R7 §3.1 — a REAL platform person with their own live session. Every
+      // support fixture in this file used to dress the tenant's own dealership
+      // actor as the delegate; the schema now refuses that at the request, the
+      // session and the decision, so the delegate must actually BE platform-scope.
+      const platform = await activatedLink(null);
+      const platformSession = await seedLocalSession(platform.linkId);
+      // …and a SECOND one: R7 §3.1 binds the actor-type label to the real scope,
+      // so "a support session attributed to somebody who does not hold it" is only
+      // stageable between two people who could BOTH legitimately hold one.
+      const platformTwo = await activatedLink(null);
+      const platformTwoSession = await seedLocalSession(platformTwo.linkId);
+
       return {
         tenantId: tenant.tenantId,
         otherTenantId: other.tenantId,
@@ -169,6 +203,14 @@ describe(
         linkId,
         subject,
         sessionId: session.sessionId,
+        platformLinkId: platform.linkId,
+        platformSubject: platform.subject,
+        platformConnectionId: platform.connectionId,
+        platformSessionId: platformSession.sessionId,
+        platformTwoLinkId: platformTwo.linkId,
+        platformTwoSubject: platformTwo.subject,
+        platformTwoConnectionId: platformTwo.connectionId,
+        platformTwoSessionId: platformTwoSession.sessionId,
         roleBindingId,
         roleBindingVersion: version,
         otherConnectionId: String(otherBound.connection_id),
@@ -460,24 +502,63 @@ describe(
                 requested_duration_minutes)
              VALUES ($1, $2, ARRAY['service.ro.view'], 'ticket 1', 30)
              RETURNING request_id`,
-            [f.tenantId, f.linkId],
+            [f.tenantId, f.platformLinkId],
           )
         ).rows[0]?.request_id,
       );
 
+      // FBL-020-R7 §3.2: a session under an UNDECIDED request dies at its own
+      // trigger before any foreign key is consulted, so the cross-tenant key is
+      // exercised on a properly APPROVED request.
+      {
+        const decider = await bootstrapAdministrator(f.tenantId);
+        await mintReauthGrant({
+          tenantId: f.tenantId,
+          userLinkId: decider,
+          action: 'identity.support.approve',
+          resourceType: 'support_access_request',
+          resourceId: requestId,
+        });
+        await fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2
+                       AND g.action = 'identity.support.approve'
+                       AND g.resource_id = $1)
+            WHERE request_id = $1`,
+          [requestId, decider],
+        );
+      }
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'seed-authorization-state',
           `INSERT INTO support_access_sessions
              (request_id, tenant_id, actor_user_link_id, expires_at)
            VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
-          [requestId, f.otherTenantId, f.linkId],
+          [requestId, f.otherTenantId, f.platformLinkId],
         ),
         FK_VIOLATION,
         'support session in a different tenant than its request',
       );
 
-      // An approving grant minted in ANOTHER tenant cannot approve access into this one.
+      // An approving grant minted in ANOTHER tenant cannot approve access into this
+      // one. A FRESH, still-pending request: the first one is already approved.
+      const pendingRequestId = String(
+        (
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `INSERT INTO support_access_requests
+               (tenant_id, requester_user_link_id, requested_actions, reason,
+                requested_duration_minutes)
+             VALUES ($1, $2, ARRAY['service.ro.view'], 'ticket 2', 30)
+             RETURNING request_id`,
+            [f.tenantId, f.platformLinkId],
+          )
+        ).rows[0]?.request_id,
+      );
       await certifyMfaPolicy(f.otherTenantId);
       const foreignPerson = await activatedLink(f.otherTenantId);
       const foreignSession = await seedLocalSession(foreignPerson.linkId);
@@ -516,10 +597,17 @@ describe(
       const foreignGrantId = String(
         (
           await query(
+            // FBL-020-R7 §3.2: the grant NAMES THIS EXACT REQUEST — action,
+            // resource type, resource id, assurance and MFA certification are all
+            // judged where the approval is written now, so a grant that failed any
+            // of them would be refused for THAT and this test would stop being
+            // about the tenant. The one thing wrong with this grant is its tenant.
             `INSERT INTO reauthentication_grants
-               (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
-                assurance_level, mfa_policy_certified_at_issue, connection_id)
-             VALUES ($1, $2, $3, 'identity.support.approve', $4, NOW() + INTERVAL '2 minutes',
+               (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
+                grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue,
+                connection_id)
+             VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $6,
+                     $4, NOW() + INTERVAL '2 minutes',
                      'fresh_and_mfa_policy', TRUE, $5)
              RETURNING grant_id`,
             [
@@ -528,6 +616,7 @@ describe(
               foreignPerson.linkId,
               HEX64(),
               String(foreignBinding.connection_id),
+              pendingRequestId,
             ],
           )
         ).rows[0]?.grant_id,
@@ -540,7 +629,7 @@ describe(
               SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $3,
                   approval_grant_id = $2
             WHERE request_id = $1`,
-          [requestId, foreignGrantId, foreignPerson.linkId],
+          [pendingRequestId, foreignGrantId, foreignPerson.linkId],
         ),
         FK_VIOLATION,
         'an approving grant from another tenant',
@@ -672,7 +761,11 @@ describe(
         CURRENT_EVIDENCE_VERSION,
         'the default is the CURRENT version',
       );
-      assert.equal(Number(row.evidence_version), 3, 'and the current version is 3 (R6-R6 §D1)');
+      assert.equal(
+        Number(row.evidence_version),
+        4,
+        'and the current version is 4 (FBL-020-R7 §3: structurally-judged authority)',
+      );
       assert.equal(String(row.session_id), f.sessionId);
     });
 
@@ -857,7 +950,7 @@ describe(
       const versions = (
         await query(`SELECT evidence_version FROM policy_decisions ORDER BY evidence_version`)
       ).rows.map((r) => Number((r as { evidence_version: unknown }).evidence_version));
-      assert.deepEqual(versions, [1, 3]);
+      assert.deepEqual(versions, [1, CURRENT_EVIDENCE_VERSION]);
     });
 
     test('a HISTORIC version-2 row survives a session that has since re-authenticated', async () => {
@@ -942,7 +1035,7 @@ describe(
           [before.decision_id],
         )
       ).rows[0] as Record<string, unknown>;
-      assert.equal(Number(current.evidence_version), 3);
+      assert.equal(Number(current.evidence_version), CURRENT_EVIDENCE_VERSION);
       assert.equal(
         current.agrees_with_its_session,
         true,
@@ -951,11 +1044,18 @@ describe(
     });
 
     test('support-access evidence is all three facts or none', async () => {
-      const delegated = await supportSessionFor(f.tenantId, f.linkId);
+      const delegated = await supportSessionFor(f.tenantId, f.platformLinkId);
+      // FBL-020-R7 §3.1: the decision's actor and presented credential are the
+      // PLATFORM person's own — the actor-type label is bound to the real scope
+      // now, so a dealership actor can no longer wear it.
       const supportAllow = {
         actor_type: 'platform_support',
         reason_code: 'ALLOW_SUPPORT_SESSION',
         matched_role_binding_ids: null,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
         support_session_id: delegated.sessionId,
         support_request_id: delegated.requestId,
       };
@@ -976,9 +1076,12 @@ describe(
         RAISED,
         'a support allow that names no window',
       );
+      // The 'user' label on a platform person now dies at the LABEL-BINDING rule
+      // (R7 §3.1) — a trigger, so the refusal is a raise rather than a CHECK. The
+      // v2 CHECK it used to reach is still beneath it for the labels that get past.
       await assertSqlState(
         insertAllow({ ...supportAllow, actor_type: 'user' }),
-        CHECK_VIOLATION,
+        RAISED,
         'a support allow attributed to an ordinary user',
       );
       assert.equal(await countEvidence(), 0);
@@ -1143,9 +1246,12 @@ describe(
     // ── class (a): identifiers that resolve to nothing ──────────────────────
 
     test('a decision cannot name a tenant, an actor, a connection or a session that does not exist', async () => {
+      // FBL-020-R7 §3.5: a tenant nobody created has no effective chain, and the
+      // BEFORE INSERT chain judge answers ahead of the foreign key — a trigger
+      // always precedes a constraint. `pd_tenant_exists` still stands beneath it.
       await assertRefusedBy(
         insertAllow({ tenant_id: randomUUID(), scope_id: f.tenantId }),
-        { state: FK_VIOLATION, constraint: 'pd_tenant_exists' },
+        { state: RAISED, message: 'does not exist in tenant' },
         'a decision naming a tenant nobody created',
       );
       await assertRefusedBy(
@@ -1385,6 +1491,10 @@ describe(
       // is passed: a write to authorization state that reaches the primitive through
       // a variable is invisible to the guard, and being visible to the guard is the
       // whole point of routing it through the primitive.
+      // FBL-020-R7 §3.7 removed the forgeable GUC guard that used to answer here
+      // first; for a superuser fixture connection the composite key itself is now
+      // the first and only refusal, which is exactly the property under test. (The
+      // runtime role's answer is 42501 before any key — that is its own named test.)
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'adversarial-bypass-attempt',
@@ -1394,8 +1504,8 @@ describe(
            VALUES ($1, $2, $3, 1, 2)`,
           [decisionId, f.otherRoleBindingId, f.otherLinkId],
         ),
-        RAISED,
-        'a child row written directly, with no normalizer behind it',
+        FK_VIOLATION,
+        'a child row written directly, against a decision that names a different actor',
       );
       await assertSqlState(
         forgingTheNormalizerMarker(decisionId, (executor) =>
@@ -1423,12 +1533,19 @@ describe(
     // ── class (e): support session / request / actor tuples ─────────────────
 
     test('support evidence cannot cross-wire a real session with another real request, tenant or actor', async () => {
-      const mine = await supportSessionFor(f.tenantId, f.linkId);
-      const theirs = await supportSessionFor(f.otherTenantId, f.otherLinkId);
+      const mine = await supportSessionFor(f.tenantId, f.platformLinkId);
+      // ONE platform person holding delegations into BOTH tenants — every row
+      // below presents that person's real credential, so the only thing wrong
+      // with each is the cross-wiring it stages.
+      const theirs = await supportSessionFor(f.otherTenantId, f.platformLinkId);
       const supportAllow = {
         actor_type: 'platform_support',
         reason_code: 'ALLOW_SUPPORT_SESSION',
         matched_role_binding_ids: null,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
       };
 
       await assertRefusedBy(
@@ -1452,10 +1569,12 @@ describe(
       await assertRefusedBy(
         insertAllow({
           ...supportAllow,
-          actor_user_link_id: f.otherLinkId,
-          session_id: f.otherSessionId,
-          connection_id: f.otherConnectionId,
-          actor_provider_subject: f.otherSubject,
+          // The SECOND platform person: real, platform-scope, could hold a
+          // delegation — and does not hold THIS one.
+          actor_user_link_id: f.platformTwoLinkId,
+          session_id: f.platformTwoSessionId,
+          connection_id: f.platformTwoConnectionId,
+          actor_provider_subject: f.platformTwoSubject,
           support_session_id: mine.sessionId,
           support_request_id: mine.requestId,
         }),
@@ -1474,12 +1593,16 @@ describe(
     });
 
     test('a support decision cannot record a window its session never had', async () => {
-      const mine = await supportSessionFor(f.tenantId, f.linkId);
-      const other = await supportSessionFor(f.tenantId, f.linkId);
+      const mine = await supportSessionFor(f.tenantId, f.platformLinkId);
+      const other = await supportSessionFor(f.tenantId, f.platformLinkId);
       const supportAllow = {
         actor_type: 'platform_support',
         reason_code: 'ALLOW_SUPPORT_SESSION',
         matched_role_binding_ids: null,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
         support_session_id: mine.sessionId,
         support_request_id: mine.requestId,
       };
@@ -1512,7 +1635,7 @@ describe(
       // in the referencing list would satisfy `pd_support_evidence_tuple`
       // without a lookup, so support evidence that goes quiet about the tenant
       // it reached into is refused outright.
-      const mine = await supportSessionFor(f.tenantId, f.linkId);
+      const mine = await supportSessionFor(f.tenantId, f.platformLinkId);
       await assertRefusedBy(
         insertAllow({
           actor_type: 'platform_support',
@@ -1522,6 +1645,10 @@ describe(
           tenant_id: null,
           scope_level: null,
           scope_id: null,
+          actor_user_link_id: f.platformLinkId,
+          session_id: f.platformSessionId,
+          connection_id: f.platformConnectionId,
+          actor_provider_subject: f.platformSubject,
           support_session_id: mine.sessionId,
           support_request_id: mine.requestId,
         }),

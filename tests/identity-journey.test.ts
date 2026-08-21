@@ -406,7 +406,8 @@ describe(
       assert.notEqual(preCheckRow.actor_provider_subject, null);
       // FBL-020-R6-R6 §D1: the current evidence version is 3 — the version whose
       // requirements include an authentication instant bound exactly to the named session.
-      assert.equal(Number(preCheckRow.evidence_version), 3);
+      // FBL-020-R7: the engine writes at the schema's CURRENT version (4).
+      assert.equal(Number(preCheckRow.evidence_version), 4);
 
       const txn = await query(
         `SELECT reauth_txn_id FROM reauthentication_transactions WHERE reauth_txn_id = $1`,

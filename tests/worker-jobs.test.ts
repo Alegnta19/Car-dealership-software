@@ -11,6 +11,7 @@ import {
   seedLocalSession,
   seedTenantViaService,
   skipIntegration,
+  shiftSupportWindowIntoThePast,
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
@@ -238,14 +239,7 @@ describe(
         }),
       });
       assert.ok(session, 'sanity: the support session must have started');
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_sessions
-            SET granted_at = NOW() - INTERVAL '90 minutes',
-                expires_at = NOW() - INTERVAL '31 minutes'
-          WHERE support_session_id = $1`,
-        [session.supportSessionId],
-      );
+      await shiftSupportWindowIntoThePast(session.supportSessionId);
 
       await runAllJobsOnce();
 
@@ -493,16 +487,12 @@ describe(
       return { supportSessionId: session.supportSessionId, approver, actor };
     }
 
-    /** Moves a window's expiry into the past without touching anything else. */
+    /**
+     * Moves a window's expiry into the past — via the R7 rebuild, since the
+     * window is immutable (§3.2). Same ids, same values, shifted instants.
+     */
     async function lapse(supportSessionId: string): Promise<void> {
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_sessions
-            SET granted_at = NOW() - INTERVAL '90 minutes',
-                expires_at = NOW() - INTERVAL '31 minutes'
-          WHERE support_session_id = $1`,
-        [supportSessionId],
-      );
+      await shiftSupportWindowIntoThePast(supportSessionId);
     }
 
     test('ORDERING A — a window that has LAPSED but not yet been swept cannot be revoked', async () => {

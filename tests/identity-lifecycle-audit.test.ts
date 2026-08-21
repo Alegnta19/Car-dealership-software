@@ -354,14 +354,18 @@ describe(
       ] as const) {
         const fresh = await startStepUp();
         assert.equal(
-          await claimReauthentication({
-            nonce: fresh.nonce,
-            state: fresh.state,
-            codeVerifier: fresh.codeVerifier,
-            presentedPurpose: 'reauth',
-            callbackUri: TEST_REAUTH_CALLBACK_URI,
-            ...perturbation,
-          }),
+          await claimReauthentication(
+            Object.assign(
+              {
+                nonce: fresh.nonce,
+                state: fresh.state,
+                codeVerifier: fresh.codeVerifier,
+                presentedPurpose: 'reauth',
+                callbackUri: TEST_REAUTH_CALLBACK_URI,
+              },
+              perturbation,
+            ),
+          ),
           null,
           `${label} must not claim`,
         );

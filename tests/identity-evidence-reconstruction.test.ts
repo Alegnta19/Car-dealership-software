@@ -428,7 +428,10 @@ describe(
      *     Pass `auth_time` directly to write an arbitrary one — which is the §3.1
      *     adversary.
      */
-    async function insertAllow(overrides: Record<string, unknown> = {}): Promise<void> {
+    async function insertAllow(
+      overrides: Record<string, unknown> = {},
+      executor?: Executor,
+    ): Promise<void> {
       const row: Record<string, unknown> = {
         tenant_id: f.tenantId,
         actor_user_link_id: f.linkId,
@@ -489,7 +492,11 @@ describe(
           ? `NULL::timestamptz`
           : `(SELECT s.auth_time FROM identity_sessions s
                 WHERE s.session_id = '${authTimeFrom}')`;
-      await query(
+      // FBL-020-R7 §3.7: an executor lets a caller run this INSERT under
+      // `SET LOCAL ROLE dealership_runtime`, proving the runtime role's parent
+      // write still normalizes through the database-owned path.
+      const run = executor ?? { query };
+      await run.query(
         `INSERT INTO policy_decisions (${columns.join(', ')},
             matched_role_binding_ids, matched_authorization_versions,
             support_session_expires_at, auth_time)
@@ -565,6 +572,20 @@ describe(
         scopeId?: string | null;
         grantedAt?: string;
         expiresAt?: string;
+        /**
+         * FBL-020-R7 §3.2 — the session window is bounded by the REQUESTED
+         * duration now, so a fixture that backdates a window must ask for a
+         * duration that actually covers it.
+         */
+        durationMinutes?: number;
+        /**
+         * FBL-020-R7 §3.2 — a session cannot precede its approval, so a fixture
+         * that backdates `granted_at` must backdate `decided_at` with it. The
+         * scenario being staged is "the window has since closed", never "the
+         * session predates the approval" — that one is now impossible to stage,
+         * which is the point of the rule.
+         */
+        supersededAfterGrant?: boolean;
       } = {},
     ): Promise<{ sessionId: string; requestId: string }> {
       const requestId = String(
@@ -574,7 +595,7 @@ describe(
             `INSERT INTO support_access_requests
                (tenant_id, requester_user_link_id, requested_actions, reason,
                 requested_duration_minutes, scope_level, scope_id)
-             VALUES ($1, $2, $3::text[], 'FBL-020-R6 §3.4 delegation fixture', 30, $4, $5)
+             VALUES ($1, $2, $3::text[], 'FBL-020-R6 §3.4 delegation fixture', $6, $4, $5)
              RETURNING request_id`,
             [
               tenantId,
@@ -582,11 +603,12 @@ describe(
               [...(options.actions ?? ['service.ro.view'])],
               options.scopeLevel ?? 'tenant',
               options.scopeId ?? null,
+              options.durationMinutes ?? 30,
             ],
           )
         ).rows[0]?.request_id,
       );
-      if (options.approve !== false) {
+      {
         const decider = await bootstrapAdministrator(tenantId);
         await mintReauthGrant({
           tenantId,
@@ -597,8 +619,12 @@ describe(
         });
         await fixtureAuthorizationStateWrite(
           'seed-authorization-state',
+          // The decision instant tracks the (possibly backdated) grant instant:
+          // §3.2's schema rule is `granted_at >= decided_at`, and this fixture
+          // stages windows, never premature sessions.
           `UPDATE support_access_requests
-              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+              SET status = 'approved', decided_at = ${options.grantedAt ?? 'NOW()'},
+                  decided_by_user_link_id = $2,
                   approval_grant_id = (
                     SELECT g.grant_id FROM reauthentication_grants g
                      WHERE g.user_link_id = $2
@@ -621,6 +647,28 @@ describe(
           )
         ).rows[0]?.support_session_id,
       );
+      /*
+       * FBL-020-R7 §3.2 — "a delegation nobody approved" can no longer be STAGED
+       * as a session under a pending request: the schema refuses that session at
+       * its own INSERT now, which is the correction. What remains reachable — and
+       * is exactly what 058's decision-time rule guards — is a delegation whose
+       * approval has since been SUPERSEDED: the request's status moves on (the
+       * documented supersession outcome), the session row survives, and a
+       * decision citing it must still be refused.
+       */
+      if (options.supersededAfterGrant === true) {
+        // `support_access_requests_check2` ties a non-null decided_at to a DECIDED
+        // terminal state, and R7's immutability trigger (correctly) refuses to move
+        // the decision instant — so the one reachable "approval no longer stands"
+        // staging is the decided terminal state that is not an approval.
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE support_access_requests
+              SET status = 'denied', superseded_reason = 'r7-fixture-supersession'
+            WHERE request_id = $1`,
+          [requestId],
+        );
+      }
       return { sessionId, requestId };
     }
 
@@ -749,9 +797,14 @@ describe(
           `UPDATE role_bindings SET ${drift.sql} WHERE role_binding_id = $1`,
           [f.roleBindingId],
         );
+        // The pinned words are 058's OWN tail. R7 §3.6 added a second,
+        // write-instant window judge behind this one, and both rules begin
+        // 'is outside its effective window' — a pin on the shared prefix would
+        // stay green with 058's clause deleted, because the 059 trigger still
+        // refuses the row. The tail is what only 058's clause says.
         await assertRefusedBy(
           insertAllow({ matched_authorization_versions: [await bindingVersion(f.roleBindingId)] }),
-          { state: RAISED, message: 'is outside its effective window' },
+          { state: RAISED, message: 'so it authorized nothing at this instant' },
           `authority claimed from a binding that is ${drift.label}`,
         );
         assert.equal(await countEvidence(), 0, `${drift.label}: nothing was written`);
@@ -762,8 +815,19 @@ describe(
       // Wrong SCOPE, same actor, real binding: `covers()` grants a resource binding
       // no sibling and no descendant reach, and this is that rule where the evidence
       // lands.
+      //
+      // FBL-020-R7 §3.4: both repair orders are REAL rows of this tenant now — a
+      // random UUID is refused earlier, by the registry resolution itself, and this
+      // test is about the BINDING mismatch, not about nonexistence.
       const mine = randomUUID();
       const theirs = randomUUID();
+      for (const ro of [mine, theirs]) {
+        await query(
+          `INSERT INTO repair_orders (ro_id, tenant_id, location_id, mdm_customer_id, mdm_vehicle_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [ro, f.tenantId, f.rooftopA, randomUUID(), randomUUID()],
+        );
+      }
       const resourceBinding = await grant(f.tenantId, f.linkId, {
         role: 'service_advisor',
         scopeLevel: 'resource',
@@ -826,27 +890,33 @@ describe(
     });
 
     test('an ALLOW cannot claim a role binding that lives in another tenant', async () => {
-      // The actor is a real person of the OTHER tenant holding a real delegation into
-      // THIS one, and the binding cited is their own — so both composite keys resolve.
-      // What does not hold is the tenant: the binding grants authority in Elsewhere
-      // Motors and the decision was recorded in Reconstruction Motors.
-      const delegated = await supportSessionFor(f.tenantId, f.otherLinkId);
+      /*
+       * The R6 staging of this scenario is GONE, and its disappearance is R7 §3.1
+       * working: it dressed a dealership person of the other tenant as a
+       * platform-support actor — a caller-supplied label — and that forgery is now
+       * refused at three earlier gates (the platform-scope requirement on the
+       * delegation itself, and the actor-type/actor-scope binding on the decision).
+       *
+       * What KEEPS the binding-tenant clause reachable, and therefore honest, is
+       * the SYSTEM lane: a system decision names no presented credential and is
+       * exempt from the actor-tenancy key by construction (its
+       * `allowed_actor_tenant_id` is NULL), so a system row recorded in THIS
+       * tenant can still cite the other-tenant actor's own real binding — both
+       * composite keys resolve, and the ONLY objection left is the binding's
+       * tenant. That is precisely the clause under test.
+       */
       await assertRefusedBy(
-        insertAllow(
-          supportAllowBy(
-            {
-              linkId: f.otherLinkId,
-              sessionId: f.otherSessionId,
-              connectionId: f.otherConnectionId,
-              subject: f.otherSubject,
-            },
-            delegated,
-            {
-              matched_role_binding_ids: [f.otherRoleBindingId],
-              matched_authorization_versions: [f.otherRoleBindingVersion],
-            },
-          ),
-        ),
+        insertAllow({
+          actor_type: 'system',
+          reason_code: 'ALLOW_SYSTEM',
+          session_id: null,
+          connection_id: null,
+          actor_provider_subject: null,
+          auth_time: null,
+          actor_user_link_id: f.otherLinkId,
+          matched_role_binding_ids: [f.otherRoleBindingId],
+          matched_authorization_versions: [f.otherRoleBindingVersion],
+        }),
         { state: RAISED, message: 'belongs to tenant' },
         'a binding from another tenant cited as authority here',
       );
@@ -1025,9 +1095,13 @@ describe(
        * trigger.
        */
       const nowhere = randomUUID();
+      // FBL-020-R7 §3.5 moved the load: the PARENT trigger now judges the
+      // decision's own scope node against the one ancestry authority, at the
+      // actual write instant, so the refusal fires there and carries its wording.
+      // 058's child-side existence check remains beneath it as defense in depth.
       await assertRefusedBy(
         insertAllow({ scope_level: 'rooftop', scope_id: nowhere }),
-        { state: RAISED, message: 'no such node exists in tenant' },
+        { state: RAISED, message: 'does not exist in tenant' },
         'an ALLOW recording a rooftop that is a rooftop nowhere',
       );
       assert.equal(await countEvidence(), 0, 'nothing was written');
@@ -1036,7 +1110,7 @@ describe(
       // not enough, the node must be in the tenant the decision was recorded in.
       await assertRefusedBy(
         insertAllow({ scope_level: 'rooftop', scope_id: f.foreignRooftop }),
-        { state: RAISED, message: 'no such node exists in tenant' },
+        { state: RAISED, message: 'does not exist in tenant' },
         'an ALLOW recording a REAL rooftop belonging to another tenant',
       );
       assert.equal(await countEvidence(), 0);
@@ -1105,22 +1179,78 @@ describe(
     });
 
     test('a child row written with no normalizer behind it is refused', async () => {
+      /*
+       * FBL-020-R7 §3.7 — THE WRITER GUARD IS THE PRIVILEGE SYSTEM, NOT A GUC.
+       *
+       * 058 guarded this table with `policy_evidence.normalizing_decision`, a
+       * setting ANY session could set — the forged marker below proves it is not
+       * authorization. The guard now is that the runtime role simply holds no
+       * INSERT on this table: the same hand-written row, attempted AS THE ACTUAL
+       * RUNTIME ROLE with the GUC forged to exactly the right value, dies with
+       * SQLSTATE 42501 before any trigger runs. The role model is asserted too:
+       * the runtime role is NOT a member of the evidence owner and cannot assume
+       * it. (The test connects as the superuser and SET ROLEs down, exactly as
+       * the pooled application connections assume the role at startup.)
+       */
       await insertAllow();
       const decisionId = await onlyDecisionId();
-      await assertRefusedBy(
-        fixtureAuthorizationStateWrite(
-          'adversarial-bypass-attempt',
-          `INSERT INTO policy_decision_matched_bindings
-             (decision_id, role_binding_id, actor_user_link_id, authorization_version,
-              match_ordinality)
-           VALUES ($1, $2, $3, $4, 2)`,
-          [decisionId, f.secondRoleBindingId, f.linkId, f.secondRoleBindingVersion],
-        ),
-        { state: RAISED, message: 'this row was written directly' },
-        'a hand-written normalized authority row',
+      const membership = await query(
+        `SELECT pg_has_role('dealership_runtime', 'dealership_evidence_owner', 'member') AS m`,
+      );
+      assert.equal(
+        (membership.rows[0] as { m: boolean }).m,
+        false,
+        'the runtime role must not be able to assume the evidence owner',
+      );
+      // The refusal is CAPTURED inside the transaction and JUDGED outside it:
+      // the trailing catch exists to absorb the transaction abort the refusal
+      // causes, and an assertion placed inside would be absorbed with it — a
+      // dead assertion, which is exactly what the §4.1 runner's grant-back
+      // mutation flushed out of this test's first draft.
+      let refused: { code?: string } | null = null;
+      await withTransaction(async (executor) => {
+        await executor.query(`SET LOCAL ROLE dealership_runtime`);
+        await executor.query(
+          `SELECT set_config('policy_evidence.normalizing_decision', $1, true)`,
+          [decisionId],
+        );
+        try {
+          await fixtureAuthorizationStateWrite(
+            'adversarial-bypass-attempt',
+            `INSERT INTO policy_decision_matched_bindings
+               (decision_id, role_binding_id, actor_user_link_id, authorization_version,
+                match_ordinality)
+             VALUES ($1, $2, $3, $4, 2)`,
+            [decisionId, f.secondRoleBindingId, f.linkId, f.secondRoleBindingVersion],
+            { executor },
+          );
+        } catch (err) {
+          refused = err as { code?: string };
+        }
+        // the transaction is aborted by the refusal; nothing after it would run
+      }).catch(() => undefined);
+      assert.ok(refused, 'the direct insert as the runtime role must be refused');
+      assert.equal(
+        (refused as { code?: string }).code,
+        '42501',
+        'and refused by the PRIVILEGE SYSTEM (insufficient_privilege), not by a forgeable marker',
       );
       const rows = await query(`SELECT 1 FROM policy_decision_matched_bindings`);
       assert.equal(rows.rows.length, 1, 'the smuggled claim was not recorded');
+
+      // …and the POSITIVE half of §3.7: the runtime role inserting the PARENT
+      // still causes database-owned normalization, because the SECURITY DEFINER
+      // path — not the caller's own privilege — writes the child rows.
+      await withTransaction(async (executor) => {
+        await executor.query(`SET LOCAL ROLE dealership_runtime`);
+        await insertAllow({ request_id: 'req_' + randomUUID() }, executor);
+      });
+      const normalized = await query(`SELECT decision_id FROM policy_decision_matched_bindings`);
+      assert.equal(
+        normalized.rows.length,
+        2,
+        'the parent insert as the runtime role still normalizes, through the database-owned path',
+      );
     });
 
     test('an EXTRA normalized row cannot be attached to a decision, marker or no marker', async () => {
@@ -1203,7 +1333,14 @@ describe(
     });
 
     test('a support ALLOW cannot cite a delegation nobody approved', async () => {
-      const pending = await supportSessionFor(f.tenantId, f.platformLinkId, { approve: false });
+      // FBL-020-R7 §3.2 restaged this scenario, and the restaging IS evidence:
+      // the session-under-a-pending-request this test used to build is refused at
+      // the session's own INSERT now, so the only reachable shape of "no live
+      // approval behind the delegation" is an approval that has since been
+      // SUPERSEDED — which 058's decision-time rule must still refuse.
+      const superseded = await supportSessionFor(f.tenantId, f.platformLinkId, {
+        supersededAfterGrant: true,
+      });
       await assertRefusedBy(
         insertAllow(
           supportAllowBy(
@@ -1213,11 +1350,11 @@ describe(
               connectionId: f.platformConnectionId,
               subject: f.platformSubject,
             },
-            pending,
+            superseded,
           ),
         ),
-        { state: RAISED, message: 'is pending, so it delegates nothing' },
-        'a support allow citing an unapproved request',
+        { state: RAISED, message: 'so it delegates nothing' },
+        'a support allow citing a request whose approval was superseded',
       );
       assert.equal(await countEvidence(), 0);
     });
@@ -1246,7 +1383,10 @@ describe(
     });
 
     test('a support ALLOW cannot exceed the approved SCOPE', async () => {
-      const rooftop = randomUUID();
+      // FBL-020-R7 §3.2: the approved scope must be a REAL, effective node of the
+      // request's tenant — a random UUID is refused at the approval itself now —
+      // so the delegation is approved for the fixture's real rooftop A.
+      const rooftop = f.rooftopA;
       const delegated = await supportSessionFor(f.tenantId, f.platformLinkId, {
         scopeLevel: 'rooftop',
         scopeId: rooftop,
@@ -1303,6 +1443,10 @@ describe(
       const delegated = await supportSessionFor(f.tenantId, f.platformLinkId, {
         grantedAt: `NOW() - INTERVAL '90 minutes'`,
         expiresAt: `NOW() - INTERVAL '30 minutes'`,
+        // §3.2 bounds the window by the REQUESTED duration; this sixty-minute
+        // window needs a sixty-minute request, and the fixture asks for exactly
+        // that rather than leaning on the old unbounded default.
+        durationMinutes: 60,
       });
       await assertRefusedBy(
         insertAllow(

@@ -6,6 +6,7 @@
  * retirement is a status transition.
  */
 import { query } from '@dealer/database';
+import { ORGANIZATION_LEVELS } from './model';
 import type {
   DealerGroup,
   Department,
@@ -194,12 +195,10 @@ export async function getUnit(
  * inside [effective_from, effective_to). Archiving a rooftop therefore
  * revokes every binding scoped to it, and a backfilled
  * 'pending_configuration' node authorizes nothing until it is deliberately
- * activated — which is exactly what migration 055's header promises.
+ * activated — which is exactly what migration 055's header promises. The
+ * predicate itself lives in `org_chain_defect` (migration 059), which is the
+ * ONE definition both this resolver and the evidence validators judge by.
  */
-const EFFECTIVE = (alias: string): string =>
-  `${alias}.status = 'active' AND ${alias}.effective_from <= NOW() ` +
-  `AND (${alias}.effective_to IS NULL OR ${alias}.effective_to > NOW())`;
-
 /**
  * Resolves the full ancestor chain of a node, tenant first, node last —
  * the shape the policy engine consumes for descendant-covering scope checks.
@@ -214,86 +213,36 @@ export async function resolveAncestry(
   tenantId: string,
   ref: OrganizationNodeRef,
 ): Promise<OrganizationNodeRef[] | null> {
-  switch (ref.level) {
-    case 'tenant': {
-      if (ref.id !== tenantId) return null;
-      const t = await query(
-        `SELECT tenant_id FROM tenants WHERE tenant_id = $1 AND ${EFFECTIVE('tenants')}`,
-        [tenantId],
-      );
-      return t.rows.length > 0 ? [{ level: 'tenant', id: tenantId }] : null;
-    }
-    case 'dealer_group': {
-      const r = await query(
-        `SELECT dealer_group_id FROM dealer_groups
-          WHERE tenant_id = $1 AND dealer_group_id = $2 AND ${EFFECTIVE('dealer_groups')}`,
-        [tenantId, ref.id],
-      );
-      if (r.rows.length === 0) return null;
-      return [
-        { level: 'tenant', id: tenantId },
-        { level: 'dealer_group', id: ref.id },
-      ];
-    }
-    case 'legal_entity': {
-      const r = await query(
-        `SELECT le.dealer_group_id FROM legal_entities le
-           JOIN dealer_groups g
-             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
-          WHERE le.tenant_id = $1 AND le.legal_entity_id = $2
-            AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
-        [tenantId, ref.id],
-      );
-      if (r.rows.length === 0) return null;
-      return [
-        { level: 'tenant', id: tenantId },
-        { level: 'dealer_group', id: String((r.rows[0] as Row).dealer_group_id) },
-        { level: 'legal_entity', id: ref.id },
-      ];
-    }
-    case 'rooftop': {
-      const r = await query(
-        `SELECT rt.legal_entity_id, le.dealer_group_id
-           FROM rooftops rt
-           JOIN legal_entities le
-             ON le.tenant_id = rt.tenant_id AND le.legal_entity_id = rt.legal_entity_id
-           JOIN dealer_groups g
-             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
-          WHERE rt.tenant_id = $1 AND rt.rooftop_id = $2
-            AND ${EFFECTIVE('rt')} AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
-        [tenantId, ref.id],
-      );
-      if (r.rows.length === 0) return null;
-      const row = r.rows[0] as Row;
-      return [
-        { level: 'tenant', id: tenantId },
-        { level: 'dealer_group', id: String(row.dealer_group_id) },
-        { level: 'legal_entity', id: String(row.legal_entity_id) },
-        { level: 'rooftop', id: ref.id },
-      ];
-    }
-    case 'department': {
-      const r = await query(
-        `SELECT d.rooftop_id, rt.legal_entity_id, le.dealer_group_id
-           FROM departments d
-           JOIN rooftops rt ON rt.tenant_id = d.tenant_id AND rt.rooftop_id = d.rooftop_id
-           JOIN legal_entities le
-             ON le.tenant_id = rt.tenant_id AND le.legal_entity_id = rt.legal_entity_id
-           JOIN dealer_groups g
-             ON g.tenant_id = le.tenant_id AND g.dealer_group_id = le.dealer_group_id
-          WHERE d.tenant_id = $1 AND d.department_id = $2
-            AND ${EFFECTIVE('d')} AND ${EFFECTIVE('rt')} AND ${EFFECTIVE('le')} AND ${EFFECTIVE('g')}`,
-        [tenantId, ref.id],
-      );
-      if (r.rows.length === 0) return null;
-      const row = r.rows[0] as Row;
-      return [
-        { level: 'tenant', id: tenantId },
-        { level: 'dealer_group', id: String(row.dealer_group_id) },
-        { level: 'legal_entity', id: String(row.legal_entity_id) },
-        { level: 'rooftop', id: String(row.rooftop_id) },
-        { level: 'department', id: ref.id },
-      ];
-    }
-  }
+  /*
+   * FBL-020-R7 §3.5 — ONE AUTHORITY, AND IT LIVES IN THE DATABASE.
+   *
+   * This function used to hold five hand-written branches of joins, each
+   * restating "active and inside its window" per level — and migration 059's
+   * evidence validators would have needed a SECOND copy of the same walk. Both
+   * now call `org_ancestry_effective`, the SQL function 059 installs: the
+   * runtime resolver and the evidence validator answer ancestry questions from
+   * the SAME text, so they cannot drift.
+   *
+   * The function is STRICTER than the branches it replaces in exactly one way,
+   * and the widening was a defect: the old non-tenant branches never examined
+   * the TENANT'S own status and window, so a node chain under an archived
+   * tenant still resolved. §3.5 names the tenant as part of the chain, and the
+   * database function checks it with everything else.
+   *
+   * Returns null when the node does not exist IN THIS TENANT or any node of
+   * its chain — tenant included — is not effective (a cross-tenant id, a
+   * nonexistent one and a retired one are deliberately indistinguishable).
+   */
+  if (!(ORGANIZATION_LEVELS as readonly string[]).includes(ref.level)) return null;
+  if (ref.level === 'tenant' && ref.id !== tenantId) return null;
+  const r = await query(`SELECT level, node_id FROM org_ancestry_effective($1, $2, $3)`, [
+    tenantId,
+    ref.level,
+    ref.id,
+  ]);
+  if (r.rows.length === 0) return null;
+  return (r.rows as Row[]).map((row) => ({
+    level: String(row.level) as OrganizationLevel,
+    id: String(row.node_id),
+  }));
 }

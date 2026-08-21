@@ -677,9 +677,19 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       'Apply 057 ONLY, on top of the populated legacy data',
       'Verify the reconciled state and before/after counts (phase=post-057)',
       'Generate REALISTIC POST-057 ACTIVITY (production code paths)',
-      'Apply 058 on top of the USED database',
+      // FBL-020-R7 §4 — 058 AND 059 ARE APPLIED SEPARATELY TOO, for the same reason:
+      // 059's §0 prechecks judge RETAINED support rows and its §5 rules judge what the
+      // version-3-era writer left behind. The used-058 stage, the precheck-refusal
+      // proof, the runtime-role activity stage and the post-059 phase are asserted by
+      // NAME so a workflow that quietly re-merged the two migrations fails this test.
+      'Stage the pre-059 chain (058 included, 059 withheld)',
+      'Apply 058 ONLY, on top of the USED database',
       'The shipped engine writes version-3 evidence after the upgrade',
       'Verify the 058 state and the §3.1 exemption (phase=post-058)',
+      '059 precheck refusals (isolated copies of the used 058 database)',
+      'Apply 059 on top of the USED 058 database',
+      'The shipped engine writes version-4 evidence as the runtime role',
+      'Verify the 059 state and the integrity closure (phase=post-059)',
       'Fingerprints must be identical (fresh chain vs upgrade path)',
     ]) {
       assert.ok(steps.has(step), `ci.yml must carry the step: ${step}`);
@@ -696,6 +706,36 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       WORKFLOW,
       /test "\$\(ls -1 "\$PRE058" \| wc -l\)" -eq 10/,
       'and pin the count, so migration 059 fails this step rather than riding along',
+    );
+    // …the same two shapes for the pre-059 boundary (R7 §4): 059 must not be inside
+    // the chain the 058-only step applies, and the count is pinned so a future 060
+    // fails this step rather than riding along.
+    assert.match(
+      WORKFLOW,
+      /0\[0-4\]\*\|05\[0-8\]\*\) cp "\$f" "\$PRE059\/" ;;/,
+      'the pre-059 chain must copy 000-058 and withhold everything numbered 059 or above',
+    );
+    assert.match(
+      WORKFLOW,
+      /test "\$\(ls -1 "\$PRE059" \| wc -l\)" -eq 11/,
+      'and pin the count, so migration 060 would fail this step rather than riding along',
+    );
+    // The precheck-refusal and post-059 steps must GATE on their JSON rather than
+    // merely producing it.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/precheck-refusals\.json/,
+      'the precheck-refusal step must gate on zero failed probes',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/identity-post-059\.json/,
+      'the post-059 phase must gate on its own JSON verdict',
+    );
+    assert.match(
+      WORKFLOW,
+      /DATABASE_RUNTIME_ROLE=dealership_runtime/,
+      'the after-059 stage must run as the runtime role, or §3.7 is proven for nobody',
     );
     // A step that merely PRINTS a failure is not a gate.
     assert.ok(WORKFLOW.includes('"controls_failed": 0'), 'a failed control must fail the job');

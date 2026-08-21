@@ -80,6 +80,8 @@ export interface AppConfig {
   readonly pgStatementTimeoutMs: number;
   readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
+  /** See `DatabaseConfig.databaseRuntimeRole` — the app IS a database consumer. */
+  readonly databaseRuntimeRole: string | null;
   readonly identity: IdentityConfig;
   /**
    * True when NODE_ENV=production. The one place the environment's
@@ -309,6 +311,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       max: 600_000,
     }),
     pgSslRequire: env.PGSSL === 'require',
+    databaseRuntimeRole: databaseRuntimeRole(env),
     identity,
     isProduction: env.NODE_ENV === 'production',
     isLocalDevelopment: isLocalDevelopment(env),
@@ -344,6 +347,21 @@ export interface DatabaseConfig {
   readonly pgStatementTimeoutMs: number;
   readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
+  /**
+   * FBL-020-R7 §3.7 — the database ROLE every pooled connection assumes, applied
+   * as a `-c role=…` startup parameter so the backend switches before the first
+   * statement runs (no post-connect race). Migration 059 creates
+   * `dealership_runtime` for exactly this: the API and worker run with it set,
+   * which is what makes them the NON-OWNER runtime role — no direct DML on
+   * `policy_decision_matched_bindings`, normalization only through the
+   * database-owned SECURITY DEFINER path.
+   *
+   * NEVER set for the migration runner or the test harness: migrations create
+   * roles and tables (owner work), and the test harness TRUNCATEs between cases
+   * (owner work) — both run as the login user. `null` means "connect as the
+   * login user", which is exactly what those two need.
+   */
+  readonly databaseRuntimeRole: string | null;
 }
 
 export function loadDatabaseConfig(env: Record<string, string | undefined>): DatabaseConfig {
@@ -358,7 +376,25 @@ export function loadDatabaseConfig(env: Record<string, string | undefined>): Dat
       max: 600_000,
     }),
     pgSslRequire: env.PGSSL === 'require',
+    databaseRuntimeRole: databaseRuntimeRole(env),
   });
+}
+
+/**
+ * A role name travels into a `-c role=…` startup option, so it is validated as a
+ * strict lower-case identifier rather than trusted — anything else refuses
+ * loudly at boot instead of producing a connection string with something
+ * unexpected spliced into it.
+ */
+function databaseRuntimeRole(env: Record<string, string | undefined>): string | null {
+  const raw = env.DATABASE_RUNTIME_ROLE;
+  if (raw === undefined || raw === '') return null;
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(raw)) {
+    throw new ConfigError(
+      'DATABASE_RUNTIME_ROLE must be a lower-case identifier (letters, digits, underscores)',
+    );
+  }
+  return raw;
 }
 
 let current: AppConfig | undefined;

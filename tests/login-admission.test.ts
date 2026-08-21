@@ -1214,7 +1214,10 @@ describe(
              FROM login_transactions WHERE login_txn_id = $1`,
           [started.loginTxnId],
         );
-        const facts = probe.rows[0] as { alive_by_txn_clock: boolean; expired_by_wall_clock: boolean };
+        const facts = probe.rows[0] as {
+          alive_by_txn_clock: boolean;
+          expired_by_wall_clock: boolean;
+        };
         assert.equal(facts.alive_by_txn_clock, true, 'premise: NOW() has not reached the expiry');
         assert.equal(
           facts.expired_by_wall_clock,
@@ -1435,8 +1438,7 @@ describe(
           ),
       },
       {
-        title:
-          'a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)',
+        title: 'a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)',
         reason: 'callback_purpose_mismatch',
         query: (txn) => `code=any-code&state=${txn.state}`,
         // The SAME handle, state, verifier and nonce, resealed under the server key
