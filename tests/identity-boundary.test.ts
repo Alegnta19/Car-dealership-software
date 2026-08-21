@@ -402,6 +402,7 @@ describe(
      */
     async function claimStepUp(started: StartedReauthentication): Promise<void> {
       const claimed = await claimReauthentication({
+        presentedPurpose: 'reauth',
         nonce: started.nonce,
         state: started.state,
         codeVerifier: started.codeVerifier,
@@ -437,6 +438,7 @@ describe(
         redirectUri: 'http://127.0.0.1:3000/auth/callback',
         state: started.state,
         purpose: 'login' as const,
+        presentedPurpose: 'login',
         nonce: started.nonce,
         codeVerifier: started.codeVerifier,
       };
@@ -468,6 +470,7 @@ describe(
       );
       assert.equal(
         await claimLoginTransactionAtomically({
+          presentedPurpose: 'login',
           loginTxnId: started.loginTxnId,
           redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
@@ -547,6 +550,7 @@ describe(
           redirectUri: 'http://127.0.0.1:3000/auth/callback',
           state: started.state,
           purpose: 'login' as const,
+          presentedPurpose: 'login',
           nonce: started.nonce,
           codeVerifier: started.codeVerifier,
         },

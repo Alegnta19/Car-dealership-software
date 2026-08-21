@@ -567,6 +567,7 @@ export async function mintReauthGrant(input: {
   // /auth/reauth/callback does — with the state and PKCE verifier the START
   // generated — rather than reaching past it.
   const claimed = await claimReauthentication({
+    presentedPurpose: 'reauth',
     nonce: started.nonce,
     state: started.state,
     codeVerifier: started.codeVerifier,
