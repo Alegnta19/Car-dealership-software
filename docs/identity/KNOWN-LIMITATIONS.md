@@ -431,7 +431,7 @@ range with its own run and conclusion. A green third attempt does not un-fail th
 The delivery report's "Verification evidence" section records the local runs as well, and a
 local run is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 14 CODE-BEARING COMMITS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 15 CODE-BEARING COMMITS
 EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** The R5/R6 one-commit budgets were ruled VIOLATED and
 disclosure does not cure those violations; the rulings stand unedited. Under FBL-020-R5 the
