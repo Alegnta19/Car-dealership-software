@@ -1,5 +1,5 @@
 {
-  "order": "FBL-020-R6 §4.4/§4.5, carried forward under FBL-020-R7 §6 as amended by FBL-020-R7-A1 §7",
+  "order": "FBL-020-R6 §4.4/§4.5, carried forward under FBL-020-R7 §6 as amended by FBL-020-R7-A1, and extended by the FBL-020-R7-C1 Targeted Acceptance Correction",
   "purpose": "The ONE EXACT FINAL STATE of this delivery: which commits exist, which exact-SHA ci.yml run measured which of them with what per-job conclusions, what the working tree is, what the commit discipline was and is, and whether this revision may be submitted as complete. FBL-020-R5 was rejected because the checked-in documents described a state that had stopped being true; this file is the single authority the delivery documents restate, and scripts/check-final-state.ts holds them to it — including the prose. FBL-020-R7 §6 requires this record to say SUBMITTED FOR REVIEW — NOT ACCEPTED and to claim NO run for the R7 commits themselves: a record cannot name a run that could not exist when its commit was created (FBL-020-R7-A1 §7), so the exact-SHA run for the final R7 head is bound to it by the external return packet, not by this file.",
   "acceptance": "NOT_REVIEWED",
   "generated_by": "FBL-020-R6 §4 originally, extended for FBL-020-R7 §6: run metadata from the GitHub REST API (/repos/{owner}/{repo}/actions/runs/{id} and /jobs) and commit facts from git in this repository",
@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 13,
+    "used": 14,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -546,6 +546,12 @@
         "used": 4,
         "failed_ci": 0,
         "verdict": "DISCLOSED — every R7 commit is listed above with its run, or with run: null while none exists"
+      },
+      "FBL-020-R7-C1": {
+        "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs R7 and its corrections)",
+        "used": 1,
+        "failed_ci": 0,
+        "verdict": "DISCLOSED — the C1 code commit is listed above with run: null until its own run exists"
       }
     },
     "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here."
@@ -559,7 +565,7 @@
       "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
       "The R5/R6 one-commit budgets were VIOLATED as ruled; the ruling and the disclosure stand. R7 commits are governed by FBL-020-R7-A1 §4 and are disclosed in this record."
     ],
-    "status_reason": "FBL-020-R7 IS SUBMITTED FOR REVIEW — NOT ACCEPTED, AND ARCHITECT ACCEPTANCE REMAINS THE RELEASE GATE. The R7 work is committed; the exact-SHA run recorded here measured the R6 final head and NOT the R7 commits, whose own run is bound to them by the external return packet once it exists (FBL-020-R7-A1 §7). The external blockers are preserved unexpanded: §3.1 remains open on the one clause this repository cannot observe, live WorkOS certification is undischarged, and the census is reported rather than accepted."
+    "status_reason": "FBL-020-R7, as corrected by FBL-020-R7-C1, IS SUBMITTED FOR REVIEW — NOT ACCEPTED, and ARCHITECT ACCEPTANCE REMAINS THE RELEASE GATE. The R7 candidate fc2f615 was verified genuine (its green run 32520814917 is recorded above) and returned for one bounded acceptance correction; the C1 work is committed above with run: null, and its exact-SHA run is bound by the external return packet once it exists (FBL-020-R7-A1 §7). External blockers are unchanged: §3.1 open, live WorkOS certification undischarged, census reported-not-accepted; FBL-030 stays blocked."
   },
   "blueprint_section_3_1": {
     "status": "OPEN",
@@ -675,6 +681,48 @@
       "sha": "595cd8f39420b04aac6e81daf50889727b964e56",
       "short": "595cd8f",
       "subject": "R7: CI measures the exact branch head, not the synthetic merge ref",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "fc2f615503394daa6da419edaa5edf71748dbb49",
+      "short": "fc2f615",
+      "subject": "FBL-020-R7 §6: closeout — run 32520118939 disclosed in full, the checkout correction recorded",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32520814917,
+        "run_number": 66,
+        "run_attempt": 1,
+        "head_sha": "fc2f615503394daa6da419edaa5edf71748dbb49",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          }
+        ],
+        "note": "The R7 candidate head. Architect-verified genuine but returned for the bounded FBL-020-R7-C1 acceptance correction, whose commits sit above."
+      }
+    },
+    {
+      "sha": "202f946d8ac69dc451f91df62f6dae896bd5bbf1",
+      "short": "202f946",
+      "subject": "FBL-020-R7-C1: eight bounded acceptance corrections (migration 060)",
       "code_bearing": true,
       "run": null
     }
