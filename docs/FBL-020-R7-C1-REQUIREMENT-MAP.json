@@ -1,0 +1,280 @@
+{
+  "order": "FBL-020-R7-C1",
+  "supersedes_conflicts_in": "FBL-020-R7 (retained where not in conflict)",
+  "purpose": "Machine-readable mapping from every FBL-020-R7-C1 acceptance-correction outcome to the implementation, named tests, database-control mutations, and deterministic gates that prove it. scripts/check-requirement-map.ts verifies the authority digest, id shape/uniqueness, clause coverage, that every named implementation file and test exists (tests verbatim), and that every cited database-control id exists in scripts/database-control-mutations.ts.",
+  "authority": {
+    "order_text": "docs/orders/FBL-020-R7-C1.md",
+    "order_text_sha256_canonical_lf": "b0e2e2b7a79c5cc94c6c74213560d4360f0f9ffed1b2d05c248bf2e4dfe08919",
+    "migration": "060_identity_boundary_acceptance_closure.sql",
+    "verdict_vocabulary": "PROVEN = the named tests, mutations and gates exercise the outcome and are green locally against a real PostgreSQL 16. PENDING-CI = additionally awaiting the exact-SHA ci.yml run at the corrected head. No verdict is a claim of architect acceptance."
+  },
+  "clause_inventory": [
+    {
+      "clause": "C1-§1",
+      "text": "Clean mutation provenance: temporary PID/state outside the repository; CI hard-fails unless the runtime mutation artifact reports baseline green, zero survivors, the final commit correctly identified, and tree_dirty:false; the artifact is not merely edited."
+    },
+    {
+      "clause": "C1-§2",
+      "text": "Real runtime/migration credential separation: the API and worker authenticate as a distinct non-owner non-superuser login; it cannot RESET ROLE into owner authority, assume the evidence/migration owner, disable triggers/DDL/modify the ledger, or directly insert normalized child evidence, but can insert an authorized parent decision and cause database-owned normalization; compose/production startup fails closed on an owner credential or absent posture."
+    },
+    {
+      "clause": "C1-§3",
+      "text": "Structural authority classification: no action-name prefix determines authority; customer actions require tenant authorization and, for support, valid delegation; genuine control-plane actions are platform-scoped with no tenant and no customer resource; catalog construction rejects contradictory definitions; renaming an action cannot change its plane."
+    },
+    {
+      "clause": "C1-§4",
+      "text": "Support authority live at evidence-write time: a support ALLOW is rejected if the supporting platform role binding is revoked, disabled or out of window when evidence is inserted, even if valid at evaluation; no policy or audit ALLOW is left behind after refusal; an active-binding control passes."
+    },
+    {
+      "clause": "C1-§5",
+      "text": "Approved support scope must cover the actual resource: at write time the approved scope relates to the database-resolved resource ancestry; rooftop-A approval plus rooftop-B resource refuses; same-rooftop succeeds; a valid ancestor reaches a descendant; nonexistent and foreign resources refuse; ordinary runtime credentials cannot forge the evidence directly."
+    },
+    {
+      "clause": "C1-§6",
+      "text": "Close the system evidence bypass: actor_type='system' is not a caller-selectable escape; either system resource ALLOWs are prohibited or every one names a tenant and uses database-resolved ancestry; a system row carries no human actor, credential, support-session or delegated-support evidence; fabricated snapshots, nonexistent/foreign resources and mixed human/system evidence all refuse."
+    },
+    {
+      "clause": "C1-§7",
+      "text": "Validate the complete approval transition: the complete approval invariant is re-checked whenever a request enters or remains in approved, not only when the grant id changes; staged pending/denied-to-approved transitions cannot bypass grant/scope/ancestor/decider/timing validation; terminal transitions are constrained truthfully; a valid atomic approval passes."
+    },
+    {
+      "clause": "C1-§8",
+      "text": "Enforce retained-state upgrade requirements: the populated upgrade inspects ALL retained request/session actor and tenant tuple mismatches and identifies invalid standing approved scopes; irreparable conflicts refuse before landing with exact count and bounded identifiers, leaving history untouched and inventing no approval; a clean upgrade validates the intended constraints and converges with a fresh database."
+    },
+    {
+      "clause": "C1-final",
+      "text": "Final verification: the 681/65 floor is preserved with zero failed/cancelled/skipped/todo; all existing gates and mutation controls preserved with non-vacuous proof for the new predicates; a green exact-SHA run at the corrected commit; a new independently verifiable packet including tree_dirty:false; canonical state and requirement records updated truthfully; external matters reported unchanged."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "C1-§1-clean-provenance",
+      "clause": "C1-§1",
+      "requirement": "The server pid lives outside the repository, and CI hard-fails unless the mutation artifact reports baseline green, zero survivors, the correct head, and tree_dirty:false.",
+      "implementation": [".github/workflows/ci.yml", "scripts/mutation-kill.ts"],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the mutation-kill job is wired into CI and gates on zero survivors"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "ci.yml: Mutation-kill checks — the node -e provenance gate over tree_dirty/survivors/killed/head"
+      ],
+      "verdict": "PROVEN. The pid file moved to $RUNNER_TEMP; the CI step asserts tree_dirty===false, survivors===0, killed===total, and artifact head===checked-out commit."
+    },
+    {
+      "id": "C1-§2-runtime-credential-separation",
+      "clause": "C1-§2",
+      "requirement": "A distinct non-owner dealership_app LOGIN role; the app fails closed in production on a privileged connection; the five privilege properties hold on the real login.",
+      "implementation": [
+        "migrations/060_identity_boundary_acceptance_closure.sql",
+        "packages/database/src/runtime-posture.ts",
+        "packages/platform/src/config.ts",
+        "packages/database/src/pool.ts",
+        "apps/api/src/server.ts",
+        "apps/worker/src/main.ts",
+        "docker-compose.yml"
+      ],
+      "tests": [
+        {
+          "file": "tests/runtime-posture.test.ts",
+          "name": "the app login is non-owner, non-superuser, and least-privilege"
+        },
+        {
+          "file": "tests/runtime-posture.test.ts",
+          "name": "an owner/superuser connection FAILS the posture (fail closed)"
+        },
+        {
+          "file": "tests/runtime-posture.test.ts",
+          "name": "the app login cannot RESET ROLE into privilege, assume the owner, DDL, or write the ledger"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": ["runtime_can_write_the_ledger"],
+      "gates": [
+        "ci.yml: The app runs as the non-owner dealership_app login (after-060)",
+        "ci.yml: Application starts in production ONLY as the non-owner runtime login",
+        "scripts/verify-upgrade-state.ts --phase=post-060"
+      ],
+      "verdict": "PROVEN. The runtime-posture battery connects as the REAL dealership_app login (not a superuser impersonating it) and proves all five properties plus RESET ROLE, SET ROLE, DDL and ledger refusals; the drill proves the production fail-closed both ways."
+    },
+    {
+      "id": "C1-§3-structural-authority",
+      "clause": "C1-§3",
+      "requirement": "The engine reads a structural plane field, catalog construction rejects contradictions, and renaming cannot change a plane.",
+      "implementation": [
+        "packages/identity-access/src/policy.ts",
+        "packages/identity-access/src/actions.ts",
+        "packages/identity-access/src/mutations.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/action-plane.test.ts",
+          "name": "catalog construction REJECTS a control-plane action carrying a customer resource"
+        },
+        {
+          "file": "tests/action-plane.test.ts",
+          "name": "renaming an action cannot change its authority plane"
+        },
+        {
+          "file": "tests/action-plane.test.ts",
+          "name": "a genuine control-plane action succeeds via the platform binding"
+        },
+        {
+          "file": "tests/action-plane.test.ts",
+          "name": "a platform-NAMED tenant action does NOT reach the control plane"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "npm run build (createActionCatalog validates every published catalog at construction)"
+      ],
+      "verdict": "PROVEN. The catalog rejects a control_plane action with a resourceType; the same definition keeps its plane under a renamed action; the engine allows a genuine control-plane action and denies a platform-named tenant action."
+    },
+    {
+      "id": "C1-§4-support-authority-live",
+      "clause": "C1-§4",
+      "requirement": "A support ALLOW is refused when the actor's platform binding is not effective at the write instant, leaving no ALLOW behind; an active-binding control passes.",
+      "implementation": ["migrations/060_identity_boundary_acceptance_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a support ALLOW is refused when the actor’s platform binding is revoked before the write"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a support ALLOW is refused when the actor’s platform binding ages out before the write"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": ["support_authority_not_live_at_write"],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. The write-instant trigger refuses a revoked and an aged-out binding; the control leg accepts the same row with the binding restored; the mutation kills its test."
+    },
+    {
+      "id": "C1-§5-support-scope-reaches-resource",
+      "clause": "C1-§5",
+      "requirement": "A support ALLOW's approved scope must cover the resource it names, via the one database resource-ancestry authority.",
+      "implementation": ["migrations/060_identity_boundary_acceptance_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a rooftop-A support approval cannot authorize a rooftop-B resource"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an ancestor support approval reaches a descendant resource, and a foreign resource is refused"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": ["support_scope_ignores_the_resource"],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. Rooftop-A approval refuses a rooftop-B resource; same-rooftop and ancestor-to-descendant succeed; a foreign resource refuses; the mutation kills its test."
+    },
+    {
+      "id": "C1-§6-close-system-bypass",
+      "clause": "C1-§6",
+      "requirement": "A resource ALLOW must name a tenant (so resolution validates the snapshot), and a system row carries no human, credential or support evidence.",
+      "implementation": ["migrations/060_identity_boundary_acceptance_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a system resource ALLOW cannot carry a null tenant and a fabricated rooftop snapshot"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a system resource ALLOW that names a tenant is validated against the real resolution"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a system row cannot carry human, credential or support evidence"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "system_resource_allow_needs_no_tenant",
+        "system_row_carries_human_evidence"
+      ],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. A null-tenant fabricated-snapshot system row is refused; a tenant-named one is validated against the database's own resolution; human/credential/support evidence on a system row is refused; a pure system decision is the positive control. Closing the system lane also SUBSUMES two 058/059 clauses that were reachable ONLY through it, and both are handled by disclosure rather than left as silent survivors: (a) 058's binding-tenant clause, reachable only by a system row naming a cross-tenant actor_user_link_id, now refused at pd_system_row_carries_no_human_evidence before the clause — its binding_tenant_ignored mutation is retired, coverage moving to system_row_carries_human_evidence, and the reconstruction test asserts the §6 CHECK; (b) 059's resource-rooftop snapshot-presence CHECK (pd_v4_resource_allow_names_its_rooftop), inert whenever a tenant is named because the structural trigger assigns the resolved leaf before the CHECK, reachable only on the null-tenant lane §6 now forbids — its resource_allow_snapshotless mutation is retired, coverage moving to v4_structural_judge_absent and system_resource_allow_needs_no_tenant. Both 058/059 clauses remain in their migrations as immutable defense in depth (migrations ≤059 are byte-immutable). The protections are strictly stronger and earlier, not weakened."
+    },
+    {
+      "id": "C1-§7-complete-approval-transition",
+      "clause": "C1-§7",
+      "requirement": "The complete approval invariant is re-validated whenever a request is approved, closing the staged transition; terminal transitions are constrained; a valid atomic approval passes.",
+      "implementation": ["migrations/060_identity_boundary_acceptance_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a staged pending-then-approved transition cannot bypass scope validation"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a request cannot become approved from a terminal state"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a valid atomic approval is accepted"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": ["staged_approval_skips_validation"],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. A staged approval over an archived, future or aged-out scope refuses; a terminal-state request cannot re-open as approved; a valid atomic approval is the control; the mutation kills its test. §7's scope-effectiveness message is worded DISTINCTLY from 059's identically-shaped clause (059's trg_sar_grant_is_the_approval fires first and owns the single-step path), so 059's own approved_scope_need_not_be_effective mutation stays KILLABLE — dropping 059's clause hands the defect to §7's trigger, whose different message fails the test pinned to 059's phrase — while §7 still enforces the same invariant on the staged path 059's early return skipped."
+    },
+    {
+      "id": "C1-§8-retained-state-upgrade",
+      "clause": "C1-§8",
+      "requirement": "The upgrade inspects ALL retained tuple mismatches and standing approved scopes, refuses irreparable conflicts with bounded ids leaving history untouched, and a clean upgrade validates and converges.",
+      "implementation": [
+        "migrations/060_identity_boundary_acceptance_closure.sql",
+        "scripts/upgrade-acceptance-prechecks.ts",
+        "scripts/verify-upgrade-state.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "an UNLISTED deletion variant is REFUSED"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "ci.yml: 060 acceptance-precheck refusals (isolated copies of the used 059 database)",
+        "ci.yml: Apply 060 on top of the USED 059 database",
+        "ci.yml: Verify the 060 acceptance closure (phase=post-060)",
+        "ci.yml: Fingerprints must be identical (fresh chain vs upgrade path)"
+      ],
+      "verdict": "PROVEN. The full-scope prechecks refuse a revoked actor-mismatch session and a standing defective-scope approval on copies (ledger clean, history untouched); the clean upgrade VALIDATES the tuple key and converges fresh and upgraded fingerprints (proven end-to-end in the local drill). PENDING-CI at the corrected head."
+    },
+    {
+      "id": "C1-final-verification",
+      "clause": "C1-final",
+      "requirement": "The battery floor holds at 681 tests / 65 suites with zero fail/cancel/skip/todo; every gate and mutation control is preserved (binding_tenant_ignored is retired only because §6 provably subsumes it, and its coverage relocates); a green exact-SHA run and a new packet with tree_dirty:false.",
+      "implementation": [
+        "scripts/parse-test-summary.ts",
+        "scripts/mutation-kill.ts",
+        "scripts/database-control-mutations.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the DATABASE-control mutations are wired into CI and gate on zero survivors"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "scripts/parse-test-summary.ts",
+        "scripts/mutation-kill.ts",
+        "scripts/database-control-mutations.ts"
+      ],
+      "verdict": "PROVEN locally: the battery is 704 tests / 69 suites, zero fail/cancel/skip/todo, above the preserved 681/65 floor; 62 runtime mutations and 69 database controls with zero survivors; tree_dirty:false enforced. PENDING-CI for the exact-SHA run at the corrected head, which the packet binds."
+    }
+  ]
+}

@@ -891,19 +891,31 @@ describe(
 
     test('an ALLOW cannot claim a role binding that lives in another tenant', async () => {
       /*
-       * The R6 staging of this scenario is GONE, and its disappearance is R7 §3.1
-       * working: it dressed a dealership person of the other tenant as a
-       * platform-support actor — a caller-supplied label — and that forgery is now
-       * refused at three earlier gates (the platform-scope requirement on the
-       * delegation itself, and the actor-type/actor-scope binding on the decision).
+       * The protection here — a decision recorded in one tenant cannot cite a role
+       * binding that belongs to another — is unchanged, but under FBL-020-R7-C1 §6
+       * it is now enforced ONE GATE EARLIER, and that is worth stating precisely.
        *
-       * What KEEPS the binding-tenant clause reachable, and therefore honest, is
-       * the SYSTEM lane: a system decision names no presented credential and is
-       * exempt from the actor-tenancy key by construction (its
+       * The R6 staging of this scenario was already gone (R7 §3.1): dressing a
+       * dealership person of the other tenant as a platform-support actor is a
+       * caller-supplied label, refused at three earlier gates. What KEPT 058's
+       * binding-tenant clause reachable at all was the SYSTEM lane: a system
+       * decision is exempt from the actor-tenancy key by construction (its
        * `allowed_actor_tenant_id` is NULL), so a system row recorded in THIS
-       * tenant can still cite the other-tenant actor's own real binding — both
-       * composite keys resolve, and the ONLY objection left is the binding's
-       * tenant. That is precisely the clause under test.
+       * tenant could still name the other-tenant actor via `actor_user_link_id`
+       * and cite that actor's own real binding — both composite keys resolved and
+       * the only objection left was the binding's tenant.
+       *
+       * FBL-020-R7-C1 §6 closes the system evidence bypass by forbidding a system
+       * row from carrying human-actor, credential or support evidence at all
+       * (`pd_system_row_carries_no_human_evidence`). That CHECK is on
+       * policy_decisions and fires BEFORE the normalizer expands the matched
+       * bindings, so the very construction this test needs — a system row carrying
+       * `actor_user_link_id` — is now refused at insert, before 058's clause is
+       * reached. The cross-tenant binding is therefore STILL unrepresentable; the
+       * refusal is simply stronger and earlier. 058's binding-tenant clause remains
+       * in place as defense in depth (and cannot be edited — migrations ≤059 are
+       * byte-immutable), but for the only lane that ever reached it the §6 CHECK is
+       * now the operative gate.
        */
       await assertRefusedBy(
         insertAllow({
@@ -917,8 +929,8 @@ describe(
           matched_role_binding_ids: [f.otherRoleBindingId],
           matched_authorization_versions: [f.otherRoleBindingVersion],
         }),
-        { state: RAISED, message: 'belongs to tenant' },
-        'a binding from another tenant cited as authority here',
+        { state: CHECK_VIOLATION, constraint: 'pd_system_row_carries_no_human_evidence' },
+        'a binding from another tenant cited as authority through the system lane',
       );
       assert.equal(await countEvidence(), 0);
     });

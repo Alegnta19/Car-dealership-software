@@ -11,3 +11,10 @@ export {
   query,
   withTransaction,
 } from './pool';
+export {
+  RuntimePostureError,
+  assertRuntimePosture,
+  readRuntimePosture,
+  runtimePostureViolations,
+  type RuntimePosture,
+} from './runtime-posture';

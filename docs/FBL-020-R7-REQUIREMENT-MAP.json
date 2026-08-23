@@ -366,13 +366,13 @@
         "resource_chain_effectiveness_unchecked",
         "binding_reaches_a_sibling_resource",
         "resource_snapshot_escapes_the_tenant",
-        "resource_allow_snapshotless"
+        "v4_structural_judge_absent"
       ],
       "gates": [
         "scripts/database-control-mutations.ts",
         "ci.yml: The shipped engine writes version-4 evidence as the runtime role"
       ],
-      "verdict": "PROVEN. The drill's after-059 stage additionally proves the SHIPPED resolver and the trigger agree on a real resource: the persisted snapshot equals the database's own resolution."
+      "verdict": "PROVEN. The drill's after-059 stage additionally proves the SHIPPED resolver and the trigger agree on a real resource: the persisted snapshot equals the database's own resolution. FBL-020-R7-C1 §6 update: the resource_allow_snapshotless database-control mutation is RETIRED — 059’s pd_v4_resource_allow_names_its_rooftop CHECK is inert whenever a tenant is named (the structural trigger assigns the resolved leaf before the CHECK), so it was reachable only via the null-tenant lane §6 now forbids, making a mutation over it an un-killable survivor. The snapshot protection stays mutation-covered by v4_structural_judge_absent (the whole structural trigger) and system_resource_allow_needs_no_tenant (the null-tenant lane); the CHECK remains as immutable defense in depth. The named test still stands and passes, now refused by the §6 tenant requirement one rule earlier."
     },
     {
       "id": "R7-§3.5-one-ancestry-authority",

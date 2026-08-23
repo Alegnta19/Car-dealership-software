@@ -346,6 +346,119 @@
         }
       }
     },
+    "pre-060": {
+      "reason": "FBL-020-R7-C1 §8 — the chain up to and INCLUDING 059 but NOT 060, so the drill can apply 059 on the used database, generate REAL post-059 activity, prove the 060 full-scope prechecks refuse retained incoherent rows on copies, and only THEN apply 060 separately.",
+      "files": {
+        "000_platform_core.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d",
+              "note": "the committed migrations/000_platform_core.sql"
+            }
+          ]
+        },
+        "049_phase248_service_cockpit.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242",
+              "note": "the committed migrations/049_phase248_service_cockpit.sql"
+            }
+          ]
+        },
+        "050_phase248_hardening.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522",
+              "note": "the committed migrations/050_phase248_hardening.sql"
+            }
+          ]
+        },
+        "051_phase248_metrics_support.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4",
+              "note": "the committed migrations/051_phase248_metrics_support.sql"
+            }
+          ]
+        },
+        "052_phase248_authorization_binding.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41",
+              "note": "the committed migrations/052_phase248_authorization_binding.sql"
+            }
+          ]
+        },
+        "053_phase248_estimate_line_association.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a",
+              "note": "the committed migrations/053_phase248_estimate_line_association.sql"
+            }
+          ]
+        },
+        "054_phase248_waitlist.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58",
+              "note": "the committed migrations/054_phase248_waitlist.sql"
+            }
+          ]
+        },
+        "055_identity_organization.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d",
+              "note": "the committed migrations/055_identity_organization.sql"
+            }
+          ]
+        },
+        "056_identity_contract_completion.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d",
+              "note": "the committed migrations/056_identity_contract_completion.sql"
+            }
+          ]
+        },
+        "057_identity_boundary_completion.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67",
+              "note": "the committed migrations/057_identity_boundary_completion.sql"
+            }
+          ]
+        },
+        "058_policy_evidence_reconstructable.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71",
+              "note": "the committed migrations/058_policy_evidence_reconstructable.sql"
+            }
+          ]
+        },
+        "059_policy_evidence_integrity_closure.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "ff66a2a327bb9ce9eb80c8ac68a4b1cc23549e327ccecfe42160f93e564d86c2",
+              "note": "the committed migrations/059_policy_evidence_integrity_closure.sql"
+            }
+          ]
+        }
+      }
+    },
     "negative-control-057": {
       "reason": "scripts/upgrade-negative-controls.ts proves each reconciliation in 057 is load-bearing by DELETING exactly one statement and requiring the intended failure. Under R6 §1.4 the mutated body is no longer admitted by a RULE about deletions — it is admitted by CHECKSUM, like everything else: the twelve deletions are deterministic (the anchors are committed and 057 is frozen), so each resulting body is declared below by its own canonical-LF digest, named for the control that produces it. A thirteenth deletion, a two-statement deletion, an unmutated 057 and a hand-edited body are all refused, because none of their digests is on this list. tests/migration-ledger.test.ts recomputes all twelve from the harness and fails if this list and the harness ever part company.",
       "files": {
@@ -498,6 +611,15 @@
             {
               "sha256": "ff66a2a327bb9ce9eb80c8ac68a4b1cc23549e327ccecfe42160f93e564d86c2",
               "note": "the committed migrations/059_policy_evidence_integrity_closure.sql — the negative-control runner copies the WHOLE migrations directory and mutates only 057, so every later migration must be declared here at its canonical digest, exactly as 058 is"
+            }
+          ]
+        },
+        "060_identity_boundary_acceptance_closure.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "e65925298632516f6406b7264dd440896386c51eb65d943bb139ea8c1d3c4eeb",
+              "note": "the committed migrations/060_identity_boundary_acceptance_closure.sql"
             }
           ]
         }

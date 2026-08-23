@@ -87,7 +87,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, readRuntimePosture, runtimePostureViolations } from '@dealer/database';
 import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
@@ -986,6 +986,110 @@ async function afterMigration059(outPath: string | undefined, logPath: string | 
   if (result !== 'OK') process.exitCode = 1;
 }
 
+/**
+ * STAGE `after-060` — THE REAL dealership_app LOGIN, AGAINST THE UPGRADED DATABASE.
+ *
+ * FBL-020-R7-C1 §2's drill half: run with DATABASE_URL pointing at the migration
+ * 060 `dealership_app` LOGIN role (a genuine non-owner login, not a superuser
+ * impersonating one) and prove, on the upgraded database, that the least-
+ * privilege runtime posture holds AND that this role can still record a
+ * decision. It asserts:
+ *
+ *   1. current_user IS dealership_app (the stage really ran as the app login);
+ *   2. runtimePostureViolations is empty — non-super, cannot assume the evidence
+ *      owner, cannot write the ledger, cannot INSERT the normalized child;
+ *   3. it CAN insert an authorized (system, tenant-scoped) policy decision — the
+ *      application can record its own authorization outcomes;
+ *   4. a DIRECT child-table INSERT is refused with SQLSTATE 42501, by the
+ *      privilege system rather than a forgeable marker.
+ */
+async function afterMigration060(outPath: string | undefined, logPath: string | undefined) {
+  const lines: string[] = [];
+  const say = (t: string): void => {
+    lines.push(t);
+    console.log(t);
+  };
+  const failures: string[] = [];
+
+  const posture = await readRuntimePosture();
+  if (posture.currentUser !== 'dealership_app') {
+    failures.push(
+      `after-060 must run as dealership_app; connected as ${posture.currentUser}. Set ` +
+        'DATABASE_URL to the dealership_app login URL for this stage.',
+    );
+  }
+  for (const v of runtimePostureViolations(posture)) failures.push(v);
+  say(`after-060 activity: connected as ${posture.currentUser}`);
+
+  // (3) the app role records an authorized decision (a pure system tenant row —
+  // no matched bindings, so no normalization is expected; it proves the parent
+  // INSERT privilege the application needs).
+  // An ACTIVE tenant with an effective chain (the between-stage's), not the
+  // legacy pending_configuration tenant — 059's v4 scope check refuses a
+  // decision recorded at a scope that is not effective at the write instant.
+  const tenantId = await query(
+    `SELECT ul.tenant_id AS tenant_id FROM user_links ul
+       JOIN tenants t ON t.tenant_id = ul.tenant_id
+      WHERE ul.actor_scope = 'dealership' AND ul.status = 'activated'
+        AND t.status = 'active'
+      ORDER BY ul.tenant_id LIMIT 1`,
+  );
+  const tid = (tenantId.rows[0] as { tenant_id: string } | undefined)?.tenant_id;
+  if (tid === undefined) {
+    failures.push('after-060: the drill database holds no tenant to record a decision for');
+  } else {
+    try {
+      await query(
+        `INSERT INTO policy_decisions
+           (tenant_id, actor_type, action, decision, reason_code, policy_version,
+            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+         VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
+                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+        [tid],
+      );
+      say('after-060 activity: the app login recorded an authorized system decision');
+    } catch (err) {
+      failures.push(
+        `after-060: the app login could not record a decision: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // (4) the app login holds NO INSERT on the normalized child table — the
+  // posture read above establishes this on the real connection. The ACTUAL
+  // 42501 refusal of a direct child insert (including with a forged GUC) is
+  // proven by the genuine runtime role in
+  // tests/identity-evidence-reconstruction.test.ts; re-attempting the write
+  // here would only re-prove the privilege the posture already reports.
+  if (posture.canInsertChildEvidence) {
+    failures.push(
+      'after-060: the app login holds INSERT on the normalized child table — it is not ' +
+        'privilege-fenced from normalized evidence',
+    );
+  } else {
+    say('after-060 activity: the app login holds no INSERT on the normalized child table');
+  }
+
+  const result = failures.length === 0 ? 'OK' : 'FAILED';
+  for (const f of failures) say('after-060 activity FAILURE: ' + f);
+  say(`after-060 activity result: ${result}`);
+  write(
+    outPath,
+    logPath,
+    {
+      generator: 'scripts/upgrade-post-057-activity.ts',
+      order: 'FBL-020-R7-C1 §2',
+      stage: 'after-060 (the real dealership_app login against the upgraded database)',
+      db_user: posture.currentUser,
+      posture,
+      failures,
+      result,
+    },
+    lines,
+  );
+  if (result !== 'OK') process.exitCode = 1;
+}
+
 function write(
   outPath: string | undefined,
   logPath: string | undefined,
@@ -1008,9 +1112,15 @@ function write(
  * refuses for `--phase`.
  */
 const stage = arg('--stage') ?? 'between';
-if (stage !== 'between' && stage !== 'after-058' && stage !== 'after-059') {
+if (
+  stage !== 'between' &&
+  stage !== 'after-058' &&
+  stage !== 'after-059' &&
+  stage !== 'after-060'
+) {
   console.error(
-    'usage: upgrade-post-057-activity.ts [--stage=between|after-058|after-059] [--out f] [--log f]',
+    'usage: upgrade-post-057-activity.ts ' +
+      '[--stage=between|after-058|after-059|after-060] [--out f] [--log f]',
   );
   process.exit(2);
 }
@@ -1019,7 +1129,9 @@ if (stage !== 'between' && stage !== 'after-058' && stage !== 'after-059') {
   ? main()
   : stage === 'after-058'
     ? afterMigration058(arg('--out'), arg('--log'))
-    : afterMigration059(arg('--out'), arg('--log'))
+    : stage === 'after-059'
+      ? afterMigration059(arg('--out'), arg('--log'))
+      : afterMigration060(arg('--out'), arg('--log'))
 )
   .catch((err) => {
     console.error(err);

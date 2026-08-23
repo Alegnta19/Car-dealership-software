@@ -680,7 +680,10 @@ describe(
       );
 
       // one catalog, two actions, the SAME allowed role — the only difference
-      // between them is the `platform.` prefix.
+      // between them is the STRUCTURAL plane (FBL-020-R7-C1 §3). The control-plane
+      // action DECLARES its plane; the tenant action does not. The `platform.`
+      // NAME buys nothing — a `platform.`-named action without the declared plane
+      // is a tenant action, so the plane is what the engine reads, not the prefix.
       const twoActions = withPresentedSession(
         createPolicyEngine({
           catalog: createActionCatalog([
@@ -689,6 +692,7 @@ describe(
               description: 'provision a tenant (control plane)',
               resourceType: null,
               allowedRoles: ['platform_admin'],
+              plane: 'control_plane',
             },
             {
               action: 'org.unit.create',

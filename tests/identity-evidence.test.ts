@@ -193,6 +193,25 @@ describe(
       // stageable between two people who could BOTH legitimately hold one.
       const platformTwo = await activatedLink(null);
       const platformTwoSession = await seedLocalSession(platformTwo.linkId);
+      // FBL-020-R7-C1 §4 — a support ALLOW's actor must hold an effective
+      // platform-scope role binding at the write instant (that is the authority
+      // being delegated). A platform-support operator realistically holds one,
+      // so both platform people are granted it; without it, migration 060's
+      // write-instant authority trigger refuses their support decisions before
+      // the completeness rules these tests exercise are reached.
+      const platformAdmin = await bootstrapAdministrator(null);
+      for (const link of [platform.linkId, platformTwo.linkId]) {
+        await grantRole({
+          actingUserLinkId: platformAdmin,
+          tenantId: null,
+          userLinkId: link,
+          role: 'platform_admin',
+          scopeLevel: 'platform',
+          scopeId: null,
+          resourceType: null,
+          resourceId: null,
+        });
+      }
 
       return {
         tenantId: tenant.tenantId,

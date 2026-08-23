@@ -113,6 +113,14 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'because neither grants anything (the lifecycle mutations are in mutations.ts)',
   },
   {
+    file: 'scripts/upgrade-acceptance-prechecks.ts',
+    because:
+      'FBL-020-R7-C1 §8’s probe injector: it plants RETAINED incoherent support rows ONLY ' +
+      'into disposable copies of the drill database, temporarily lifting the 059 guard each ' +
+      'target row would trip, to reproduce a pre-060 legacy state migration 060’s full-scope ' +
+      'prechecks exist to refuse — every copy is dropped, the drill database is never touched',
+  },
+  {
     file: 'scripts/upgrade-precheck-refusals.ts',
     because:
       'FBL-020-R7 §4.5’s probe injector: it writes ONLY to disposable copies of the ' +

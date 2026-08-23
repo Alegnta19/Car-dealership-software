@@ -190,14 +190,18 @@ jobs:
 
       - name: Application starts and readiness succeeds (compiled output)
         run: |
-          node apps/api/dist/server.js & echo $! > server.pid
+          # FBL-020-R7-C1 §1: the pid file lives OUTSIDE the repository — an
+          # unremoved server.pid at the repo root is exactly what dirtied the
+          # tree the mutation runner copied, and provenance must not depend on
+          # a kill step running.
+          node apps/api/dist/server.js & echo $! > "$RUNNER_TEMP/server.pid"
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/healthz > artifacts/healthz.json 2>/dev/null; then break; fi
             sleep 1
           done
           cat artifacts/healthz.json
           curl -fsS http://127.0.0.1:3000/metrics | head -5 > artifacts/metrics-head.txt
-          kill "$(cat server.pid)"
+          kill "$(cat "$RUNNER_TEMP/server.pid")"
 
       - name: All declared tests (zero skipped required suites)
         run: |
@@ -227,6 +231,21 @@ jobs:
           npx tsx scripts/mutation-kill.ts --out artifacts/mutation-kill.json \
             --log artifacts/mutation-kill.txt
           grep -q '"mutations_survived": 0' artifacts/mutation-kill.json
+          # FBL-020-R7-C1 §1: the artifact must PROVE its own provenance — a
+          # green baseline behind every kill (a red baseline is reported as a
+          # survivor, so survived=0 and killed=total together pin it), the
+          # exact commit this job checked out, and a clean tree. Each field is
+          # read from the artifact the runner just wrote, never edited.
+          node -e "
+            const a = require('./artifacts/mutation-kill.json');
+            const { execSync } = require('child_process');
+            const head = execSync('git rev-parse HEAD').toString().trim();
+            if (a.tree_dirty !== false) throw new Error('mutation artifact tree_dirty=' + a.tree_dirty);
+            if (a.mutations_survived !== 0) throw new Error(a.mutations_survived + ' survivor(s)');
+            if (a.mutations_killed !== a.mutations_total) throw new Error('killed ' + a.mutations_killed + ' of ' + a.mutations_total + ' - a baseline was red or a run was inconclusive');
+            if (a.head !== head) throw new Error('artifact head ' + a.head + ' is not the checked-out commit ' + head);
+            console.log('mutation provenance OK: head=' + head + ' tree_dirty=false ' + a.mutations_killed + '/' + a.mutations_total + ' killed');
+          "
 
       # FBL-020-R6 §4.1: the SAME discipline for the §3 controls, which live in the
       # DATABASE rather than in a TypeScript source. Mutating migration 058 would prove
@@ -611,10 +630,32 @@ jobs:
             --out artifacts/precheck-refusals.json --log artifacts/precheck-refusals.txt
           grep -q '"probes_failed": 0' artifacts/precheck-refusals.json
 
-      - name: Apply 059 on top of the USED 058 database
+      # FBL-020-R7-C1 §8 — 059 AND 060 ARE APPLIED SEPARATELY TOO, for the same
+      # reason 058 and 059 are: 060's §0 full-scope prechecks judge RETAINED rows
+      # a used-059 database carries, so the drill must put a used 059 database in
+      # front of 060. The pre-060 chain is 000-059, declared by digest.
+      - name: Stage the pre-060 chain (059 included, 060 withheld)
         run: |
           set -o pipefail
-          npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+          PRE060="$RUNNER_TEMP/pre060-migrations"
+          mkdir -p "$PRE060"
+          for f in migrations/*.sql; do
+            n=$(basename "$f")
+            case "$n" in
+              0[0-4]*|05[0-9]*) cp "$f" "$PRE060/" ;;
+              *) echo "withheld from the pre-060 chain: $n" ;;
+            esac
+          done
+          ls -1 "$PRE060" | tee artifacts/pre-060-chain.txt
+          test "$(ls -1 "$PRE060" | wc -l)" -eq 12
+          ! grep -qE '^0(60|[6-9][1-9])' artifacts/pre-060-chain.txt
+          echo "PRE060=$PRE060" >> "$GITHUB_ENV"
+
+      - name: Apply 059 ONLY, on top of the USED 058 database
+        run: |
+          set -o pipefail
+          MIGRATIONS_DIR="$PRE060" MIGRATION_FIXTURE_CHAIN=pre-060 \
+            npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
           grep -q '059_policy_evidence_integrity_closure.sql' artifacts/upgrade-log.txt
 
       # FBL-020-R7 §4.4 — the SHIPPED engine again, this time AS THE RUNTIME ROLE,
@@ -641,6 +682,52 @@ jobs:
             --before artifacts/identity-post-058.json \
             --out artifacts/identity-post-059.json | tee -a artifacts/constraint-state.txt
           grep -q '"result": "OK"' artifacts/identity-post-059.json
+
+      # FBL-020-R7-C1 §8 — THE 060 FULL-SCOPE PRECHECKS, PROVEN TO REFUSE. Each
+      # probe copies the used-059 database, plants a RETAINED incoherent row 059
+      # tolerated (a revoked actor-mismatch session; a standing approval whose
+      # scope drifted), runs the real runner, and requires 060's own bounded
+      # refusal with the ledger clean and history untouched.
+      - name: 060 acceptance-precheck refusals (isolated copies of the used 059 database)
+        run: |
+          set -o pipefail
+          npx tsx scripts/upgrade-acceptance-prechecks.ts \
+            --out artifacts/acceptance-prechecks.json --log artifacts/acceptance-prechecks.txt
+          grep -q '"probes_failed": 0' artifacts/acceptance-prechecks.json
+
+      - name: Apply 060 on top of the USED 059 database
+        run: |
+          set -o pipefail
+          npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
+          grep -q '060_identity_boundary_acceptance_closure.sql' artifacts/upgrade-log.txt
+
+      # FBL-020-R7-C1 §2 — the REAL dealership_app LOGIN against the upgraded
+      # database. The owner provisions the role password out of band (here, a
+      # CI-only ephemeral value that is never committed), then the stage connects
+      # AS dealership_app and proves the least-privilege posture and that the app
+      # login can record a decision but cannot write normalized child evidence.
+      - name: The app runs as the non-owner dealership_app login (after-060)
+        run: |
+          set -o pipefail
+          APP_PW="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+          node -e "const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(\"ALTER ROLE dealership_app PASSWORD '\"+process.env.APP_PW+\"'\");await c.end();})().catch(e=>{console.error(e);process.exit(1);})"
+          APP_URL="$(node -e "const u=new URL(process.env.DATABASE_URL);u.username='dealership_app';u.password=process.env.APP_PW;process.stdout.write(u.toString())")"
+          DATABASE_URL="$APP_URL" npx tsx scripts/upgrade-post-057-activity.ts --stage=after-060 \
+            --out artifacts/after-060-activity.json --log artifacts/after-060-activity.txt
+          grep -q '"result": "OK"' artifacts/after-060-activity.json
+        env:
+          APP_PW: placeholder-overwritten-in-run
+
+      # The 060 half: 059's whole closure still holds, the tuple key is now
+      # VALIDATED, the ledger is read-only for the runtime role, the app LOGIN
+      # role is a non-owner runtime member, and the full-scope invariants hold.
+      - name: Verify the 060 acceptance closure (phase=post-060)
+        run: |
+          set -o pipefail
+          npx tsx scripts/verify-upgrade-state.ts --phase=post-060 \
+            --before artifacts/identity-post-059.json \
+            --out artifacts/identity-post-060.json | tee -a artifacts/constraint-state.txt
+          grep -q '"result": "OK"' artifacts/identity-post-060.json
 
       # FBL-020-R5 §0.3 and §0.4, exercised against the very database this job just built:
       # the refusals have to hold on a real migrated schema, not only on the probe fixtures the
@@ -675,16 +762,31 @@ jobs:
           test "$FRESH" = "$UPGRADED"
           echo "equal=true" | tee -a artifacts/fingerprint-equality.txt
 
-      - name: Application starts against the upgraded database
+      - name: Application starts in production ONLY as the non-owner runtime login
         run: |
+          set -o pipefail
           npx tsc -b apps/api
-          node apps/api/dist/server.js & echo $! > server.pid
+          APP_PW="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+          node -e "const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(\"ALTER ROLE dealership_app PASSWORD '\"+process.env.APP_PW+\"'\");await c.end();})().catch(e=>{console.error(e);process.exit(1);})"
+          APP_URL="$(node -e "const u=new URL(process.env.DATABASE_URL);u.username='dealership_app';u.password=process.env.APP_PW;process.stdout.write(u.toString())")"
+          # FBL-020-R7-C1 §2: in production the server FAILS CLOSED on an owner
+          # credential. Prove the refusal, then prove the happy path as the app.
+          if NODE_ENV=production node apps/api/dist/server.js > artifacts/owner-boot.log 2>&1; then
+            echo 'ERROR: the server booted in production as the owner credential' >&2
+            exit 1
+          fi
+          grep -qi 'Refusing to start' artifacts/owner-boot.log
+          # FBL-020-R7-C1 §1: the pid file lives OUTSIDE the repository.
+          NODE_ENV=production DATABASE_URL="$APP_URL" node apps/api/dist/server.js \
+            & echo $! > "$RUNNER_TEMP/server.pid"
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/healthz > artifacts/upgraded-healthz.json 2>/dev/null; then break; fi
             sleep 1
           done
           cat artifacts/upgraded-healthz.json
-          kill "$(cat server.pid)"
+          kill "$(cat "$RUNNER_TEMP/server.pid")"
+        env:
+          APP_PW: placeholder-overwritten-in-run
 
       - name: Evidence completeness (every required artifact exists and is non-empty)
         run: |
@@ -695,6 +797,8 @@ jobs:
                    after-058-activity.json after-058-activity.txt \
                    identity-post-058.json \
                    pre-059-chain.txt precheck-refusals.json precheck-refusals.txt \
+                   pre-060-chain.txt acceptance-prechecks.json acceptance-prechecks.txt \
+                   after-060-activity.json after-060-activity.txt identity-post-060.json \
                    after-059-activity.json after-059-activity.txt \
                    identity-post-059.json \
                    negative-controls.txt negative-controls.json \

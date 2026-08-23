@@ -76,12 +76,19 @@
 import { writeFileSync } from 'fs';
 import { closePool, query, withTransaction } from '@dealer/database';
 
-type Phase = 'backfill' | 'pre-057' | 'post-057' | 'post-058' | 'post-059';
+type Phase = 'backfill' | 'pre-057' | 'post-057' | 'post-058' | 'post-059' | 'post-060';
 
-const PHASES: readonly Phase[] = ['backfill', 'pre-057', 'post-057', 'post-058', 'post-059'];
+const PHASES: readonly Phase[] = [
+  'backfill',
+  'pre-057',
+  'post-057',
+  'post-058',
+  'post-059',
+  'post-060',
+];
 
 /** The phases at which the drill has deliberately ADDED rows between censuses. */
-const GROWTH_PHASES: readonly Phase[] = ['post-058', 'post-059'];
+const GROWTH_PHASES: readonly Phase[] = ['post-058', 'post-059', 'post-060'];
 
 /** The nine identity tables whose population is the subject of the §6 drill. */
 const CENSUS_TABLES = [
@@ -1275,7 +1282,10 @@ async function assertIntegrityClosureState(phase: Phase): Promise<void> {
   // history nothing can lawfully change); everything else validates cleanly.
   const expectConstraints: ReadonlyArray<[string, boolean]> = [
     ['uq_sar_request_tenant_requester', true],
-    ['sas_actor_is_the_approved_requester', false],
+    // 059 installs the tuple key NOT VALID; migration 060 §0 validates it. So at
+    // post-059 it is NOT VALID and at post-060 it is VALIDATED — the same closure
+    // check, phase-aware on the one constraint 060 promotes.
+    ['sas_actor_is_the_approved_requester', phase === 'post-060'],
     ['pd_resource_rooftop_in_tenant', true],
     ['pd_v4_support_tenant_allow_is_delegated', true],
     ['pd_v4_control_plane_is_structural', true],
@@ -1470,6 +1480,105 @@ async function assertIntegrityClosureState(phase: Phase): Promise<void> {
   else console.log(`${phase}-requester-rule=refuses-dealership-links`);
 }
 
+/**
+ * `post-060` phase: FBL-020-R7-C1'S ACCEPTANCE CLOSURE IS IN FORCE, ON THIS DATABASE.
+ *
+ * Everything 059's closure asserted still holds (the dispatch runs it too); this
+ * adds the 060-specific facts: the three new triggers and two new CHECKs; the
+ * 059 tuple key now VALIDATED (059 left it NOT VALID, 060 §0 proved the retained
+ * rows coherent and validated it); the runtime role can no longer write the
+ * migration ledger; the application LOGIN role is a non-owner, non-superuser
+ * member of the runtime role and nothing else; and the FULL-SCOPE retained-state
+ * invariants hold over EVERY row, not only live delegations.
+ */
+async function assertAcceptanceClosureState(phase: Phase): Promise<void> {
+  for (const trigger of [
+    'trg_policy_decisions_zz_support_authority_live',
+    'trg_policy_decisions_zz_support_scope_reaches_resource',
+    'trg_sar_zz_approval_is_complete',
+  ]) {
+    const n = await scalar(
+      `SELECT COUNT(*)::int AS n FROM pg_trigger WHERE NOT tgisinternal AND tgname = $1`,
+      [trigger],
+    );
+    if (n !== 1) fail(`${phase}: trigger ${trigger} is not in force (found ${n})`);
+    else console.log(`${phase}-trigger=${trigger}`);
+  }
+  const expectValidated: ReadonlyArray<[string, boolean]> = [
+    ['sas_actor_is_the_approved_requester', true],
+    ['pd_resource_allow_names_a_tenant', true],
+    ['pd_system_row_carries_no_human_evidence', true],
+  ];
+  for (const [c, validated] of expectValidated) {
+    const n = await scalar(
+      `SELECT COUNT(*)::int AS n FROM pg_constraint WHERE conname = $1 AND convalidated = $2`,
+      [c, validated],
+    );
+    if (n !== 1) fail(`${phase}: constraint ${c} is not in force (convalidated=${validated})`);
+    else console.log(`${phase}-constraint=${c} validated=${validated}`);
+  }
+
+  const ledger = (
+    await query(
+      `SELECT
+         has_table_privilege('dealership_runtime', 'schema_migrations', 'INSERT') AS can_write,
+         has_table_privilege('dealership_runtime', 'schema_migrations', 'SELECT') AS can_read`,
+    )
+  ).rows[0] as Record<string, unknown>;
+  if (ledger.can_write !== false)
+    fail(`${phase}: the runtime role can still write the migration ledger`);
+  else if (ledger.can_read !== true) fail(`${phase}: the runtime role cannot read the ledger`);
+  else console.log(`${phase}-ledger=runtime-read-only`);
+
+  const appRole = (
+    await query(
+      `SELECT
+         (SELECT rolcanlogin FROM pg_roles WHERE rolname = 'dealership_app') AS can_login,
+         (SELECT rolsuper FROM pg_roles WHERE rolname = 'dealership_app') AS is_super,
+         pg_has_role('dealership_app', 'dealership_runtime', 'MEMBER') AS in_runtime,
+         pg_has_role('dealership_app', 'dealership_evidence_owner', 'MEMBER') AS in_owner`,
+    )
+  ).rows[0] as Record<string, unknown>;
+  if (appRole.can_login !== true) fail(`${phase}: dealership_app must be a LOGIN role`);
+  if (appRole.is_super !== false) fail(`${phase}: dealership_app must not be a superuser`);
+  if (appRole.in_runtime !== true)
+    fail(`${phase}: dealership_app must be a member of the runtime role`);
+  if (appRole.in_owner !== false)
+    fail(`${phase}: dealership_app must NOT be a member of the evidence owner`);
+  else console.log(`${phase}-app-role=login-nonowner-runtime-member`);
+
+  const fullScope: ReadonlyArray<[string, string]> = [
+    [
+      'every retained session actor is its request requester',
+      `SELECT COUNT(*)::int AS n FROM support_access_sessions s
+        JOIN support_access_requests r ON r.request_id = s.request_id
+       WHERE s.actor_user_link_id IS DISTINCT FROM r.requester_user_link_id`,
+    ],
+    [
+      'every retained requester and session actor is a platform link',
+      `SELECT COUNT(*)::int AS n FROM (
+         SELECT 1 FROM support_access_requests r
+           JOIN user_links ul ON ul.user_link_id = r.requester_user_link_id
+          WHERE ul.actor_scope <> 'platform'
+         UNION ALL
+         SELECT 1 FROM support_access_sessions s
+           JOIN user_links ul ON ul.user_link_id = s.actor_user_link_id
+          WHERE ul.actor_scope <> 'platform') x`,
+    ],
+    [
+      'every standing approved scope is effective',
+      `SELECT COUNT(*)::int AS n FROM support_access_requests r
+       WHERE r.status = 'approved' AND r.scope_level <> 'tenant'
+         AND org_chain_defect(r.tenant_id, r.scope_level, r.scope_id, clock_timestamp()) IS NOT NULL`,
+    ],
+  ];
+  for (const [label, sql] of fullScope) {
+    const n = await scalar(sql);
+    if (n !== 0) fail(`${phase}: full-scope invariant violated (${n}): ${label}`);
+    else console.log(`${phase}-full-scope-holds=${JSON.stringify(label)}`);
+  }
+}
+
 function parseArgs(): { phase: Phase; out: string | undefined; before: string | undefined } {
   const argv = process.argv.slice(2);
   let phase: string | undefined;
@@ -1540,15 +1649,18 @@ async function main(): Promise<void> {
     // failures rather than both passes.
     await assertEvidenceVersionFloor(
       phase,
-      phase === 'post-059' ? 4 : phase === 'post-058' ? 3 : 2,
+      phase === 'post-059' || phase === 'post-060' ? 4 : phase === 'post-058' ? 3 : 2,
     );
     if (GROWTH_PHASES.includes(phase)) {
       await assertNormalizedEvidenceIsEquivalent(phase);
       await assertAuthTimeExemptionAndBinding(phase);
       await assertSupersededVersionHistorySurvived(phase);
     }
-    if (phase === 'post-059') {
+    if (phase === 'post-059' || phase === 'post-060') {
       await assertIntegrityClosureState(phase);
+    }
+    if (phase === 'post-060') {
+      await assertAcceptanceClosureState(phase);
     }
   }
 

@@ -83,6 +83,19 @@ export const AUTHENTICATION_FRESHNESS_WINDOW_SECONDS = 900;
 
 const ACTION_NAME = /^[a-z][a-z0-9_.]{0,127}$/;
 
+/**
+ * FBL-020-R7-C1 §3 — THE AUTHORITY PLANE IS A STRUCTURAL FIELD, NOT A NAME.
+ *
+ * `control_plane` = a platform-scoped action with NO authorization tenant and
+ * NO customer-resource payload; `tenant` = an action that requires tenant
+ * authorization (and, for platform support, valid delegation). The engine reads
+ * THIS field, never the action-name prefix, so renaming an action cannot move
+ * it between planes. Absence means `tenant`: the fail-safe default is the one
+ * that demands MORE authorization, so a forgotten annotation denies rather than
+ * over-permits, and only an EXPLICIT `control_plane` reaches the platform path.
+ */
+export type ActionPlane = 'tenant' | 'control_plane';
+
 export interface ActionDefinition {
   readonly action: string;
   readonly description: string;
@@ -91,6 +104,13 @@ export interface ActionDefinition {
   readonly allowedRoles: readonly string[];
   /** may demand a reauthentication grant on top of an allow */
   readonly sensitive?: boolean;
+  /** Structural authority plane; absent means 'tenant'. See ActionPlane. */
+  readonly plane?: ActionPlane;
+}
+
+/** The plane an action acts on, resolved from the structural field alone. */
+export function actionPlane(def: ActionDefinition): ActionPlane {
+  return def.plane ?? 'tenant';
 }
 
 export interface ActionCatalog {
@@ -110,6 +130,18 @@ export function createActionCatalog(definitions: readonly ActionDefinition[]): A
     }
     if (def.allowedRoles.length === 0) {
       throw new Error(`action ${def.action} allows no role — unreachable actions are catalog bugs`);
+    }
+    // FBL-020-R7-C1 §3: contradictory definitions are refused at construction.
+    // A control-plane action carries no customer-resource payload — a plane and
+    // a resourceType together is the shape the name bypass used to smuggle.
+    if (def.plane !== undefined && def.plane !== 'tenant' && def.plane !== 'control_plane') {
+      throw new Error(`action ${def.action} declares an unknown plane ${String(def.plane)}`);
+    }
+    if (actionPlane(def) === 'control_plane' && def.resourceType !== null) {
+      throw new Error(
+        `action ${def.action} is control_plane but names resourceType ` +
+          `${def.resourceType} — a control-plane action carries no customer-resource payload`,
+      );
     }
     byName.set(def.action, def);
   }
@@ -822,7 +854,10 @@ export function createPolicyEngine(options: {
         return deny('ACTION_UNKNOWN');
       }
       const sensitive = def.sensitive === true;
-      const isPlatformAction = def.action.startsWith('platform.');
+      // FBL-020-R7-C1 §3: the authority plane is STRUCTURAL. Nothing below reads
+      // the action name to decide a plane, so `platform.`-NAMING an action buys
+      // no control-plane behavior and renaming a control-plane action keeps it.
+      const isControlPlane = actionPlane(def) === 'control_plane';
 
       // 2. cross-tenant is never reachable: a dealership actor's target is
       //    always their own tenant
@@ -834,7 +869,7 @@ export function createPolicyEngine(options: {
       }
 
       // 3. dealership-targeted decisions require an EFFECTIVE tenant
-      if (!isPlatformAction) {
+      if (!isControlPlane) {
         if (targetTenantId === null) return deny('TARGET_TENANT_MISSING', { sensitive });
         const tenant = await query(
           `SELECT 1 FROM tenants t
@@ -907,7 +942,7 @@ export function createPolicyEngine(options: {
       ).rows as unknown as BindingRow[];
 
       const covers = (binding: BindingRow): boolean => {
-        if (isPlatformAction) {
+        if (isControlPlane) {
           // R3 correction B3: a control-plane action is reached ONLY from
           // platform scope — for EVERY actor, on both branches below. A
           // tenant-scope binding carrying a platform role name is a misgrant,
@@ -991,11 +1026,11 @@ export function createPolicyEngine(options: {
         });
       }
 
-      // 6. platform actors: platform.* actions via platform bindings…
+      // 6. platform actors: control-plane actions via platform bindings…
       //    `covers` is the SAME predicate the dealership branch above applied,
-      //    and for a platform action it is `coversPlatformAction` — so the two
-      //    branches cannot disagree about what reaches the control plane.
-      if (isPlatformAction) {
+      //    and for a control-plane action it is `coversPlatformAction` — so the
+      //    two branches cannot disagree about what reaches the control plane.
+      if (isControlPlane) {
         const match = bindings.find((b) => def.allowedRoles.includes(b.role) && covers(b));
         if (match !== undefined) {
           const decisionId = await record({

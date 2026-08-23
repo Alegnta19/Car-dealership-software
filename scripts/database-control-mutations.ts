@@ -356,20 +356,28 @@ export const CONTROLS: DatabaseControl[] = [
     testFile: 'tests/identity-evidence-integrity.test.ts',
     testName: 'a platform-NAMED action cannot free an identified actor from naming a tenant',
   },
-  {
-    id: 'resource_allow_snapshotless',
-    section: '059 §5 — R7 §3.4',
-    intent:
-      'a version-4 resource ALLOW carries its database-validated leaf. Dropped, the one ' +
-      'lane the parent trigger cannot fill (no tenant to resolve in) goes unjudged.',
-    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_v4_resource_allow_names_its_rooftop',
-    restore:
-      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_v4_resource_allow_names_its_rooftop ' +
-      "CHECK (evidence_version < 4 OR decision = 'deny' OR resource_type IS NULL " +
-      'OR resource_rooftop_id IS NOT NULL) NOT VALID',
-    testFile: 'tests/identity-evidence-integrity.test.ts',
-    testName: 'a version-4 resource ALLOW cannot omit its validated rooftop snapshot',
-  },
+  /*
+   * `resource_allow_snapshotless` — 059's `pd_v4_resource_allow_names_its_rooftop`
+   * CHECK — is RETIRED here for the same reason binding_tenant_ignored is: §6 makes
+   * it unkillable, not uncovered.
+   *
+   * That CHECK requires a version-4 resource ALLOW to carry a resource_rooftop_id.
+   * Whenever a resource ALLOW names a TENANT, 059's structural trigger
+   * (policy_decisions_v4_structural_validity) resolves the leaf from the database and
+   * ASSIGNS `NEW.resource_rooftop_id := resolved_leaf` before the CHECK is evaluated —
+   * so the column is never null when the trigger runs, and the CHECK is inert. The
+   * CHECK could therefore only ever be the operative refusal on the ONE lane the
+   * trigger skips: a null-tenant row (the trigger is guarded by tenant IS NOT NULL).
+   * FBL-020-R7-C1 §6 (`pd_resource_allow_names_a_tenant`) now forbids exactly that
+   * null-tenant resource ALLOW, so dropping 059's CHECK changes no observable
+   * outcome and a mutation over it is an un-killable survivor.
+   *
+   * The PROTECTION — a resource ALLOW carries a database-validated leaf — is unchanged
+   * and STILL mutation-covered: leaf resolution/validation is covered by
+   * `v4_structural_judge_absent` below (the whole trigger), and the null-tenant lane
+   * by `system_resource_allow_needs_no_tenant`. 059's CHECK stays in the migration as
+   * immutable defense in depth. See docs/FBL-020-R7-C1-REQUIREMENT-MAP.json §6.
+   */
   {
     id: 'v4_structural_judge_absent',
     section: '059 §5 — R7 §3.1/§3.4/§3.5/§3.6',
@@ -451,6 +459,94 @@ export const CONTROLS: DatabaseControl[] = [
     restore: 'REVOKE dealership_evidence_owner FROM dealership_runtime',
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'a child row written with no normalizer behind it is refused',
+  },
+
+  // ── FBL-020-R7-C1 (migration 060) — THE ACCEPTANCE-CORRECTION CONTROLS ────
+  {
+    id: 'runtime_can_write_the_ledger',
+    section: '060 §1 — R7-C1 §2',
+    intent:
+      'the runtime role must not be able to rewrite the migration ledger. Granted INSERT ' +
+      'on schema_migrations, the app login (which inherits the runtime role) can, and the ' +
+      'posture gate stops refusing it.',
+    drop: 'GRANT INSERT ON schema_migrations TO dealership_runtime',
+    restore: 'REVOKE INSERT ON schema_migrations FROM dealership_runtime',
+    testFile: 'tests/runtime-posture.test.ts',
+    testName: 'the app login is non-owner, non-superuser, and least-privilege',
+  },
+  {
+    id: 'support_authority_not_live_at_write',
+    section: '060 §2 — R7-C1 §4',
+    intent:
+      'a support ALLOW must be refused when the actor’s platform authority is revoked or ' +
+      'aged out at the write instant. Dropped, the evaluation-to-write race reopens.',
+    drop: 'DROP TRIGGER trg_policy_decisions_zz_support_authority_live ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_zz_support_authority_live BEFORE INSERT ON ' +
+      'policy_decisions FOR EACH ROW EXECUTE FUNCTION policy_decisions_support_authority_is_live()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a support ALLOW is refused when the actor’s platform binding is revoked before the write',
+  },
+  {
+    id: 'support_scope_ignores_the_resource',
+    section: '060 §3 — R7-C1 §5',
+    intent:
+      'a support ALLOW’s approved scope must cover the resource it names. Dropped, a ' +
+      'rooftop-A approval authorizes a rooftop-B resource.',
+    drop: 'DROP TRIGGER trg_policy_decisions_zz_support_scope_reaches_resource ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_zz_support_scope_reaches_resource BEFORE INSERT ON ' +
+      'policy_decisions FOR EACH ROW EXECUTE FUNCTION ' +
+      'policy_decisions_support_scope_reaches_resource()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a rooftop-A support approval cannot authorize a rooftop-B resource',
+  },
+  {
+    id: 'system_resource_allow_needs_no_tenant',
+    section: '060 §4 — R7-C1 §6',
+    intent:
+      'a resource ALLOW must name a tenant so 059’s resolution validates its snapshot. ' +
+      'Dropped, a system row with a null tenant and a fabricated snapshot bypasses ' +
+      'resolution.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_resource_allow_names_a_tenant',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_resource_allow_names_a_tenant ' +
+      "CHECK (decision = 'deny' OR resource_type IS NULL OR tenant_id IS NOT NULL " +
+      "OR scope_level IS NOT DISTINCT FROM 'platform') NOT VALID",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a system resource ALLOW cannot carry a null tenant and a fabricated rooftop snapshot',
+  },
+  {
+    id: 'system_row_carries_human_evidence',
+    section: '060 §4 — R7-C1 §6',
+    intent:
+      'a system row is not a costume an ordinary decision wears to shed validation. ' +
+      'Dropped, a system row may carry a real human actor.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_system_row_carries_no_human_evidence',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_system_row_carries_no_human_evidence ' +
+      "CHECK (actor_type <> 'system' OR (actor_user_link_id IS NULL AND session_id IS NULL " +
+      'AND connection_id IS NULL AND actor_provider_subject IS NULL ' +
+      'AND support_session_id IS NULL AND support_request_id IS NULL)) NOT VALID',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a system row cannot carry human, credential or support evidence',
+  },
+  {
+    id: 'staged_approval_skips_validation',
+    section: '060 §5 — R7-C1 §7',
+    intent:
+      'the complete approval invariant must be re-validated whenever a request is approved, ' +
+      'not only when the grant id changes. Dropped, a staged pending-then-approved ' +
+      'transition bypasses scope/grant validation.',
+    drop: 'DROP TRIGGER trg_sar_zz_approval_is_complete ON support_access_requests',
+    restore:
+      'CREATE TRIGGER trg_sar_zz_approval_is_complete BEFORE INSERT OR UPDATE ON ' +
+      'support_access_requests FOR EACH ROW EXECUTE FUNCTION ' +
+      'support_request_approval_is_complete()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a staged pending-then-approved transition cannot bypass scope validation',
   },
 ];
 
@@ -576,16 +672,28 @@ export const PREDICATES: PredicateMutation[] = [
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'a tenant ALLOW cannot claim authority from a PLATFORM-scope binding',
   },
-  {
-    id: 'binding_tenant_ignored',
-    section: '058 §2 — R6 §3.3',
-    intent: 'a binding from another tenant may be recorded as authority here',
-    functionName: 'policy_decision_binding_is_applicable',
-    from: '    IF rb.tenant_id IS DISTINCT FROM d.tenant_id THEN',
-    to: "        COALESCE(d.tenant_id::text, '<none>');\n    END IF;",
-    testFile: 'tests/identity-evidence-reconstruction.test.ts',
-    testName: 'an ALLOW cannot claim a role binding that lives in another tenant',
-  },
+  /*
+   * `binding_tenant_ignored` — 058's `IF rb.tenant_id IS DISTINCT FROM d.tenant_id`
+   * clause — is RETIRED here, and the retirement is deliberate, not a coverage loss.
+   *
+   * That clause was reachable by exactly ONE lane: a system decision recorded in
+   * tenant A naming a cross-tenant actor via `actor_user_link_id` and citing that
+   * actor's binding (a user decision is pinned into its own tenant by the
+   * actor-tenancy key, so its binding is same-tenant by construction). FBL-020-R7-C1
+   * §6 closes the system evidence bypass by forbidding a system row from carrying
+   * ANY human-actor / credential / support evidence
+   * (`pd_system_row_carries_no_human_evidence`), which makes that one lane's very
+   * row unconstructable — so dropping 058's clause now changes no observable
+   * outcome, and a mutation over it would be an un-killable survivor.
+   *
+   * The PROTECTION it verified — a cross-tenant binding cannot be recorded as
+   * authority — is unchanged and STILL mutation-covered: its coverage moves to
+   * `system_row_carries_human_evidence` below, which the same reconstruction test
+   * ('an ALLOW cannot claim a role binding that lives in another tenant', now
+   * asserting the §6 CHECK) kills alongside the integrity suite. 058's clause stays
+   * in the migration as defense in depth (migrations ≤059 are byte-immutable and
+   * cannot be edited regardless). See docs/FBL-020-R7-C1-REQUIREMENT-MAP.json §6.
+   */
   {
     id: 'scope_hierarchy_ignored',
     section: '058 §2 — R6 §3.3, gate finding C7',

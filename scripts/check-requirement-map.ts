@@ -603,6 +603,75 @@ export function checkR7RequirementMap(map: R7RequirementMap = loadR7RequirementM
   return problems;
 }
 
+const C1_MAP_PATH = join(ROOT, 'docs', 'FBL-020-R7-C1-REQUIREMENT-MAP.json');
+const C1_ORDER_PATH = join(ROOT, 'docs', 'orders', 'FBL-020-R7-C1.md');
+const C1_ID_SHAPE = /^C1-(?:§\d+|final)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+interface C1RequirementMap {
+  order: string;
+  authority: { order_text: string; order_text_sha256_canonical_lf: string };
+  clause_inventory: Array<{ clause: string; text: string }>;
+  requirements: R7Requirement[];
+}
+
+export function loadC1RequirementMap(): C1RequirementMap {
+  return JSON.parse(readFileSync(C1_MAP_PATH, 'utf8')) as C1RequirementMap;
+}
+
+/**
+ * FBL-020-R7-C1's map is validated with the same discipline as the R7 map: one
+ * authority digest, C1-shaped ids, full clause coverage, verbatim test names,
+ * and cited database-control ids that the runner actually declares.
+ */
+export function checkC1RequirementMap(map: C1RequirementMap = loadC1RequirementMap()): string[] {
+  const problems: string[] = [];
+  if (!existsSync(C1_ORDER_PATH)) {
+    problems.push(`C1 map: order text ${C1_ORDER_PATH} does not exist`);
+  } else {
+    const actual = canonicalLfDigest(C1_ORDER_PATH);
+    if (actual !== map.authority.order_text_sha256_canonical_lf)
+      problems.push(
+        `C1 map: order_text digest is ${actual} on disk and ` +
+          `${map.authority.order_text_sha256_canonical_lf} in the map`,
+      );
+  }
+  const declaredClauses = new Set(map.clause_inventory.map((c) => c.clause));
+  const covered = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const req of map.requirements) {
+    if (!C1_ID_SHAPE.test(req.id)) problems.push(`C1 map: malformed requirement id ${req.id}`);
+    if (seenIds.has(req.id)) problems.push(`C1 map: duplicate requirement id ${req.id}`);
+    seenIds.add(req.id);
+    if (!declaredClauses.has(req.clause))
+      problems.push(`C1 map: ${req.id} cites clause ${req.clause}, not in the inventory`);
+    covered.add(req.clause);
+    if (req.verdict.trim() === '') problems.push(`C1 map: ${req.id} has an empty verdict`);
+  }
+  for (const clause of declaredClauses)
+    if (!covered.has(clause))
+      problems.push(`C1 map: clause ${clause} is covered by no requirement`);
+  const databaseIds = new Set([...DB_CONTROLS.map((c) => c.id), ...DB_PREDICATES.map((p) => p.id)]);
+  for (const req of map.requirements) {
+    for (const file of req.implementation)
+      if (!existsSync(join(ROOT, file)))
+        problems.push(`C1 map: ${req.id} names implementation ${file}, which does not exist`);
+    for (const t of req.tests) {
+      if (!existsSync(join(ROOT, t.file))) {
+        problems.push(`C1 map: ${req.id} names test file ${t.file}, which does not exist`);
+        continue;
+      }
+      if (!declaredTestNames(t.file).has(t.name))
+        problems.push(
+          `C1 map: ${req.id} claims test ${JSON.stringify(t.name)} in ${t.file}, absent there`,
+        );
+    }
+    for (const id of req.database_controls)
+      if (!databaseIds.has(id))
+        problems.push(`C1 map: ${req.id} cites database control ${id}, not declared by the runner`);
+  }
+  return problems;
+}
+
 function main(): void {
   let out: string | undefined;
   const argv = process.argv.slice(2);
@@ -614,7 +683,11 @@ function main(): void {
     }
   }
 
-  const problems = [...checkRequirementMap(), ...checkR7RequirementMap()];
+  const problems = [
+    ...checkRequirementMap(),
+    ...checkR7RequirementMap(),
+    ...checkC1RequirementMap(),
+  ];
   const report =
     problems.length === 0
       ? 'requirement maps OK (R5 and R7): every clause is covered, every id is well formed ' +

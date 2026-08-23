@@ -687,9 +687,16 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       'The shipped engine writes version-3 evidence after the upgrade',
       'Verify the 058 state and the §3.1 exemption (phase=post-058)',
       '059 precheck refusals (isolated copies of the used 058 database)',
-      'Apply 059 on top of the USED 058 database',
+      'Stage the pre-060 chain (059 included, 060 withheld)',
+      'Apply 059 ONLY, on top of the USED 058 database',
       'The shipped engine writes version-4 evidence as the runtime role',
       'Verify the 059 state and the integrity closure (phase=post-059)',
+      // FBL-020-R7-C1 §8 — 059 and 060 are applied separately, so the 060
+      // full-scope prechecks judge a USED 059 database.
+      '060 acceptance-precheck refusals (isolated copies of the used 059 database)',
+      'Apply 060 on top of the USED 059 database',
+      'The app runs as the non-owner dealership_app login (after-060)',
+      'Verify the 060 acceptance closure (phase=post-060)',
       'Fingerprints must be identical (fresh chain vs upgrade path)',
     ]) {
       assert.ok(steps.has(step), `ci.yml must carry the step: ${step}`);
@@ -719,6 +726,40 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       WORKFLOW,
       /test "\$\(ls -1 "\$PRE059" \| wc -l\)" -eq 11/,
       'and pin the count, so migration 060 would fail this step rather than riding along',
+    );
+    // …and the pre-060 boundary (R7-C1 §8): 059 included, 060 withheld, count pinned.
+    assert.match(
+      WORKFLOW,
+      /0\[0-4\]\*\|05\[0-9\]\*\) cp "\$f" "\$PRE060\/" ;;/,
+      'the pre-060 chain must copy 000-059 and withhold everything numbered 060 or above',
+    );
+    assert.match(
+      WORKFLOW,
+      /test "\$\(ls -1 "\$PRE060" \| wc -l\)" -eq 12/,
+      'and pin the count at twelve, so migration 061 would fail this step rather than riding along',
+    );
+    // The 060 acceptance-precheck, after-060 and post-060 steps gate on their JSON.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/acceptance-prechecks\.json/,
+      'the 060 acceptance-precheck step must gate on zero failed probes',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/identity-post-060\.json/,
+      'the post-060 phase must gate on its own JSON verdict',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/after-060-activity\.json/,
+      'the after-060 stage must gate on its own JSON verdict',
+    );
+    // FBL-020-R7-C1 §2 — the app-start step proves the production fail-closed both
+    // ways: it refuses an owner credential and boots as the app login.
+    assert.match(
+      WORKFLOW,
+      /Refusing to start/,
+      'the app-start step must prove the production owner-credential refusal',
     );
     // The precheck-refusal and post-059 steps must GATE on their JSON rather than
     // merely producing it.
