@@ -21,16 +21,22 @@ import { query } from './pool';
  *      remained the owner — the concealment this check exists to expose. Every
  *      privilege question below is asked about BOTH.
  *   2. NOT A SUPERUSER — a superuser bypasses every check below.
- *   3. CANNOT ASSUME ANY ACTUAL OWNER. The owners are ENUMERATED FROM THE
- *      DATABASE — the database's own owner, the `public` schema's owner, and
- *      every distinct owner of every table in it (the migration ledger and the
- *      evidence tables included), plus the evidence-owner role by name —
+ *   3. CANNOT ASSUME ANY ACTUAL OWNER — OR ANY SUPERUSER. The owners are
+ *      ENUMERATED FROM THE DATABASE — the database's own owner, the `public`
+ *      schema's owner, and every distinct owner of every table in it (the
+ *      migration ledger and the evidence tables included), plus the
+ *      evidence-owner role by name, PLUS every superuser role in the cluster —
  *      and `pg_has_role(…, 'MEMBER')` must be false for each. Membership is
  *      what `SET ROLE` requires, and `pg_has_role(x, x, 'MEMBER')` is true, so
- *      "cannot assume" covers "is not" as well. DDL and trigger control need
- *      ownership (or a TRIGGER grant nothing here holds), so "cannot disable
- *      triggers or perform unauthorized DDL" follows from this and superuser
- *      being false.
+ *      "cannot assume" covers "is not" as well. The superuser arm exists
+ *      because SUPERUSER is an attribute, not an inheritable privilege: a
+ *      login granted membership in a nothing-owning superuser role would show
+ *      no owned table, no ACL privilege and rolsuper=false on both of its own
+ *      identities, while one SET ROLE away from total bypass — so superuser
+ *      roles are treated as owners of everything, which is what they are.
+ *      DDL and trigger control need ownership (or a TRIGGER grant nothing
+ *      here holds), so "cannot disable triggers or perform unauthorized DDL"
+ *      follows from this and superuser being false.
  *   4. CANNOT WRITE THE MIGRATION LEDGER — INSERT, UPDATE, DELETE and TRUNCATE
  *      on `schema_migrations` are each individually false.
  *   5. CANNOT DIRECTLY INSERT NORMALIZED CHILD EVIDENCE — INSERT on
@@ -72,10 +78,10 @@ export async function readRuntimePosture(): Promise<RuntimePosture> {
   const r = (
     await query(
       `WITH actual_owners AS (
-         SELECT pg_get_userbyid(d.datdba) AS owner
+         SELECT pg_get_userbyid(d.datdba)::text AS owner
            FROM pg_database d WHERE d.datname = current_database()
          UNION
-         SELECT pg_get_userbyid(n.nspowner)
+         SELECT pg_get_userbyid(n.nspowner)::text
            FROM pg_namespace n WHERE n.nspname = 'public'
          UNION
          SELECT DISTINCT c.relowner::regrole::text
@@ -85,6 +91,8 @@ export async function readRuntimePosture(): Promise<RuntimePosture> {
          UNION
          SELECT 'dealership_evidence_owner'
           WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dealership_evidence_owner')
+         UNION
+         SELECT r.rolname::text FROM pg_roles r WHERE r.rolsuper
        )
        SELECT
          session_user AS session_user,

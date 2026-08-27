@@ -99,19 +99,23 @@ BEGIN
   END IF;
 
   -- §8: EVERY retained support requester and session actor is a platform link.
-  SELECT COUNT(*), string_agg(x.id, ', ') FILTER (WHERE x.rn <= 20)
+  -- The bounded listing is ranked over the UNION, not per-arm: an earlier draft
+  -- offset the session arm's row numbers past the 20-id window, which made
+  -- 'session <id>' unlistable however few rows offended — the count included
+  -- them, the ids never could. Both arms now share one ranking, so an operator
+  -- reading the message sees the actual offending sessions by id.
+  SELECT COUNT(*), string_agg(y.id, ', ' ORDER BY y.id) FILTER (WHERE y.rn <= 20)
     INTO bad_count, bad_ids
-    FROM (SELECT ('request ' || r.request_id::text) AS id,
-                 row_number() OVER (ORDER BY r.request_id) AS rn
-            FROM support_access_requests r
-            JOIN user_links ul ON ul.user_link_id = r.requester_user_link_id
-           WHERE ul.actor_scope <> 'platform'
-          UNION ALL
-          SELECT ('session ' || s.support_session_id::text),
-                 row_number() OVER (ORDER BY s.support_session_id) + 1000000
-            FROM support_access_sessions s
-            JOIN user_links ul ON ul.user_link_id = s.actor_user_link_id
-           WHERE ul.actor_scope <> 'platform') x;
+    FROM (SELECT x.id, row_number() OVER (ORDER BY x.id) AS rn
+            FROM (SELECT ('request ' || r.request_id::text) AS id
+                    FROM support_access_requests r
+                    JOIN user_links ul ON ul.user_link_id = r.requester_user_link_id
+                   WHERE ul.actor_scope <> 'platform'
+                  UNION ALL
+                  SELECT ('session ' || s.support_session_id::text)
+                    FROM support_access_sessions s
+                    JOIN user_links ul ON ul.user_link_id = s.actor_user_link_id
+                   WHERE ul.actor_scope <> 'platform') x) y;
   IF bad_count > 0 THEN
     RAISE EXCEPTION USING MESSAGE = format(
       'migration 060 refused: %s retained support request(s)/session(s) name a requester or '
@@ -248,7 +252,7 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON schema_migrations FROM dealership_run
 
 ALTER TABLE policy_decisions
   ADD COLUMN support_authority_binding_id uuid REFERENCES role_bindings (role_binding_id),
-  ADD COLUMN support_authority_binding_version integer;
+  ADD COLUMN support_authority_binding_version bigint;
 
 -- The columns are DELEGATED-ALLOW evidence and nothing else: only a support
 -- ALLOW may carry them, and the id never travels without the version the
@@ -519,9 +523,9 @@ DECLARE g reauthentication_grants%ROWTYPE;
         defect text;
 BEGIN
   -- A terminal decided state may not be reached from another terminal state:
-  -- approval must come from pending (or an INSERT), and a decided row may only
-  -- move on to the documented supersession terminal. This makes the staged
-  -- transition observable rather than silent.
+  -- approval must come from pending (or an INSERT), and a decided row moves
+  -- nowhere at all — the absorption clause below refuses every exit. This
+  -- makes the staged transition observable rather than silent.
   IF TG_OP = 'UPDATE' AND NEW.status = 'approved'
      AND OLD.status NOT IN ('pending', 'approved') THEN
     RAISE EXCEPTION
@@ -599,10 +603,15 @@ BEGIN
   END IF;
   --   (3) the consumption instant IS the approval instant. The atomic path
   --       (decideSupportAccess) spends the grant and decides the request under
-  --       one transaction clock, so the two are equal there and only there — a
-  --       grant staged onto the row at any other moment carries a mismatched
-  --       pair, which is what makes the bypass structurally unrepresentable
-  --       rather than merely unvalidated.
+  --       one transaction clock, so the two are equal there — and a grant
+  --       staged onto the row at any other moment carries a mismatched pair
+  --       and refuses. What this clause enforces is the atomic path's SHAPE:
+  --       a writer that spends the grant and decides the request under one
+  --       transaction clock, with every other §5 fact valid, has performed
+  --       the atomic approval in substance and is indistinguishable from it
+  --       by construction — it gains nothing the atomic path would not have
+  --       granted. What refuses is every staging that DIFFERS from that
+  --       shape, which is the bypass the C1 finding named.
   IF g.consumed_at IS DISTINCT FROM NEW.decided_at THEN
     RAISE EXCEPTION
       'support_access_requests refused: approved request % cites grant %, consumed at % '

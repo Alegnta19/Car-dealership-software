@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { loadConfig } from '@dealer/platform';
-import { ProviderRefreshError, createWorkosProvider } from '@dealer/identity-access';
+import {
+  PLATFORM_SUPPORT_AUTHORITY_ROLES,
+  ProviderRefreshError,
+  createWorkosProvider,
+} from '@dealer/identity-access';
 import { identitySetCookieHeader } from '@dealer/api';
 
 const BASE = {
@@ -335,6 +341,32 @@ describe('identity configuration (FBL-020)', () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+
+  test('migration 060’s support-role array IS PLATFORM_SUPPORT_AUTHORITY_ROLES, verbatim', () => {
+    // FBL-020-R7-C2 §2 — the write-instant authority trigger hardcodes the
+    // allowed support roles in SQL, because a trigger cannot import a
+    // TypeScript constant. Two lists that must agree and are pinned nowhere
+    // WILL drift; this is the pin migration 060's own comment names. The SQL
+    // literal is extracted from the migration text and compared, as a SET, to
+    // the one declaration the engine, the mutation gate and the published
+    // action all read — so moving either side without the other is a red test,
+    // not a silent fail-closed outage for every delegated support decision.
+    const migration = readFileSync(
+      join(__dirname, '..', 'migrations', '060_identity_boundary_acceptance_closure.sql'),
+      'utf8',
+    );
+    const literal = migration.match(/rb\.role = ANY \(ARRAY\[([^\]]+)\]\)/);
+    assert.ok(literal, 'the trigger’s support-role ANY(ARRAY[...]) literal exists exactly where §2 declares it');
+    const sqlRoles = (literal as RegExpMatchArray)[1]!
+      .split(',')
+      .map((s) => s.trim().replace(/^'|'$/g, ''))
+      .sort();
+    assert.deepEqual(
+      sqlRoles,
+      [...PLATFORM_SUPPORT_AUTHORITY_ROLES].sort(),
+      'the trigger’s role list and the engine’s PLATFORM_SUPPORT_AUTHORITY_ROLES are one list',
+    );
   });
 });
 

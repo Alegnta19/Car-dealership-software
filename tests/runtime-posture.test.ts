@@ -84,10 +84,10 @@ describe('runtime database posture (FBL-020-R7-C1 §2, C2 §1)', () => {
       let appUrl: string;
 
       const POSTURE_SQL = `WITH actual_owners AS (
-         SELECT pg_get_userbyid(d.datdba) AS owner
+         SELECT pg_get_userbyid(d.datdba)::text AS owner
            FROM pg_database d WHERE d.datname = current_database()
          UNION
-         SELECT pg_get_userbyid(n.nspowner)
+         SELECT pg_get_userbyid(n.nspowner)::text
            FROM pg_namespace n WHERE n.nspname = 'public'
          UNION
          SELECT DISTINCT c.relowner::regrole::text
@@ -97,6 +97,8 @@ describe('runtime database posture (FBL-020-R7-C1 §2, C2 §1)', () => {
          UNION
          SELECT 'dealership_evidence_owner'
           WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dealership_evidence_owner')
+         UNION
+         SELECT r.rolname::text FROM pg_roles r WHERE r.rolsuper
        )
        SELECT
          session_user AS session_user,
@@ -206,6 +208,41 @@ describe('runtime database posture (FBL-020-R7-C1 §2, C2 §1)', () => {
           problems.some((p) => /switched role conceals the real login/.test(p)),
           'and the refusal names the concealment itself',
         );
+      });
+
+      test('membership in a nothing-owning superuser role cannot hide from the posture', async () => {
+        // SUPERUSER is an attribute, not an inheritable privilege: a login
+        // granted membership in a superuser role that owns nothing shows
+        // rolsuper=false on both of its own identities, no owned table and no
+        // ACL privilege — while sitting one SET ROLE away from total bypass.
+        // The posture's owner enumeration therefore carries a superuser arm,
+        // and this misgrant is what it exists to expose.
+        const owner = new Client({ connectionString: OWNER_URL });
+        await owner.connect();
+        try {
+          await owner.query(`DROP ROLE IF EXISTS posture_breakglass_probe`);
+          await owner.query(`CREATE ROLE posture_breakglass_probe SUPERUSER NOLOGIN`);
+          await owner.query(`GRANT posture_breakglass_probe TO dealership_app`);
+          try {
+            const posture = await postureOf(appUrl);
+            assert.equal(posture.isSuperuser, false, 'neither identity is itself a superuser');
+            assert.ok(
+              posture.assumableOwners.includes('posture_breakglass_probe'),
+              'the assumable superuser role is enumerated',
+            );
+            assert.ok(
+              runtimePostureViolations(posture).some((p) =>
+                /can assume actual owner role\(s\)/.test(p),
+              ),
+              'and the posture refuses the connection',
+            );
+          } finally {
+            await owner.query(`REVOKE posture_breakglass_probe FROM dealership_app`);
+            await owner.query(`DROP ROLE posture_breakglass_probe`);
+          }
+        } finally {
+          await owner.end();
+        }
       });
 
       test('the app login cannot RESET ROLE into privilege, assume any actual owner, DDL, or write the ledger in any verb', async () => {
