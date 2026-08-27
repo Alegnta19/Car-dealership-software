@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 18,
+    "used": 19,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -555,9 +555,9 @@
       },
       "FBL-020-R7-C2": {
         "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs R7 and its corrections; FBL-020-R7-C2 supersedes the earlier C2 instruction and sets no budget either)",
-        "used": 3,
+        "used": 4,
         "failed_ci": 0,
-        "verdict": "DISCLOSED — three C2 code commits (0c54a99, f4a59e1, c16f200) are listed above with run: null until their own exact-SHA runs exist; the two C2 closeout commits are documentation-only (the first, 8d21259, is listed above; the second contains this record and no record can name its own SHA)"
+        "verdict": "DISCLOSED — four C2 code commits (0c54a99, f4a59e1, c16f200, 7088fcd) are listed above with run: null until their own exact-SHA runs exist; the docs-only closeout 1f36bbd is listed with its red run 33109736612 (one job, the quality ratchet, on unformatted C2 files — a docs-only commit, so it moves no budget), and the closeout containing this record can name no SHA of its own"
       }
     },
     "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here."
@@ -584,10 +584,7 @@
       "version_label": "Version 2.0",
       "section_14_3": "14.3 First active instruction — FBL-020-R2",
       "verification": "verified-from-repository-bytes",
-      "verified_by": [
-        "tests/delivery-documentation.test.ts",
-        "scripts/check-published-figures.ts"
-      ]
+      "verified_by": ["tests/delivery-documentation.test.ts", "scripts/check-published-figures.ts"]
     },
     "the_second_anchor_still_checked_in": {
       "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
@@ -838,6 +835,47 @@
       "subject": "FBL-020-R7-C2: adversarial-review corrections — superuser-membership posture arm, honest §0 listing, the role-list pin",
       "code_bearing": true,
       "run": null
+    },
+    {
+      "sha": "7088fcd483876813143d126c36bcb8aecccf9b87",
+      "short": "7088fcd",
+      "subject": "FBL-020-R7-C2: run 33109736612's ratchet finding — the C2 files take the formatter's shape",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "1f36bbdf15527b5809dc16b1e06765f511c66ade",
+      "short": "1f36bbd",
+      "subject": "FBL-020-R7-C2 §closeout: the governing Final Bounded Closure is the checked-in order, and the record tracks the review corrections",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 33109736612,
+        "run_number": 69,
+        "run_attempt": 1,
+        "head_sha": "1f36bbdf15527b5809dc16b1e06765f511c66ade",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      }
     }
   ]
 }
