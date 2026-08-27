@@ -51,6 +51,7 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     resourceType: null,
     allowedRoles: [PLATFORM_ADMIN_ROLE],
     sensitive: true,
+    plane: 'control_plane',
   },
   {
     action: 'identity.support.approve',
@@ -82,6 +83,7 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     description: 'Provision or activate a tenant (platform control plane)',
     resourceType: null,
     allowedRoles: [PLATFORM_ADMIN_ROLE],
+    plane: 'control_plane',
   },
   {
     action: 'platform.support.request',
@@ -91,6 +93,7 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     // support branch read, so the three cannot disagree about who holds
     // platform-support authority.
     allowedRoles: PLATFORM_SUPPORT_AUTHORITY_ROLES,
+    plane: 'control_plane',
   },
 ] as const;
 

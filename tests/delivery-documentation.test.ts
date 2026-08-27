@@ -121,9 +121,15 @@ const LIVE_GATE_PHRASE = 'LIVE WORKOS CERTIFICATION IS NOT DISCHARGED';
 const CI_NO_RUN = 'NO EXACT-SHA CI RUN EXISTS FOR ANY CODE-BEARING COMMIT';
 const CI_DISCHARGED = /THE R5 CI GATE IS DISCHARGED/;
 
-/** The two mutually exclusive statements the report may make about the commit. */
+/**
+ * The two mutually exclusive statements the report may make about the commit.
+ * FBL-020-R7 reworded the committed form: the named commit is the last one a
+ * recorded run MEASURED — under R7-A1's normal-commit discipline the R7 commits
+ * sit above it until their own run lands, so "final code-bearing" would be the
+ * stale-sentence class the final-state gate exists to refuse.
+ */
 const COMMIT_NONE = 'NOTHING IS COMMITTED AND NOTHING IS PUSHED';
-const COMMIT_MADE = /THE FINAL CODE-BEARING COMMIT IS `[0-9a-f]{40}`/;
+const COMMIT_MADE = /THE LAST CI-MEASURED COMMIT IS `[0-9a-f]{40}`/;
 
 /**
  * The census is a report, not a ratification, and the report must keep saying so.
@@ -544,8 +550,8 @@ describe('the delivery documentation describes THIS delivery (FBL-020-R5 §3.2/�
        * 40-character SHA is no longer enough on its own: R5 named one, and it was the
        * wrong one.
        */
-      const named = /THE FINAL CODE-BEARING COMMIT IS `([0-9a-f]{40})`/.exec(REPORT);
-      assert.ok(named, 'the report must name its final code-bearing commit');
+      const named = /THE LAST CI-MEASURED COMMIT IS `([0-9a-f]{40})`/.exec(REPORT);
+      assert.ok(named, 'the report must name its last CI-measured commit');
       assert.equal(
         named[1],
         readFinalState().evidence_commit_sha,
@@ -2261,7 +2267,12 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
   });
 
   test('a budget breach cannot be recorded as anything but a VIOLATION', () => {
+    // The live record's budget is the FBL-020-R7-A1 §4 string (no numeric limit),
+    // so the probes restore a NUMERIC budget first: the rule under test is what
+    // the gate does when a number IS breached, and it must keep doing exactly
+    // that for any future order that sets one.
     const softened = clone();
+    softened.commit_budget.allowed = 1;
     softened.commit_budget.verdict = 'DISCLOSED';
     assert.ok(
       finalStateProblems(softened, facts, docs).some((p) =>
@@ -2271,6 +2282,7 @@ describe('the final state is ONE record, and the documents restate it (FBL-020-R
     );
 
     const cured = clone();
+    cured.commit_budget.allowed = 1;
     cured.commit_budget.disclosure_does_not_cure_the_violation = false;
     assert.ok(
       finalStateProblems(cured, facts, docs).some((p) => p.includes('disclosure does not cure')),

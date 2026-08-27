@@ -112,6 +112,37 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'records a pending link, each audited, and deliberately advances no version ' +
       'because neither grants anything (the lifecycle mutations are in mutations.ts)',
   },
+  {
+    file: 'scripts/upgrade-acceptance-prechecks.ts',
+    because:
+      'FBL-020-R7-C1 §8’s probe injector: it plants RETAINED incoherent support rows ONLY ' +
+      'into disposable copies of the drill database, temporarily lifting the 059 guard each ' +
+      'target row would trip, to reproduce a pre-060 legacy state migration 060’s full-scope ' +
+      'prechecks exist to refuse — every copy is dropped, the drill database is never touched',
+  },
+  {
+    file: 'scripts/upgrade-precheck-refusals.ts',
+    because:
+      'FBL-020-R7 §4.5’s probe injector: it writes ONLY to disposable copies of the ' +
+      'drill database, creating the invalid retained shapes migration 059’s prechecks ' +
+      'exist to refuse — the writes are the adversary the migration must stop, every ' +
+      'copy is dropped, and the drill database itself is never touched',
+  },
+  {
+    file: 'scripts/upgrade-precheck-refusals-057.ts',
+    because:
+      'FBL-020-R7-C2 §4’s fifth probe injector: it plants ONE retained cross-tenant ' +
+      'support session — a shape the 055/056 schema really admits — into a disposable ' +
+      'copy of the pre-057 drill database, so migration 057’s tenant-mismatch precheck ' +
+      'is observed refusing; the copy is dropped, the drill database is never touched',
+  },
+  {
+    file: 'scripts/verify-upgrade-state.ts',
+    because:
+      'the post-059 phase’s live refusal probe: one support-request row, written to BE ' +
+      'REFUSED by the §3.1 requester rule inside a transaction that is always rolled ' +
+      'back — the drill database is left exactly as found either way',
+  },
 ];
 
 // FIXTURE_PRIMITIVE_FILE is deliberately NOT an owner: it holds no SQL of its own (the

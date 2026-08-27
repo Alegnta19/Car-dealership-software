@@ -419,19 +419,39 @@ CRLF line endings hashes differently for every file, and a checksum taken there
 will disagree with CI and with every other machine. When a checksum is quoted
 in a report, in a ticket or in a review, it is this value.
 
-| Migration                                    | sha256 (canonical, LF/git-blob)                                    |
-| -------------------------------------------- | ------------------------------------------------------------------ |
-| `000_platform_core.sql`                      | `a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d` |
-| `049_phase248_service_cockpit.sql`           | `523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242` |
-| `050_phase248_hardening.sql`                 | `009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522` |
-| `051_phase248_metrics_support.sql`           | `e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4` |
-| `052_phase248_authorization_binding.sql`     | `94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41` |
-| `053_phase248_estimate_line_association.sql` | `a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a` |
-| `054_phase248_waitlist.sql`                  | `8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58` |
-| `055_identity_organization.sql`              | `52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d` |
-| `056_identity_contract_completion.sql`       | `ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d` |
-| `057_identity_boundary_completion.sql`       | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
-| `058_policy_evidence_reconstructable.sql`    | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
+| Migration                                      | sha256 (canonical, LF/git-blob)                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `000_platform_core.sql`                        | `a3e0f4ca4990a313cabdefa8b26ca762977e95d2c8cfafbedf64f3ecb4fda94d` |
+| `049_phase248_service_cockpit.sql`             | `523ee2e236b427e55fdd06037f350ac4729865581b5772d8078cf473e5984242` |
+| `050_phase248_hardening.sql`                   | `009d464da812459168b341b112dd4972edb39c406b0e5ebf33fb11798d35a522` |
+| `051_phase248_metrics_support.sql`             | `e79d9a9fd56b76134ab6823fd8f7c83a653a4caecb5a1f243d46a5a8d36427d4` |
+| `052_phase248_authorization_binding.sql`       | `94179a31e1f96185af52ecc37bc93bb9a3bd58f55a8ea46ec642300f68b04d41` |
+| `053_phase248_estimate_line_association.sql`   | `a2e125e122ec455ee19d1c18ffd6f08af5cd9fc46100de0ba424d5630e3b783a` |
+| `054_phase248_waitlist.sql`                    | `8382d8efda1769de0828fd0de74cb8f8303e8f5aca1decf9b07e22dcf8baea58` |
+| `055_identity_organization.sql`                | `52a56f414725adc5751c88bc256c9fe5f00bbeaf4b5ad909a3ecc13c86120a5d` |
+| `056_identity_contract_completion.sql`         | `ff2d0307d374efba41b4ff79268ace9b03b32376d5e60ae678d840936448713d` |
+| `057_identity_boundary_completion.sql`         | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
+| `058_policy_evidence_reconstructable.sql`      | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
+| `059_policy_evidence_integrity_closure.sql`    | `ff66a2a327bb9ce9eb80c8ac68a4b1cc23549e327ccecfe42160f93e564d86c2` |
+| `060_identity_boundary_acceptance_closure.sql` | `70c59d6b2684bb26ffe5df649038b1161e83f7c3865cd7e00840fc66af7ebff0` |
+
+`059_policy_evidence_integrity_closure.sql` is **new in FBL-020-R7**. It carries the
+identity-boundary integrity closure: the support tuple bound referentially (requester and
+session actor are REAL platform-scope links, the session actor IS the approved requester —
+enforced in full for every new write, with retained ended history tolerated by a
+deliberately `NOT VALID` key); approval bounds judged where they are written (a session
+cannot precede its decision or outlive its requested duration, and the approving grant must
+be an `identity.support.approve` grant for that exact request at `fresh_and_mfa_policy`
+with MFA certified, over an effective approved scope); one database authority for
+organization ancestry (`org_ancestry_all` / `org_chain_defect` / `org_ancestry_effective`)
+and one resource-scope registry (`resource_org_leaf`) shared by the runtime and every
+evidence validator; version-4 evidence rules (structural control-plane separation with the
+`platform.*` name bypass removed, the actor label bound to the real scope, the
+database-validated `resource_rooftop_id` snapshot, chains judged at the actual write
+instant via `clock_timestamp()`); and §3.7's privilege model — the forgeable
+`policy_evidence.normalizing_decision` GUC guard is dropped and normalization becomes a
+`SECURITY DEFINER` function owned by `dealership_evidence_owner`, with the
+`dealership_runtime` role holding no direct DML on the normalized child table.
 
 `058_policy_evidence_reconstructable.sql` is **new in FBL-020-R6 and is committed**, so the digest above is of a blob in `HEAD` as well as of the body on disk, and the two agree. It
 is the file the frozen-`057` position requires, and it carries FBL-020-R6 §3's four database

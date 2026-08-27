@@ -34,7 +34,7 @@
  * imports no query primitive — the transition lives in @dealer/identity-access, which
  * owns every write to the support tables.
  */
-import { closePool } from '@dealer/database';
+import { assertRuntimePosture, closePool } from '@dealer/database';
 import {
   expireDueSupportSessions,
   expireStaleLoginTransactions,
@@ -269,6 +269,24 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       }) + '\n',
     );
     return;
+  }
+
+  // FBL-020-R7-C1 §2 — FAIL CLOSED ON THE RUNTIME DATABASE POSTURE before any
+  // job touches the database. The worker never loads the full AppConfig (it runs
+  // on the DB-only lazy path), so it gates on NODE_ENV directly: in production it
+  // must run as the non-owner runtime login (migration 060's dealership_app) and
+  // refuses to run a sweep otherwise. `--list-jobs` returned above, database-free.
+  if (process.env.NODE_ENV === 'production') {
+    try {
+      const posture = await assertRuntimePosture();
+      logger.info({ dbUser: posture.currentUser }, 'Runtime database posture verified');
+    } catch (err) {
+      process.stderr.write(
+        `Refusing to run: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      await closePool().catch(() => undefined);
+      throw err;
+    }
   }
 
   if (argv.includes('--once')) {

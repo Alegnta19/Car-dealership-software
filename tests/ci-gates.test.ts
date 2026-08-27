@@ -677,9 +677,26 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       'Apply 057 ONLY, on top of the populated legacy data',
       'Verify the reconciled state and before/after counts (phase=post-057)',
       'Generate REALISTIC POST-057 ACTIVITY (production code paths)',
-      'Apply 058 on top of the USED database',
+      // FBL-020-R7 §4 — 058 AND 059 ARE APPLIED SEPARATELY TOO, for the same reason:
+      // 059's §0 prechecks judge RETAINED support rows and its §5 rules judge what the
+      // version-3-era writer left behind. The used-058 stage, the precheck-refusal
+      // proof, the runtime-role activity stage and the post-059 phase are asserted by
+      // NAME so a workflow that quietly re-merged the two migrations fails this test.
+      'Stage the pre-059 chain (058 included, 059 withheld)',
+      'Apply 058 ONLY, on top of the USED database',
       'The shipped engine writes version-3 evidence after the upgrade',
       'Verify the 058 state and the §3.1 exemption (phase=post-058)',
+      '059 precheck refusals (isolated copies of the used 058 database)',
+      'Stage the pre-060 chain (059 included, 060 withheld)',
+      'Apply 059 ONLY, on top of the USED 058 database',
+      'The shipped engine writes version-4 evidence as the runtime role',
+      'Verify the 059 state and the integrity closure (phase=post-059)',
+      // FBL-020-R7-C1 §8 — 059 and 060 are applied separately, so the 060
+      // full-scope prechecks judge a USED 059 database.
+      '060 acceptance-precheck refusals (isolated copies of the used 059 database)',
+      'Apply 060 on top of the USED 059 database',
+      'The app runs as the non-owner dealership_app login (after-060)',
+      'Verify the 060 acceptance closure (phase=post-060)',
       'Fingerprints must be identical (fresh chain vs upgrade path)',
     ]) {
       assert.ok(steps.has(step), `ci.yml must carry the step: ${step}`);
@@ -696,6 +713,91 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       WORKFLOW,
       /test "\$\(ls -1 "\$PRE058" \| wc -l\)" -eq 10/,
       'and pin the count, so migration 059 fails this step rather than riding along',
+    );
+    // …the same two shapes for the pre-059 boundary (R7 §4): 059 must not be inside
+    // the chain the 058-only step applies, and the count is pinned so a future 060
+    // fails this step rather than riding along.
+    assert.match(
+      WORKFLOW,
+      /0\[0-4\]\*\|05\[0-8\]\*\) cp "\$f" "\$PRE059\/" ;;/,
+      'the pre-059 chain must copy 000-058 and withhold everything numbered 059 or above',
+    );
+    assert.match(
+      WORKFLOW,
+      /test "\$\(ls -1 "\$PRE059" \| wc -l\)" -eq 11/,
+      'and pin the count, so migration 060 would fail this step rather than riding along',
+    );
+    // …and the pre-060 boundary (R7-C1 §8): 059 included, 060 withheld, count pinned.
+    assert.match(
+      WORKFLOW,
+      /0\[0-4\]\*\|05\[0-9\]\*\) cp "\$f" "\$PRE060\/" ;;/,
+      'the pre-060 chain must copy 000-059 and withhold everything numbered 060 or above',
+    );
+    assert.match(
+      WORKFLOW,
+      /test "\$\(ls -1 "\$PRE060" \| wc -l\)" -eq 12/,
+      'and pin the count at twelve, so migration 061 would fail this step rather than riding along',
+    );
+    // The 060 acceptance-precheck, after-060 and post-060 steps gate on their JSON.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/acceptance-prechecks\.json/,
+      'the 060 acceptance-precheck step must gate on zero failed probes',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/identity-post-060\.json/,
+      'the post-060 phase must gate on its own JSON verdict',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/after-060-activity\.json/,
+      'the after-060 stage must gate on its own JSON verdict',
+    );
+    // FBL-020-R7-C1 §2 — the app-start step proves the production fail-closed both
+    // ways: it refuses an owner credential and boots as the app login.
+    assert.match(
+      WORKFLOW,
+      /Refusing to start/,
+      'the app-start step must prove the production owner-credential refusal',
+    );
+    // The precheck-refusal and post-059 steps must GATE on their JSON rather than
+    // merely producing it.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/precheck-refusals\.json/,
+      'the precheck-refusal step must gate on zero failed probes',
+    );
+    // FBL-020-R7-C2 §4 — the fifth representative fixture: 057's tenant-mismatch
+    // precheck is OBSERVED refusing on a copy of the pre-057 database.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/precheck-refusals-057\.json/,
+      'the 057 precheck-refusal step must gate on zero failed probes',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q '"result": "OK"' artifacts\/identity-post-059\.json/,
+      'the post-059 phase must gate on its own JSON verdict',
+    );
+    // FBL-020-R7-C2 §1 — startup role switching is REMOVED: the after-059 stage
+    // provisions a genuine ephemeral login IN ROLE dealership_runtime instead of
+    // dressing the owner in a -c role= switch, and the production-start step
+    // proves an owner URL plus DATABASE_RUNTIME_ROLE fails startup.
+    assert.doesNotMatch(
+      WORKFLOW,
+      /DATABASE_RUNTIME_ROLE=dealership_runtime \\\n\s+npx tsx/,
+      'no drill stage may reintroduce startup role switching for the shipped engine',
+    );
+    assert.match(
+      WORKFLOW,
+      /CREATE ROLE drill_runtime_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS IN ROLE dealership_runtime/,
+      'the after-059 stage must run as a genuine non-owner login in the runtime role',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q 'DATABASE_RUNTIME_ROLE is no longer supported' artifacts\/owner-role-boot\.log/,
+      'the production-start step must prove owner URL + DATABASE_RUNTIME_ROLE fails startup',
     );
     // A step that merely PRINTS a failure is not a gate.
     assert.ok(WORKFLOW.includes('"controls_failed": 0'), 'a failed control must fail the job');

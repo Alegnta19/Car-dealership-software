@@ -87,10 +87,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, readRuntimePosture, runtimePostureViolations } from '@dealer/database';
+import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
   createActionCatalog,
+  createOrganizationUnit,
   createPolicyEngine,
   createSession,
   grantRole,
@@ -730,6 +732,426 @@ async function afterMigration058(outPath: string | undefined, logPath: string | 
   if (result !== 'OK') process.exitCode = 1;
 }
 
+/**
+ * STAGE `after-059` — THE SHIPPED ENGINE, AS THE RUNTIME ROLE, AGAINST 059.
+ *
+ * FBL-020-R7 §4.4's half of the drill: after 059 is applied on the used database,
+ * the CURRENT writer must still be the thing that satisfies the new rules — not a
+ * probe. This stage therefore drives `createPolicyEngine().decide()` on a REAL
+ * Fixed Ops resource, with THE REAL resolver (`resolveServiceResourceScope`, which
+ * now reads migration 059's `resource_org_leaf` registry), and it does so AS THE
+ * RUNTIME ROLE'S PRIVILEGES: FBL-020-R7-C2 §1 removed startup role switching, so
+ * the process is started with DATABASE_URL pointing at an EPHEMERAL NON-OWNER
+ * LOGIN the CI stage provisions `IN ROLE dealership_runtime` (migration 060's
+ * dealership_app does not exist yet at 059 — that login takes over at
+ * after-060). Every statement here runs with exactly the runtime role's
+ * privileges — the ones that CANNOT write the normalized child table (§3.7).
+ * It asserts:
+ *
+ *   1. the connection GENUINELY carries the runtime posture: a member of
+ *      dealership_runtime, session_user = current_user, no superuser, no
+ *      membership in the evidence owner, no INSERT on the normalized child —
+ *      so the stage cannot silently prove superuser behavior;
+ *   2. the decision is an ALLOW at `evidence_version` 4 — the DEFAULT the schema
+ *      now owns, on an INSERT that deliberately omits the column;
+ *   3. the persisted `resource_rooftop_id` equals the database's OWN resolution of
+ *      the resource — the §3.4 snapshot, written by the trigger, not the caller;
+ *   4. its recorded `auth_time` still EQUALS the named session's current value;
+ *   5. the matched-binding array was NORMALIZED into child rows even though the
+ *      writing role holds no INSERT on that table — §3.7's database-owned
+ *      SECURITY DEFINER path, exercised by the production writer on the upgraded
+ *      database.
+ */
+async function afterMigration059(outPath: string | undefined, logPath: string | undefined) {
+  const lines: string[] = [];
+  const say = (text: string): void => {
+    lines.push(text);
+    console.log(text);
+  };
+
+  const has059Trigger = await scalar(
+    `SELECT COUNT(*)::int AS n FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = 'trg_policy_decisions_v4_structure'`,
+  );
+  if (has059Trigger !== 1) {
+    throw new Error(
+      'after-059 activity refused: trg_policy_decisions_v4_structure is absent, so migration ' +
+        '059 has not been applied and there is nothing for this stage to exercise',
+    );
+  }
+
+  const who = (
+    await query(
+      `SELECT session_user AS s, current_user AS c,
+              pg_has_role(current_user, 'dealership_runtime', 'MEMBER') AS runtime_member,
+              (SELECT rolsuper FROM pg_roles WHERE rolname = session_user) AS is_super,
+              pg_has_role(session_user, 'dealership_evidence_owner', 'MEMBER') AS owner_member,
+              has_table_privilege(current_user, 'policy_decision_matched_bindings',
+                                  'INSERT') AS child_insert`,
+    )
+  ).rows[0] as Record<string, unknown>;
+  if (
+    String(who.s) !== String(who.c) ||
+    who.runtime_member !== true ||
+    who.is_super === true ||
+    who.owner_member === true ||
+    who.child_insert === true
+  ) {
+    throw new Error(
+      `after-059 activity refused: connected as session_user=${String(who.s)} ` +
+        `current_user=${String(who.c)} (runtime_member=${String(who.runtime_member)}, ` +
+        `superuser=${String(who.is_super)}, evidence_owner_member=${String(who.owner_member)}, ` +
+        `child_insert=${String(who.child_insert)}) — this stage exists to prove the ` +
+        'PRODUCTION privileges write v4 evidence, so it must run as a genuine non-owner ' +
+        'login that is a member of dealership_runtime and of nothing more (FBL-020-R7-C2 §1 ' +
+        'removed startup role switching; the CI stage provisions an ephemeral login for this)',
+    );
+  }
+  say(`after-059 activity: connected as ${String(who.s)} (member of dealership_runtime)`);
+
+  const actor = (
+    await query(
+      `SELECT ul.user_link_id, ul.tenant_id, s.session_id
+       FROM user_links ul
+       JOIN identity_sessions s ON s.user_link_id = ul.user_link_id
+      WHERE ul.provider_user_id LIKE 'user_post057_%' AND ul.status = 'activated'
+        AND s.revoked_at IS NULL AND s.expires_at > NOW()
+      ORDER BY s.issued_at DESC LIMIT 1`,
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (actor.length !== 1) {
+    throw new Error(
+      'after-059 activity refused: the `between` stage left no live session for its ' +
+        'administrator, so the earlier drill stages did not run against this database',
+    );
+  }
+  const userLinkId = String((actor[0] as Record<string, unknown>).user_link_id);
+  const tenantId = String((actor[0] as Record<string, unknown>).tenant_id);
+  const sessionId = String((actor[0] as Record<string, unknown>).session_id);
+
+  // A REAL Fixed Ops resource of this tenant, and the rooftop the DATABASE says
+  // it lives under — read through the same one registry the trigger uses.
+  //
+  // The drill's legacy Fixed Ops seed lives in the RETAINED tenant, which 055
+  // correctly kept at `pending_configuration` — truthful history, but a dead
+  // chain by §3.5, so nothing in it can anchor a version-4 resource ALLOW. The
+  // resource is therefore established in the drill's own ACTIVE tenant, through
+  // the SAME attributed organization mutations production uses (each created,
+  // audited and versioned by the between-stage administrator), plus one Fixed
+  // Ops repair order seeded the way every Fixed Ops row in this drill is seeded.
+  // Idempotent: a re-run finds the rows the first run left.
+  let ro = (
+    await query(
+      `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
+        ORDER BY ro_id LIMIT 1`,
+      [tenantId],
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (ro.length === 0) {
+    const group = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'dealer_group',
+      parentId: tenantId,
+      name: 'R7 Drill Group',
+      status: 'active',
+    });
+    const entity = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'legal_entity',
+      parentId: group.unitId,
+      name: 'R7 Drill Entity LLC',
+      status: 'active',
+    });
+    const rooftop = await createOrganizationUnit({
+      actingUserLinkId: userLinkId,
+      tenantId,
+      level: 'rooftop',
+      parentId: entity.unitId,
+      name: 'R7 Drill Rooftop',
+      status: 'active',
+    });
+    await query(
+      `INSERT INTO repair_orders
+         (ro_id, tenant_id, location_id, appointment_id, mdm_customer_id, mdm_vehicle_id, status)
+       VALUES ($1, $2, $3, NULL, $4, $5, 'checked_in')`,
+      [randomUUID(), tenantId, rooftop.unitId, randomUUID(), randomUUID()],
+    );
+    say('after-059 activity: organization chain and repair order established in the drill tenant');
+    ro = (
+      await query(
+        `SELECT ro_id, location_id FROM repair_orders WHERE tenant_id = $1
+          ORDER BY ro_id LIMIT 1`,
+        [tenantId],
+      )
+    ).rows as Array<Record<string, unknown>>;
+  }
+  if (ro.length !== 1) {
+    throw new Error(
+      'after-059 activity refused: no repair order for the drill tenant even after the ' +
+        'stage established one — the §3.4 resource path cannot be exercised',
+    );
+  }
+  const roId = String((ro[0] as Record<string, unknown>).ro_id);
+  const roRooftop = String((ro[0] as Record<string, unknown>).location_id);
+
+  const engine = createPolicyEngine({
+    catalog: createActionCatalog([
+      {
+        action: 'service.ro.view',
+        description: 'read a repair order',
+        resourceType: 'repair_order',
+        allowedRoles: ['tenant_admin'],
+      },
+    ]),
+    // THE REAL RESOLVER — the one production wires in — which now resolves
+    // through migration 059's `resource_org_leaf`, the same authority the
+    // evidence trigger validates the snapshot against.
+    resolveResourceScope: resolveServiceResourceScope,
+  });
+  const outcome = await engine.decide({
+    actor: { userLinkId, actorScope: 'dealership', tenantId },
+    action: 'service.ro.view',
+    sessionId,
+    resource: { type: 'repair_order', id: roId },
+  });
+
+  const failures: string[] = [];
+  if (outcome.decision !== 'allow') {
+    failures.push(
+      `the engine returned ${outcome.decision} (${outcome.reasonCode}) after 059 — a ` +
+        'migration that broke ordinary authorization must not pass this drill',
+    );
+  }
+  const written = (
+    await query(
+      `SELECT d.evidence_version::int AS evidence_version,
+              d.resource_rooftop_id::text AS resource_rooftop_id,
+              (d.auth_time = s.auth_time) AS binds_its_session,
+              (d.session_id = $2) AS names_the_session,
+              cardinality(d.matched_role_binding_ids)::int AS array_len,
+              (SELECT COUNT(*)::int FROM policy_decision_matched_bindings c
+                WHERE c.decision_id = d.decision_id) AS normalized_rows
+       FROM policy_decisions d JOIN identity_sessions s ON s.session_id = d.session_id
+      WHERE d.decision_id = $1`,
+      [outcome.decisionId, sessionId],
+    )
+  ).rows as Array<Record<string, unknown>>;
+  if (written.length !== 1) {
+    failures.push('the decision the engine reported is not readable beside its session');
+  } else {
+    const row = written[0] as Record<string, unknown>;
+    if (Number(row.evidence_version) !== 4) {
+      failures.push(
+        `the engine wrote evidence_version ${String(row.evidence_version)}; after 059 the ` +
+          'schema DEFAULT is 4 and the writer omits the column, so anything else means the ' +
+          'writer and the schema disagree about what current evidence is',
+      );
+    }
+    if (String(row.resource_rooftop_id) !== roRooftop) {
+      failures.push(
+        `the decision's resource_rooftop_id is ${String(row.resource_rooftop_id)}, and the ` +
+          `database's own resolution of the resource is ${roRooftop} — the §3.4 snapshot must ` +
+          'be the validated leaf',
+      );
+    }
+    if (row.names_the_session !== true) {
+      failures.push('the engine did not record the session the request presented');
+    }
+    if (row.binds_its_session !== true) {
+      failures.push(
+        'the engine recorded an authentication time that is NOT its named session’s current ' +
+          'one — §3.1 must hold for the v4 writer exactly as it did for v3',
+      );
+    }
+    if (Number(row.array_len) < 1) {
+      failures.push('the ALLOW claims no matched binding, so §3.7’s path was not exercised');
+    } else if (Number(row.normalized_rows) !== Number(row.array_len)) {
+      failures.push(
+        `the array names ${String(row.array_len)} binding(s) but ${String(row.normalized_rows)} ` +
+          'normalized child row(s) exist — the SECURITY DEFINER normalization did not run for ' +
+          'the runtime role, so §3.7’s database-owned write path is broken',
+      );
+    }
+  }
+
+  const result = failures.length === 0 ? 'OK' : 'FAILED';
+  for (const failure of failures) say('after-059 activity FAILURE: ' + failure);
+  const counts = await census();
+  say(
+    `after-059 activity: the shipped engine wrote decision ${outcome.decisionId} ` +
+      `(${outcome.decision}/${outcome.reasonCode}) as dealership_runtime; versions now ` +
+      `${JSON.stringify(counts.decisions_by_evidence_version)}`,
+  );
+  say(`after-059 activity result: ${result}`);
+
+  write(
+    outPath,
+    logPath,
+    {
+      generator: 'scripts/upgrade-post-057-activity.ts',
+      order: 'FBL-020-R7 §4.4',
+      stage: 'after-059 (the shipped engine, as the runtime role, against 059)',
+      tenant_id: tenantId,
+      session_id: sessionId,
+      decision_id: outcome.decisionId,
+      decision: outcome.decision,
+      reason_code: outcome.reasonCode,
+      resource_id: roId,
+      resource_rooftop_id: roRooftop,
+      census: counts,
+      failures,
+      result,
+    },
+    lines,
+  );
+  if (result !== 'OK') process.exitCode = 1;
+}
+
+/**
+ * STAGE `after-060` — THE REAL dealership_app LOGIN, AGAINST THE UPGRADED DATABASE.
+ *
+ * FBL-020-R7-C1 §2's drill half: run with DATABASE_URL pointing at the migration
+ * 060 `dealership_app` LOGIN role (a genuine non-owner login, not a superuser
+ * impersonating one) and prove, on the upgraded database, that the least-
+ * privilege runtime posture holds AND that this role can still record a
+ * decision. It asserts:
+ *
+ *   1. current_user IS dealership_app (the stage really ran as the app login);
+ *   2. runtimePostureViolations is empty — session_user equals current_user,
+ *      non-super, cannot assume ANY actual owner, cannot write the ledger in
+ *      any verb, cannot INSERT the normalized child;
+ *   3. it CAN insert a decision row (a system DENY — the parent INSERT
+ *      privilege the application needs), and (FBL-020-R7-C2 §4) the SAME row
+ *      as a system ALLOW is REFUSED — the ordinary runtime login cannot select
+ *      the system lane;
+ *   4. a DIRECT child-table INSERT is refused with SQLSTATE 42501, by the
+ *      privilege system rather than a forgeable marker.
+ */
+async function afterMigration060(outPath: string | undefined, logPath: string | undefined) {
+  const lines: string[] = [];
+  const say = (t: string): void => {
+    lines.push(t);
+    console.log(t);
+  };
+  const failures: string[] = [];
+
+  const posture = await readRuntimePosture();
+  if (posture.currentUser !== 'dealership_app') {
+    failures.push(
+      `after-060 must run as dealership_app; connected as ${posture.currentUser}. Set ` +
+        'DATABASE_URL to the dealership_app login URL for this stage.',
+    );
+  }
+  for (const v of runtimePostureViolations(posture)) failures.push(v);
+  say(`after-060 activity: connected as ${posture.currentUser}`);
+
+  // (3) the app role records a decision row (a system DENY — denies carry no
+  // authority and no attribution anyone relies on, so they prove the parent
+  // INSERT privilege the application needs without touching the system-ALLOW
+  // lane FBL-020-R7-C2 §4 closes below).
+  // An ACTIVE tenant with an effective chain (the between-stage's), not the
+  // legacy pending_configuration tenant — 059's v4 scope check refuses a
+  // decision recorded at a scope that is not effective at the write instant.
+  const tenantId = await query(
+    `SELECT ul.tenant_id AS tenant_id FROM user_links ul
+       JOIN tenants t ON t.tenant_id = ul.tenant_id
+      WHERE ul.actor_scope = 'dealership' AND ul.status = 'activated'
+        AND t.status = 'active'
+      ORDER BY ul.tenant_id LIMIT 1`,
+  );
+  const tid = (tenantId.rows[0] as { tenant_id: string } | undefined)?.tenant_id;
+  if (tid === undefined) {
+    failures.push('after-060: the drill database holds no tenant to record a decision for');
+  } else {
+    try {
+      await query(
+        `INSERT INTO policy_decisions
+           (tenant_id, actor_type, action, decision, reason_code, policy_version,
+            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+         VALUES ($1, 'system', 'system.retention.sweep', 'deny', 'DENY_SYSTEM_POLICY',
+                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+        [tid],
+      );
+      say('after-060 activity: the app login recorded a decision row (system deny)');
+    } catch (err) {
+      failures.push(
+        `after-060: the app login could not record a decision: ${(err as Error).message}`,
+      );
+    }
+
+    // (3b) FBL-020-R7-C2 §4 — the SAME row as an ALLOW must refuse: the
+    // ordinary runtime login does not get to select actor_type='system' and
+    // shed actor and credential attribution. This is the C2 §4 proof on the
+    // GENUINE app login, against the upgraded database.
+    let systemAllowRefusal: { code?: string; message?: string } | null = null;
+    try {
+      await query(
+        `INSERT INTO policy_decisions
+           (tenant_id, actor_type, action, decision, reason_code, policy_version,
+            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+         VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
+                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+        [tid],
+      );
+      failures.push(
+        'after-060: the app login WROTE a system ALLOW — the ordinary runtime login must ' +
+          'not be able to select the system lane (FBL-020-R7-C2 §4)',
+      );
+    } catch (err) {
+      systemAllowRefusal = err as { code?: string; message?: string };
+    }
+    if (systemAllowRefusal !== null) {
+      if (
+        systemAllowRefusal.code === 'P0001' &&
+        (systemAllowRefusal.message ?? '').includes('a system ALLOW may be written only by')
+      ) {
+        say('after-060 activity: a system ALLOW as the app login is refused (P0001)');
+      } else {
+        failures.push(
+          'after-060: the system ALLOW was refused, but not by the §4 writer rule: ' +
+            `code=${String(systemAllowRefusal.code)} message=${String(systemAllowRefusal.message)}`,
+        );
+      }
+    }
+  }
+
+  // (4) the app login holds NO INSERT on the normalized child table — the
+  // posture read above establishes this on the real connection. The ACTUAL
+  // 42501 refusal of a direct child insert (including with a forged GUC) is
+  // proven by the genuine runtime role in
+  // tests/identity-evidence-reconstruction.test.ts; re-attempting the write
+  // here would only re-prove the privilege the posture already reports.
+  if (posture.canInsertChildEvidence) {
+    failures.push(
+      'after-060: the app login holds INSERT on the normalized child table — it is not ' +
+        'privilege-fenced from normalized evidence',
+    );
+  } else {
+    say('after-060 activity: the app login holds no INSERT on the normalized child table');
+  }
+
+  const result = failures.length === 0 ? 'OK' : 'FAILED';
+  for (const f of failures) say('after-060 activity FAILURE: ' + f);
+  say(`after-060 activity result: ${result}`);
+  write(
+    outPath,
+    logPath,
+    {
+      generator: 'scripts/upgrade-post-057-activity.ts',
+      order: 'FBL-020-R7-C1 §2',
+      stage: 'after-060 (the real dealership_app login against the upgraded database)',
+      db_user: posture.currentUser,
+      posture,
+      failures,
+      result,
+    },
+    lines,
+  );
+  if (result !== 'OK') process.exitCode = 1;
+}
+
 function write(
   outPath: string | undefined,
   logPath: string | undefined,
@@ -752,14 +1174,27 @@ function write(
  * refuses for `--phase`.
  */
 const stage = arg('--stage') ?? 'between';
-if (stage !== 'between' && stage !== 'after-058') {
+if (
+  stage !== 'between' &&
+  stage !== 'after-058' &&
+  stage !== 'after-059' &&
+  stage !== 'after-060'
+) {
   console.error(
-    'usage: upgrade-post-057-activity.ts [--stage=between|after-058] [--out f] [--log f]',
+    'usage: upgrade-post-057-activity.ts ' +
+      '[--stage=between|after-058|after-059|after-060] [--out f] [--log f]',
   );
   process.exit(2);
 }
 
-(stage === 'between' ? main() : afterMigration058(arg('--out'), arg('--log')))
+(stage === 'between'
+  ? main()
+  : stage === 'after-058'
+    ? afterMigration058(arg('--out'), arg('--log'))
+    : stage === 'after-059'
+      ? afterMigration059(arg('--out'), arg('--log'))
+      : afterMigration060(arg('--out'), arg('--log'))
+)
   .catch((err) => {
     console.error(err);
     process.exitCode = 1;

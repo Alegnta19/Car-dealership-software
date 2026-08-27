@@ -1,8 +1,8 @@
 {
-  "order": "FBL-020-R6 §4.4/§4.5",
-  "purpose": "The ONE EXACT FINAL STATE of this delivery: which commits exist, which exact-SHA ci.yml run measured which of them with what per-job conclusions, what the working tree is, whether the one-commit budget was kept, and whether this revision may be submitted as complete. FBL-020-R5 was rejected because the checked-in documents described a state that had stopped being true: the delivery report named a red HEAD that was no longer HEAD, KNOWN-LIMITATIONS repeated that no CI run existed, the requirement map still awaited a run that had already happened, and no file in the repository recorded the final commit or its run at all. Every figure gate was green throughout, because a figure gate compares numbers and none of those sentences is a number. This file is the single authority the delivery documents restate, and scripts/check-final-state.ts holds them to it — including the prose.",
+  "order": "FBL-020-R6 §4.4/§4.5, carried forward under FBL-020-R7 §6 as amended by FBL-020-R7-A1, extended by the FBL-020-R7-C1 Targeted Acceptance Correction, and closed under the FBL-020-R7-C2 Final Bounded Closure (SO-001 Version 3.0)",
+  "purpose": "The ONE EXACT FINAL STATE of this delivery: which commits exist, which exact-SHA ci.yml run measured which of them with what per-job conclusions, what the working tree is, what the commit discipline was and is, and whether this revision may be submitted as complete. FBL-020-R5 was rejected because the checked-in documents described a state that had stopped being true; this file is the single authority the delivery documents restate, and scripts/check-final-state.ts holds them to it — including the prose. FBL-020-R7 §6 requires this record to say SUBMITTED FOR REVIEW — NOT ACCEPTED and to claim NO run for the R7 commits themselves: a record cannot name a run that could not exist when its commit was created (FBL-020-R7-A1 §7), so the exact-SHA run for the final head is bound to it by the C2 return message (the final SHA, the exact-SHA CI run link, and the four-row PASS/FAIL checklist — FBL-020-R7-C2 names that, and only that, as the return), not by this file.",
   "acceptance": "NOT_REVIEWED",
-  "generated_by": "FBL-020-R6 §4, from the GitHub REST API (/repos/{owner}/{repo}/actions/runs/{id} and /jobs) and from git in this repository",
+  "generated_by": "FBL-020-R6 §4 originally, extended for FBL-020-R7 §6: run metadata from the GitHub REST API (/repos/{owner}/{repo}/actions/runs/{id} and /jobs) and commit facts from git in this repository",
   "r5_baseline": {
     "sha": "e08af42755fb1127d611249ba3175161b06e9682",
     "subject": "FBL-020-R4: documentation closeout — CI evidence for 2b75d8a",
@@ -343,105 +343,7 @@
         ]
       },
       "what_it_closed": "It was written as the §5 documentation-only closeout and a fixture refused to let it be one. `a commit MISSING from the recorded range is REPORTED — the R5 undercount` stages that defect by dropping a commit from the range and making the record self-consistent at the wrong number, and it computed that number from the LIST LENGTH of the range — which stopped equalling the code-bearing count the moment a documentation-only commit landed inside it. The shortened list's length then happened to equal what the gate expects, so the staged record looked consistent and the budget limb stayed silent. The fixture caught a real weakening rather than a stale expectation, and it now derives the staged figure from the code_bearing flags."
-    }
-  ],
-  "evidence_commit_sha": "f113fad7c0487aada4773612322208714661a52c",
-  "repository_head_relation": "HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT",
-  "repository_head_relation_meaning": "The evidence commit is f113fad, the last code-bearing commit, and run 32474578625 measured exactly it with 4 of 4 jobs successful. What sits on top is DOCUMENTATION-ONLY: this closeout, and any earlier one, each carrying no code and each recorded in commits_ahead_of_the_evidence_commit with its own run — except the one containing this record, which no record can name by SHA. How many there are is not stated here; the list is the answer. The relation is AHEAD rather than HEAD_IS_THE_EVIDENCE_COMMIT for the reason this field exists: a run cannot exist for a commit before the commit does. In fact HEAD_IS_THE_EVIDENCE_COMMIT can never be true of a COMMITTED record — the record names the evidence commit, so its own commit is strictly later — and a stand-in that modelled otherwise is what made run 32462910851 red.",
-  "working_tree": {
-    "state": "COMMITTED_AS_THE_EVIDENCE_COMMIT",
-    "what_is_committed": "FBL-020-R6 sections 1 through 4",
-    "ci_run_for_this_working_tree": null,
-    "how_it_was_transferred": "the FBL-020-R6 order instructed the implementation not to commit and not to push. The operator subsequently authorised a different transfer path — committing into the repository — in order to place the governing Version 2.0 blueprint where a reader of this tree can open it. The R6 work was committed under that authorisation.",
-    "what_measured_it": "The run recorded against evidence_commit_sha in commits_in_the_measured_range measured it, with 4 of 4 jobs successful. It is deliberately NOT restated here: this field described run 32459475019 at 8444240 and went stale twice as the evidence commit moved, which is the defect this whole record exists to stop. Earlier attempts at the same work FAILED and are kept, not dropped — 32450787623 at 0fe4ae7 and 32452596992 at 242e24a, plus 32462910851 at the documentation-only d0b9924 — each with its per-job conclusions and its cause. A green later attempt does not un-fail an earlier one.",
-    "how_the_r6_work_was_verified_besides": "every gate was ALSO executed locally against a real PostgreSQL 16 on 127.0.0.1:55434, including check-final-state in a full checkout, in a real --depth 1 clone and in a tree copy with no .git. A local run is not a CI run and is not offered as one."
-  },
-  "commit_budget": {
-    "allowed": 1,
-    "used": 9,
-    "failed_ci": 4,
-    "verdict": "VIOLATED",
-    "disclosure_does_not_cure_the_violation": true,
-    "per_order": {
-      "FBL-020-R5": {
-        "allowed": 1,
-        "used": 3,
-        "failed_ci": 2,
-        "verdict": "VIOLATED"
-      },
-      "FBL-020-R6": {
-        "allowed": 1,
-        "used": 6,
-        "failed_ci": 2,
-        "verdict": "VIOLATED"
-      }
     },
-    "note": "Each order allows ONE code-bearing commit plus an optional documentation-only closeout. R5 used three and R6 has used six, so the budget is breached under BOTH: nine CODE-BEARING commits stand inside r5_baseline..evidence_commit, and four of the nine failed their own exact-SHA run. THE RANGE HOLDS TEN COMMITS AND ONLY NINE OF THEM ARE COUNTED. d0b9924 is documentation-only — five documents, no code — and a budget on code-bearing commits is not spent by a commit that carries none. Its run was RED and is recorded in full beside it; charging it to the budget would overstate the breach, and a budget figure wrong in the direction of severity is still wrong. That is also why the field is named commits_in_the_measured_range rather than code_bearing_commits: the gate checks it against git rev-list --first-parent so it must hold EVERY commit in the range, and code_bearing decides which ones count. THE AGGREGATE ONCE STOPPED AT THREE, and that was an undercount produced by the record's own shape: the range ends at the evidence commit, so every commit made after the last GREEN run fell outside it and was recorded nowhere — the same 'lists fewer commits than the history holds' defect R5 was rejected for, reproduced inside the field built to disclose it. commits_ahead_of_the_evidence_commit closed it and the gate checks that list against git in both directions. Each successor commit exists to close a failure rather than to add scope — that is the explanation and it is not a defence, and the architect has ruled that disclosure does not cure the breach. R6 §5's verbatim text is NOT held in this repository AT ALL: docs/orders/FBL-020-R6.md carries §4.3 verbatim and a clause register running §1.1-§4.6 plus C1-C8, and §5 appears in NEITHER. This sentence used to say that Part 2 marks §5 derived; it does not, and the delivery report §1.1 said so correctly while this record said otherwise. The budget is therefore applied on the same terms as R5 §5 and is reported, not construed — and that this repository cannot quote the clause whose budget it applies is stated outright rather than mis-cited."
-  },
-  "submission": {
-    "status": "NOT SUBMITTABLE AS COMPLETE",
-    "blocking": [
-      "SECTION 3.1 IS OPEN, AND IT IS OPEN ON THE ONE CLAUSE THIS REPOSITORY CANNOT OBSERVE. §3.1 requires the governing Version 2.0 blueprint to be present in BOTH designated reviewer project copies. What this repository CAN do, it has done: the bytes are committed at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, tracked by git, and filename, byte length, SHA-256, title, version and governing §14.3 are each VERIFIED FROM THOSE BYTES by tests/delivery-documentation.test.ts — so the document is reviewable by anyone who can read this repository. What it CANNOT do is see the two designated copies outside it, and it asserts nothing about them in either direction. The clause is therefore OPEN because it is unobservable from this side, not because anything here has closed it, and whether the committed bytes satisfy the \"both project copies\" wording is the reviewer's decision. An earlier revision of this entry opened with the words \"the supply obligation is DISCHARGED AS FAR AS THIS REPOSITORY CAN DISCHARGE IT\", which read as a discharge inside the list of things that BLOCK submission; the substance is unchanged and the framing is corrected.",
-      "LIVE WORKOS CERTIFICATION IS NOT DISCHARGED: no live provider credentials exist in this environment.",
-      "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
-      "The one-commit budget was VIOLATED under BOTH orders — nine code-bearing commits where each order allowed one, four of them red. Disclosure does not cure it."
-    ],
-    "status_reason": "FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN, and §3.1 is open — see blocking[0]. Alongside it: live WorkOS certification is undischarged, the census is reported rather than accepted, and the commit budget was violated under both orders. The CI blocker is GONE: run 32474578625 measured the FBL-020-R6 work itself with 4 of 4 jobs successful, which is evidence for the controls that run exercised and is not acceptance of the order. An earlier revision of this field said \"Section 3.1 is not among the reasons\", which contradicted the sentence this record REQUIRES every governed document to carry; that contradiction is corrected here rather than left for a reader to find."
-  },
-  "blueprint_section_3_1": {
-    "status": "OPEN",
-    "what_changed_under_fbl_020_r6": "The operator COMMITTED the governing Version 2.0 bytes into this repository at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx. Three sends had been made through the attachment channel and what became of them is not observable from this repository; a commit is a transfer this repository can verify. Which document governs, and what Version 2.0 section 14.3 says in it, are therefore checkable from this repository.",
-    "in_this_repository": {
-      "file": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
-      "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
-      "bytes": 95325,
-      "file_sha256": "556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
-      "version_label": "Version 2.0",
-      "section_14_3": "14.3 First active instruction — FBL-020-R2",
-      "verification": "verified-from-repository-bytes",
-      "verified_by": ["tests/delivery-documentation.test.ts", "scripts/check-published-figures.ts"]
-    },
-    "the_second_anchor_still_checked_in": {
-      "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
-      "bytes": 88931,
-      "file_sha256": "d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9",
-      "version_label": "Version 1.0",
-      "section_14_3": "14.3 Work Order FBL-000 — Reproducible Baseline"
-    },
-    "why_it_is_still_open": "Section 3.1 requires the Version 2.0 bytes in BOTH designated project copies. Those copies are not in this repository and cannot be read from it, so the clause is open because it is unobservable from this side — not because it has been answered either way.",
-    "what_must_be_supplied": "the governing Version 2.0 blueprint, into BOTH designated project copies.",
-    "what_must_be_verified_on_arrival": [
-      "filename: Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
-      "byte length: 95,325",
-      "sha256: 556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
-      "title line 1: Dealership Management & Sales Cloud",
-      "title line 2: Master Architecture Blueprint and Forward-Only Roadmap",
-      "version line: Version 2.0  |  August 4, 2026  |  Governing management-first baseline",
-      "governing section §14.3, reading: 14.3 First active instruction — FBL-020-R2"
-    ],
-    "what_this_repository_cannot_do": "THIS REPOSITORY CANNOT WRITE TO THE REVIEWER PROJECT RECORD, and it cannot observe what that record contains. It therefore states nothing about what those two copies hold, in either direction, and no gate here may assert it."
-  },
-  "withdrawn_claims": [
-    "NO CI RUN EXISTS FOR THIS TREE",
-    "R5 CODE-BEARING COMMIT: 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee. It is the current HEAD and it is a RED head, not a submission.",
-    "TWO CODE-BEARING COMMITS HAVE BEEN PUSHED AND BOTH FAILED THEIR EXACT-SHA CI RUN.",
-    "THE R5 CI RUN IS NOT DISCHARGED.",
-    "the report's Verification evidence section records local runs on this tree, and no CI run exists for it",
-    "STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT",
-    "The order forbids committing, so no commit exists to measure",
-    "that runner carries no mutation against migration 057 or any policy-evidence constraint",
-    "The operator has supplied the Version 2.0 bytes to the reviewer twice.",
-    "THE VERSION 2.0 BLUEPRINT BYTES WERE NOT MATERIALIZED IN THE REVIEW WORKSPACE, AND THE ONLY ACCESSIBLE PROJECT COPIES REMAIN THE VERSION 1.0 FILE",
-    "NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT",
-    "The R6 order forbids committing and pushing",
-    "No CI run covers this working tree",
-    "UNVERIFIED FOR THE UNCOMMITTED FBL-020-R6 WORK ON TOP OF IT"
-  ],
-  "this_commit": {
-    "is_code_bearing": false,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit is the FBL-020-R6 §5 DOCUMENTATION-ONLY closeout — documents and this record, no code, no test, no migration — so it is NOT code-bearing and does not move commit_budget.used. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown. The check exists because the claim was once made falsely — a closeout authored as documentation-only and committed carrying scripts/ and tests/ — and nothing looked. The declaration still drives the arithmetic, because a shallow clone has no parent to diff against and the tree copy with no .git that scripts/mutation-kill.ts runs its batteries inside has nothing at all, so the budget comes out the same in every environment and is bound to reality wherever reality is readable. LIKE repository_head_relation, BOTH DESCRIBE THE COMMITTED STATE: run in the working tree before this closeout exists, the cross-check reads the paths of whatever is currently HEAD — the gate being right about the wrong commit — and the head relation reads the tree without this commit in it. Neither arises in CI, where a run checks out the commit under test. The working procedure is to re-run the gate and the documentation battery AFTER committing and BEFORE pushing, and the exact-SHA run recorded against this closeout is what a reader should check."
-  },
-  "commits_ahead_of_the_evidence_commit": [
     {
       "sha": "6eed39b624caf83724db1186b534b3e86015fa2e",
       "short": "6eed39b",
@@ -573,6 +475,407 @@
         ]
       },
       "what_it_is": "The documentation-only closeout carrying the FOURTH independent adversarial audit's 12 confirmed corrections — including the governing order still being named FBL-020-R5 in three documents, and a floor figure set by the ACTIVE order that the floor table omitted. Its own exact-SHA run was GREEN, 4 of 4 jobs. It carries no code and is not counted against the budget."
+    },
+    {
+      "sha": "ee5eb6b00ef91542f3129fa9957fc22d3ce51f0f",
+      "short": "ee5eb6b",
+      "subject": "FBL-020-R6 §5: the fifth audit — two survivors, and the loop is dry",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32493409959,
+        "run_number": 64,
+        "run_attempt": 1,
+        "head_sha": "ee5eb6b00ef91542f3129fa9957fc22d3ce51f0f",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          }
+        ]
+      }
+    }
+  ],
+  "evidence_commit_sha": "ee5eb6b00ef91542f3129fa9957fc22d3ce51f0f",
+  "repository_head_relation": "HEAD_IS_AHEAD_OF_THE_EVIDENCE_COMMIT",
+  "repository_head_relation_meaning": "The evidence commit is f113fad, the last code-bearing commit, and run 32474578625 measured exactly it with 4 of 4 jobs successful. What sits on top is DOCUMENTATION-ONLY: this closeout, and any earlier one, each carrying no code and each recorded in commits_ahead_of_the_evidence_commit with its own run — except the one containing this record, which no record can name by SHA. How many there are is not stated here; the list is the answer. The relation is AHEAD rather than HEAD_IS_THE_EVIDENCE_COMMIT for the reason this field exists: a run cannot exist for a commit before the commit does. In fact HEAD_IS_THE_EVIDENCE_COMMIT can never be true of a COMMITTED record — the record names the evidence commit, so its own commit is strictly later — and a stand-in that modelled otherwise is what made run 32462910851 red.",
+  "working_tree": {
+    "state": "COMMITTED_AHEAD_OF_THE_EVIDENCE_COMMIT",
+    "what_is_committed": "FBL-020-R7 sections 2 through 6 as amended by FBL-020-R7-A1, the FBL-020-R7-C1 acceptance corrections (migration 060), and the FBL-020-R7-C2 Final Bounded Closure: runtime identity (no startup role switching, dual-identity posture, the system-ALLOW privilege gate), control-plane payload refusal and exact support-authority revalidation, approval consumption coherence with absorbing terminal states, and the hard-stop upgrade prechecks with five representative refusal probes",
+    "ci_run_for_this_working_tree": null,
+    "how_it_was_transferred": "FBL-020-R7-A1 §4 restored normal repository use: the R7 work is committed on the fbl-020-r7 branch in ordinary, disclosed, forward-moving commits and pushed with the already-authorized credential, which is scrubbed after each use.",
+    "what_measured_it": "NOTHING YET for the C2 head, and this record does not pretend otherwise: the run recorded against evidence_commit_sha measured the R6 final head (ee5eb6b), the C1 closeout e10f500 is listed above with its own green exact-SHA run 32611508118, and the C2 commits above it are listed with run: null until their own exact-SHA runs exist. FBL-020-R7-C2 places the final commit-to-run binding in the return message (final SHA + exact-SHA CI run link + four-row checklist), because a checked-in record cannot hold a run id that did not exist when its commit was created.",
+    "how_the_r7_work_was_verified_besides": "for the C2 wave, executed locally against a real PostgreSQL 16 on 127.0.0.1:55434: the full battery (725 tests / 69 suites, zero failed, cancelled, skipped or todo; the one red during iteration was the dirty-tree documentation gate that committing resolves), the database-control mutation registry (69 controls and predicates, 69 killed, 0 survivors), the runtime mutation registry (see the return message for the run outcome), all four 060 acceptance-precheck probes and the new 057 tenant-mismatch probe proven refused-as-declared on locally staged pre-060/pre-057 copies, and the runtime-posture battery on the genuine dealership_app login. The populated upgrade drill and fresh/upgraded convergence are exercised by the exact-SHA CI run, as every revision has run them."
+  },
+  "commit_budget": {
+    "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
+    "used": 19,
+    "failed_ci": 4,
+    "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
+    "disclosure_does_not_cure_the_violation": true,
+    "per_order": {
+      "FBL-020-R5": {
+        "allowed": 1,
+        "used": 3,
+        "failed_ci": 2,
+        "verdict": "VIOLATED"
+      },
+      "FBL-020-R6": {
+        "allowed": 1,
+        "used": 6,
+        "failed_ci": 2,
+        "verdict": "VIOLATED"
+      },
+      "FBL-020-R7": {
+        "allowed": "no numeric budget (FBL-020-R7-A1 §4)",
+        "used": 4,
+        "failed_ci": 0,
+        "verdict": "DISCLOSED — every R7 commit is listed above with its run, or with run: null while none exists"
+      },
+      "FBL-020-R7-C1": {
+        "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs R7 and its corrections)",
+        "used": 2,
+        "failed_ci": 0,
+        "verdict": "DISCLOSED — two C1 code commits (202f946, 360165d) are listed above with run: null until their own runs exist. One DOCS-ONLY closeout (37c7662) had a red exact-SHA run 32609309363 at the stale-figure gate; it is listed with that red run in full, but it is not code-bearing, so it moves neither commit_budget.used nor failed_ci — the budget counts code-bearing commits and their failures. FBL-020-R7-A1 §4 removed the numeric ceiling; every commit and every failure is disclosed."
+      },
+      "FBL-020-R7-C2": {
+        "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs R7 and its corrections; FBL-020-R7-C2 supersedes the earlier C2 instruction and sets no budget either)",
+        "used": 4,
+        "failed_ci": 0,
+        "verdict": "DISCLOSED — four C2 code commits (0c54a99, f4a59e1, c16f200, 7088fcd) are listed above with run: null until their own exact-SHA runs exist; the docs-only closeout 1f36bbd is listed with its red run 33109736612 (one job, the quality ratchet, on unformatted C2 files — a docs-only commit, so it moves no budget), and the closeout containing this record can name no SHA of its own"
+      }
+    },
+    "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here."
+  },
+  "submission": {
+    "status": "SUBMITTED FOR REVIEW — NOT ACCEPTED",
+    "blocking": [
+      "ARCHITECT ACCEPTANCE OF FBL-020 IS THE RELEASE GATE (FBL-020-R7-A1 §10): implementation and CI being green is not acceptance, and FBL-030 remains blocked until the architect accepts.",
+      "SECTION 3.1 IS OPEN, AND IT IS OPEN ON THE ONE CLAUSE THIS REPOSITORY CANNOT OBSERVE. §3.1 requires the governing Version 2.0 blueprint to be present in BOTH designated reviewer project copies. What this repository CAN do, it has done: the bytes are committed at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx, tracked by git, and filename, byte length, SHA-256, title, version and governing §14.3 are each VERIFIED FROM THOSE BYTES by tests/delivery-documentation.test.ts — so the document is reviewable by anyone who can read this repository. What it CANNOT do is see the two designated copies outside it, and it asserts nothing about them in either direction. The clause is therefore OPEN because it is unobservable from this side, not because anything here has closed it, and whether the committed bytes satisfy the \"both project copies\" wording is the reviewer's decision. An earlier revision of this entry opened with the words \"the supply obligation is DISCHARGED AS FAR AS THIS REPOSITORY CAN DISCHARGE IT\", which read as a discharge inside the list of things that BLOCK submission; the substance is unchanged and the framing is corrected.",
+      "LIVE WORKOS CERTIFICATION IS NOT DISCHARGED: no live provider credentials exist in this environment.",
+      "THE CENSUS IS REPORTED, NOT ACCEPTED: the operator-environment census that decides the 057/058 branch has not been reviewed.",
+      "The R5/R6 one-commit budgets were VIOLATED as ruled; the ruling and the disclosure stand. R7 commits are governed by FBL-020-R7-A1 §4 and are disclosed in this record."
+    ],
+    "status_reason": "FBL-020-R7, as corrected by FBL-020-R7-C1, IS SUBMITTED FOR REVIEW — NOT ACCEPTED, and ARCHITECT ACCEPTANCE REMAINS THE RELEASE GATE. The R7 candidate fc2f615 was verified genuine (its green run 32520814917 is recorded above) and returned for one bounded acceptance correction; the C1 work is committed above with run: null, and its exact-SHA run is bound by the external return packet once it exists (FBL-020-R7-A1 §7). External blockers are unchanged: §3.1 open, live WorkOS certification undischarged, census reported-not-accepted; FBL-030 stays blocked."
+  },
+  "blueprint_section_3_1": {
+    "status": "OPEN",
+    "what_changed_under_fbl_020_r6": "The operator COMMITTED the governing Version 2.0 bytes into this repository at docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx. Three sends had been made through the attachment channel and what became of them is not observable from this repository; a commit is a transfer this repository can verify. Which document governs, and what Version 2.0 section 14.3 says in it, are therefore checkable from this repository.",
+    "in_this_repository": {
+      "file": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "bytes": 95325,
+      "file_sha256": "556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+      "version_label": "Version 2.0",
+      "section_14_3": "14.3 First active instruction — FBL-020-R2",
+      "verification": "verified-from-repository-bytes",
+      "verified_by": ["tests/delivery-documentation.test.ts", "scripts/check-published-figures.ts"]
+    },
+    "the_second_anchor_still_checked_in": {
+      "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
+      "bytes": 88931,
+      "file_sha256": "d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9",
+      "version_label": "Version 1.0",
+      "section_14_3": "14.3 Work Order FBL-000 — Reproducible Baseline"
+    },
+    "why_it_is_still_open": "Section 3.1 requires the Version 2.0 bytes in BOTH designated project copies. Those copies are not in this repository and cannot be read from it, so the clause is open because it is unobservable from this side — not because it has been answered either way.",
+    "what_must_be_supplied": "the governing Version 2.0 blueprint, into BOTH designated project copies.",
+    "what_must_be_verified_on_arrival": [
+      "filename: Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint.docx",
+      "byte length: 95,325",
+      "sha256: 556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf",
+      "title line 1: Dealership Management & Sales Cloud",
+      "title line 2: Master Architecture Blueprint and Forward-Only Roadmap",
+      "version line: Version 2.0  |  August 4, 2026  |  Governing management-first baseline",
+      "governing section §14.3, reading: 14.3 First active instruction — FBL-020-R2"
+    ],
+    "what_this_repository_cannot_do": "THIS REPOSITORY CANNOT WRITE TO THE REVIEWER PROJECT RECORD, and it cannot observe what that record contains. It therefore states nothing about what those two copies hold, in either direction, and no gate here may assert it."
+  },
+  "withdrawn_claims": [
+    "NO CI RUN EXISTS FOR THIS TREE",
+    "R5 CODE-BEARING COMMIT: 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee. It is the current HEAD and it is a RED head, not a submission.",
+    "TWO CODE-BEARING COMMITS HAVE BEEN PUSHED AND BOTH FAILED THEIR EXACT-SHA CI RUN.",
+    "THE R5 CI RUN IS NOT DISCHARGED.",
+    "the report's Verification evidence section records local runs on this tree, and no CI run exists for it",
+    "STILL UNVERIFIED UNTIL A CI RUN AT THE FINAL HEAD PROVES IT",
+    "The order forbids committing, so no commit exists to measure",
+    "that runner carries no mutation against migration 057 or any policy-evidence constraint",
+    "The operator has supplied the Version 2.0 bytes to the reviewer twice.",
+    "THE VERSION 2.0 BLUEPRINT BYTES WERE NOT MATERIALIZED IN THE REVIEW WORKSPACE, AND THE ONLY ACCESSIBLE PROJECT COPIES REMAIN THE VERSION 1.0 FILE",
+    "NO CI RUN COVERS THE FBL-020-R6 WORKING TREE, WHICH IS UNCOMMITTED ON TOP OF THAT COMMIT",
+    "The R6 order forbids committing and pushing",
+    "No CI run covers this working tree",
+    "UNVERIFIED FOR THE UNCOMMITTED FBL-020-R6 WORK ON TOP OF IT"
+  ],
+  "this_commit": {
+    "is_code_bearing": false,
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit is the FBL-020-R7-C2 closeout that records the C2 figures, digests and this record — documents only, no code, no test, no migration — which FBL-020-R7-A1 §4 expressly permits as a closeout. It is NOT code-bearing and does not move commit_budget.used. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown. Re-run the gate and the documentation battery AFTER committing and BEFORE pushing; the exact-SHA run named in the C2 return message is what a reader should check."
+  },
+  "commits_ahead_of_the_evidence_commit": [
+    {
+      "sha": "931fa924b2311e9dacc64c064b53d5b23e87a039",
+      "short": "931fa92",
+      "subject": "checkpoint: R7 §2 runtime corrections + tests (squashed before push)",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "d43b8889d75e04fccb69b8d389b1ab3672ff74cd",
+      "short": "d43b888",
+      "subject": "R7: integrity closure — migration 059, §3 battery, DB-control mutations, §4 drill",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "969e7fe6b9d9122af7606518d103e7f5f6099ce2",
+      "short": "969e7fe",
+      "subject": "R7: drill green end-to-end, gates reconciled, requirement map, A1 adopted",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "bcef31c45b2ff09425beb3d4f4c4b13f159eb198",
+      "short": "bcef31c",
+      "subject": "FBL-020-R7 §6: documentation closeout — the record names every commit above the baseline",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32520118939,
+        "run_number": 65,
+        "run_attempt": 1,
+        "head_sha": "bcef31c45b2ff09425beb3d4f4c4b13f159eb198",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ],
+        "what_failed": "The battery step alone, and not over any control: the pull_request checkout was the SYNTHETIC MERGE ref, a detached commit whose first-parent walk hides every branch commit from the final-state gate and whose detached HEAD breaks the depth-1-clone fixture. The drill, secret-scan and container jobs were green on this first attempt. Closed by the checkout correction committed directly above this entry."
+      }
+    },
+    {
+      "sha": "595cd8f39420b04aac6e81daf50889727b964e56",
+      "short": "595cd8f",
+      "subject": "R7: CI measures the exact branch head, not the synthetic merge ref",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "fc2f615503394daa6da419edaa5edf71748dbb49",
+      "short": "fc2f615",
+      "subject": "FBL-020-R7 §6: closeout — run 32520118939 disclosed in full, the checkout correction recorded",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32520814917,
+        "run_number": 66,
+        "run_attempt": 1,
+        "head_sha": "fc2f615503394daa6da419edaa5edf71748dbb49",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          }
+        ],
+        "note": "The R7 candidate head. Architect-verified genuine but returned for the bounded FBL-020-R7-C1 acceptance correction, whose commits sit above."
+      }
+    },
+    {
+      "sha": "202f946d8ac69dc451f91df62f6dae896bd5bbf1",
+      "short": "202f946",
+      "subject": "FBL-020-R7-C1: eight bounded acceptance corrections (migration 060)",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "37c7662eaf599d3139cf9ec646c0e156c88e810e",
+      "short": "37c7662",
+      "subject": "FBL-020-R7-C1 §closeout: the record names the C1 correction and its verified predecessor",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32609309363,
+        "run_number": 67,
+        "run_attempt": 1,
+        "head_sha": "37c7662eaf599d3139cf9ec646c0e156c88e810e",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          }
+        ],
+        "note": "The battery and every other gate were green; the one red job failed only at the published-figures step, because the C1 wave grew the battery to 704/69 but left the floor and the run-derived figures at the R7 numbers. 360165d below is the fix."
+      }
+    },
+    {
+      "sha": "360165d8d033c4ce4c273a2673dfee7f0097947c",
+      "short": "360165d",
+      "subject": "FBL-020-R7-C1: raise the test floor to the C1 battery and correct the derived figures",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "e10f5004f9e64a0d771ca82ec7eb3e8de0ee5eb6",
+      "short": "e10f500",
+      "subject": "FBL-020-R7-C1 §closeout: record the floor/figure fix and 37c7662's red run",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 32611508118,
+        "run_number": 68,
+        "run_attempt": 1,
+        "head_sha": "e10f5004f9e64a0d771ca82ec7eb3e8de0ee5eb6",
+        "conclusion": "success",
+        "jobs_total": 4,
+        "jobs_non_success": 0,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      }
+    },
+    {
+      "sha": "0c54a993898f6b1af409712fa9da7fea15a8b7e5",
+      "short": "0c54a99",
+      "subject": "FBL-020-R7-C2: final bounded closure — runtime identity, exact support authority, approval integrity, upgrade preflight",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "f4a59e16552c42b1bf93fccdc5c05e8a36faa7a6",
+      "short": "f4a59e1",
+      "subject": "FBL-020-R7-C2: session-actor probe carries its grant-minting preamble; floor tracks the C2 battery",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "8d2125927294bfc53ef41d41aa21d31ef5179f0f",
+      "short": "8d21259",
+      "subject": "FBL-020-R7-C2 §closeout: the record carries the C2 figures, commits and return shape",
+      "code_bearing": false,
+      "run": null
+    },
+    {
+      "sha": "c16f200b0023df2b6ef488d268e70c6762c0f1e9",
+      "short": "c16f200",
+      "subject": "FBL-020-R7-C2: adversarial-review corrections — superuser-membership posture arm, honest §0 listing, the role-list pin",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "7088fcd483876813143d126c36bcb8aecccf9b87",
+      "short": "7088fcd",
+      "subject": "FBL-020-R7-C2: run 33109736612's ratchet finding — the C2 files take the formatter's shape",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "1f36bbdf15527b5809dc16b1e06765f511c66ade",
+      "short": "1f36bbd",
+      "subject": "FBL-020-R7-C2 §closeout: the governing Final Bounded Closure is the checked-in order, and the record tracks the review corrections",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 33109736612,
+        "run_number": 69,
+        "run_attempt": 1,
+        "head_sha": "1f36bbdf15527b5809dc16b1e06765f511c66ade",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          }
+        ]
+      }
     }
   ]
 }

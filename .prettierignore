@@ -15,3 +15,8 @@ tests/fixtures/
 # what the script emitted, which is the one thing an evidence file may not do.
 docs/evidence/FBL-020-R6-operator-environment-census.json
 docs/evidence/FBL-020-R6-operator-environment-census.txt
+
+# FBL-020-R7 SS1.2: architect orders are checked in VERBATIM. A reformat of a
+# transcribed order would make the committed text differ from what was issued,
+# which is the one thing an order file may not do.
+docs/orders/

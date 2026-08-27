@@ -14,7 +14,7 @@ import {
   seedTenantViaService,
   setUnitStatusViaService,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, withTransaction } from '@dealer/database';
 import {
   ORGANIZATION_LEVELS,
   childLevel,
@@ -596,7 +596,21 @@ describe(
       );
       const requestId = String((req.rows[0] as { request_id: unknown }).request_id);
 
-      // self-approval is structurally impossible
+      // Self-approval and grantless approval are BOTH refused, and since
+      // FBL-020-R7-C1 §7 they are refused by the SAME gate. §7 re-checks the
+      // complete approval invariant on every approved state (not only when the
+      // grant id moves), so an approval that cites no grant — whether the requester
+      // approving itself or any other user with no grant — is refused by that
+      // trigger (P0001) before it reaches either the 057
+      // `sar_approval_is_high_assurance` CHECK or the 055 requester<>approver CHECK
+      // behind it. Those CHECKs remain in the schema as immutable defense in depth,
+      // but a VALID-grant self-approval that could reach the 055 CHECK is not even
+      // representable: a support request's requester must be a PLATFORM (null-
+      // tenant) link, while a decider must hold a high-assurance grant, and
+      // reauthentication_grants' (tenant_id, user_link_id) composite FK forbids a
+      // platform link a grant in the tenant — so requester and decider can never be
+      // the same actor once a grant is required. The refusal is therefore §7's, and
+      // it is strictly stronger and earlier than the pre-§7 CHECK it stands in for.
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'simulate-authorization-drift',
@@ -605,10 +619,9 @@ describe(
           WHERE request_id = $1`,
           [requestId, requester],
         ),
-        CHECK_VIOLATION,
-        'self-approval',
+        RAISED,
+        'grantless self-approval, refused by the complete-approval trigger',
       );
-      // R2: approving without a high-assurance grant is refused outright
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'simulate-authorization-drift',
@@ -617,8 +630,8 @@ describe(
           WHERE request_id = $1`,
           [requestId, approver],
         ),
-        CHECK_VIOLATION,
-        'approval without a high-assurance grant',
+        RAISED,
+        'grantless different-user approval, refused by the complete-approval trigger',
       );
       // a different user approves, recording the grant that backed it
       // the approver's own high-assurance reauthentication, then its grant
@@ -636,30 +649,47 @@ describe(
          RETURNING reauth_txn_id`,
         [tenant.tenantId, approver, sha256hex('approval-nonce'), sha256hex('approval-oidc-nonce')],
       );
+      // FBL-020-R7 §3.2: the grant NAMES THE EXACT REQUEST it approves — action,
+      // resource type, resource id, assurance and MFA certification are judged
+      // where the approval is written now, not only where a grant is consumed.
       const approvalGrant = await query(
         `INSERT INTO reauthentication_grants
-           (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
-            assurance_level, mfa_policy_certified_at_issue, consumed_at)
-         VALUES ($1, $2, $3, 'identity.support.approve', $4,
-                 NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())
+           (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
+            grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue)
+         VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $5,
+                 $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE)
          RETURNING grant_id`,
         [
           String((approvalTxn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
           tenant.tenantId,
           approver,
           sha256hex('approval-grant'),
+          requestId,
         ],
       );
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_requests
-          SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
-              approval_grant_id = $3
-        WHERE request_id = $1`,
-        [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
-      );
+      // FBL-020-R7-C2 §5: the grant is consumed AT the approval instant, under
+      // one transaction clock — the atomic path's own shape.
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `UPDATE reauthentication_grants SET consumed_at = NOW() WHERE grant_id = $1`,
+          [String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
+        );
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE support_access_requests
+            SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
+                approval_grant_id = $3
+          WHERE request_id = $1`,
+          [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
+          { executor },
+        );
+      });
 
-      // a session longer than 60 minutes cannot exist
+      // a session longer than 60 minutes cannot exist — and since FBL-020-R7 §3.2,
+      // a session longer than the REQUESTED duration cannot either. The trigger
+      // (P0001) answers before the structural CHECK for this 61-minute attempt
+      // against a 30-minute request; the 055 ceiling still stands beneath it and
+      // would refuse a 61-minute window even on a 60-minute request.
       await assertSqlState(
         fixtureAuthorizationStateWrite(
           'seed-authorization-state',
@@ -667,7 +697,7 @@ describe(
          VALUES ($1, $2, $3, NOW() + INTERVAL '61 minutes')`,
           [requestId, tenant.tenantId, requester],
         ),
-        CHECK_VIOLATION,
+        RAISED,
         'over-60-minute session',
       );
       await fixtureAuthorizationStateWrite(

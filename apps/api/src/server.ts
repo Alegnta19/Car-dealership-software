@@ -1,7 +1,7 @@
 import * as promClient from 'prom-client';
 import { createApp } from './app';
 import { startMetricsAggregation } from '@dealer/fixed-ops';
-import { closePool } from '@dealer/database';
+import { assertRuntimePosture, closePool } from '@dealer/database';
 import { AppConfig, initConfig, loadConfig, logger } from '@dealer/platform';
 
 /**
@@ -11,7 +11,7 @@ import { AppConfig, initConfig, loadConfig, logger } from '@dealer/platform';
  * variable in its error and never includes a value, so this failure path is safe to
  * print.
  */
-function main(): void {
+async function main(): Promise<void> {
   let config: AppConfig;
   try {
     config = loadConfig(process.env);
@@ -23,6 +23,26 @@ function main(): void {
     return;
   }
   initConfig(config);
+
+  // FBL-020-R7-C1 §2 — FAIL CLOSED ON THE RUNTIME DATABASE POSTURE. In
+  // production the process must serve on a NON-OWNER, non-superuser database
+  // login (migration 060's dealership_app); it asks the database who it
+  // actually is and refuses to accept traffic if the connection is privileged
+  // or cannot even record decisions. Gated to production so local/test smoke,
+  // which legitimately connects as the owner to set fixtures up, still runs.
+  if (config.isProduction) {
+    try {
+      const posture = await assertRuntimePosture();
+      logger.info({ dbUser: posture.currentUser }, 'Runtime database posture verified');
+    } catch (err) {
+      process.stderr.write(
+        `Refusing to start: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      await closePool().catch(() => undefined);
+      process.exit(1);
+      return;
+    }
+  }
 
   // Node process baseline (event-loop lag, GC, heap, open handles). These series are
   // label-free and bounded, so they satisfy the /metrics invariants (no tenant labels,
@@ -66,4 +86,4 @@ function main(): void {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-main();
+void main();

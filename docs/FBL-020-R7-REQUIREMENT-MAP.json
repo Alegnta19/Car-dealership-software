@@ -1,0 +1,600 @@
+{
+  "order": "FBL-020-R7",
+  "amended_by": "FBL-020-R7-A1",
+  "purpose": "Machine-readable mapping from every FBL-020-R7 clause — as amended by FBL-020-R7-A1 — to the implementation, the named tests, the mutations and the deterministic gates that prove it. scripts/check-requirement-map.ts verifies that both authority digests match the checked-in order texts, that every requirement id is well formed and unique, that every named implementation file and test file exists, that every named test EXISTS VERBATIM in the named file, that every named runtime-mutation id exists in scripts/mutation-kill.ts and every named database-control id exists in scripts/database-control-mutations.ts, and that EVERY clause in clause_inventory is covered by at least one requirement — so an omitted requirement is a failure rather than a silent gap. FBL-020-R7-A1 §6 governs the vocabulary: exact test names and mutation identifiers are recorded here because they are what the gates kill against, not because the order mandated the spellings.",
+  "authority": {
+    "order_text": "docs/orders/FBL-020-R7.md",
+    "order_text_sha256_canonical_lf": "84c6f9ea4c0746197b60db49e33877952b30c498a15cfae09f1ef38cc0132da0",
+    "amendment_text": "docs/orders/FBL-020-R7-A1.md",
+    "amendment_text_sha256_canonical_lf": "f74fbc08f55404ab14c8edc4dae7a2ba31140d7c80c73d21628889fdde94f57b",
+    "precedence": "The amendment is part of R7 and controls wherever the two conflict (its own first sentence). The security outcomes of R7 §2–§5 and A1 §9 are unchanged by it; what it relaxes is implementation method, Git workflow, commit count, file scope, test naming and packaging shape.",
+    "verdict_vocabulary": "PROVEN = the named tests, mutations and gates exercise the clause's own property and are green locally against a real PostgreSQL 16. PENDING-CI = additionally awaiting the exact-SHA ci.yml run at the final R7 head, which FBL-020-R7-A1 §7 binds to the commits via the external return packet rather than via any checked-in run id. EXTERNAL = dischargeable only outside this repository. No verdict here is a claim of architect acceptance; FBL-020-R7-A1 §10 makes acceptance the release gate."
+  },
+  "clause_inventory": [
+    {
+      "clause": "R7-§0",
+      "text": "Governing disposition: R6 retained-not-accepted; baseline ee5eb6b00ef91542f3129fa9957fc22d3ce51f0f (tree 6bc4302612abfc97df0854708ee576ba3108a616, run 32493409959 green 4/4); FBL-030 blocked; live WorkOS certification undischarged; migrations 000, 049–058 frozen; every schema correction in NEW migrations/059; no new census; both external project copies remain Version 1.0; the repository Version 2.0 blueprint is correctly committed."
+    },
+    {
+      "clause": "R7-§1",
+      "text": "Delivery discipline — as amended by FBL-020-R7-A1 §§1, 4, 5 and 7: order and amendment checked in verbatim; branch from the exact baseline; normal disclosed commits and pushes replace the one-commit/squash rule; iterate on red CI instead of stopping; never claim a run that does not exist; preserve the working R6 controls."
+    },
+    {
+      "clause": "R7-§2.1",
+      "text": "Login completion is judged against ONE fresh clock_timestamp() instant used for both the expiry predicate and consumed_at; refusal classification reads the live clock; JS time never decides."
+    },
+    {
+      "clause": "R7-§2.2",
+      "text": "A missing, non-string or wrong presented purpose is callback_purpose_mismatch and ends the transaction it names, on the login and step-up legs alike; the routes forward the handle and never pre-screen the defect."
+    },
+    {
+      "clause": "R7-§2.3",
+      "text": "Step-up refusals carry exact terminal reasons: callback_state_mismatch, callback_pkce_mismatch and callback_redirect_mismatch are distinct, each with one failed terminal row and one identity.reauthentication.failed event."
+    },
+    {
+      "clause": "R7-§3.1",
+      "text": "The support tuple: requester and session actor are REAL platform-scope links; the session actor IS the approved requester of its own request, referentially; actor-type labels are bound to the actor's real scope."
+    },
+    {
+      "clause": "R7-§3.2",
+      "text": "Request and session authority fields are immutable; granted_at ≥ decided_at; expiry ≤ requested duration; the approving grant names this exact request with action identity.support.approve, resource type support_access_request, fresh_and_mfa_policy assurance and certified MFA; an approved non-tenant scope exists in-tenant on an effective chain."
+    },
+    {
+      "clause": "R7-§3.3",
+      "text": "The platform.* action-name bypass is removed: delegation is required structurally; a control-plane decision is platform-scoped with NO authorization tenant and NO customer resource; the operational target tenant is metadata in its own column."
+    },
+    {
+      "clause": "R7-§3.4",
+      "text": "ONE database-authoritative resource-scope registry shared by runtime and validators; the validated leaf is persisted; organization bindings are validated against the resource's real ancestry; caller-supplied scope columns are validated, never trusted."
+    },
+    {
+      "clause": "R7-§3.5",
+      "text": "ONE database authority for effective ancestry used by runtime AND validators; tenant, leaf and every ancestor validated as active and in-window at write time."
+    },
+    {
+      "clause": "R7-§3.6",
+      "text": "Liveness is judged at the actual write instant (clock_timestamp()), never transaction-start NOW() and never occurred_at; occurred_at is consistency-checked only; a straddling transaction is refused; an expired session with a backdated occurred_at is refused."
+    },
+    {
+      "clause": "R7-§3.7",
+      "text": "The forgeable GUC is removed as authorization; migration-owner and runtime roles are separated; the API and worker run as a non-owner runtime role with no child-table DML; normalization is SECURITY DEFINER, owned by an unassumable role, with a fixed search_path; parent/child equivalence is preserved."
+    },
+    {
+      "clause": "R7-§4",
+      "text": "Migration rules: 059 only; 000 and 049–058 byte-immutable; evidence version 4 with versions 1–3 preserved unrewritten; an exact-checksum pre-059 chain; the populated drill builds and uses a real 058 database, generates post-058 activity through production paths, applies 059, verifies every new invariant, proves the bounded precheck refusals on injected invalid rows, and converges fresh and upgraded fingerprints; every refusal is actionable and truthful and never instructs editing append-only evidence."
+    },
+    {
+      "clause": "R7-§5",
+      "text": "Tests, mutations and gates: at least 654 tests / 64 suites preserved and raised to the delivered battery with zero failed/cancelled/skipped/todo; ratchet at or below 53/123/1; the seven named runtime mutations killed; one database mutation per atomic predicate with zero survivors; the full gate set green."
+    },
+    {
+      "clause": "R7-§6",
+      "text": "Documentation: order (and amendment) checked in verbatim; this requirement map; ONE canonical state record saying SUBMITTED FOR REVIEW — NOT ACCEPTED that never claims the final run exists inside the commit that triggers it; other documents reference rather than restate; external blockers preserved unexpanded."
+    },
+    {
+      "clause": "R7-§7",
+      "text": "Return packet — as amended by FBL-020-R7-A1 §8: an independently verifiable external package binding repository identity, final commit and tree, exact source bytes from the Git object, the exact-SHA run with every job conclusion, CI artifacts and hashes, test and mutation results, migration-chain integrity, package checksum and the remaining external blockers; then stop for architect acceptance."
+    },
+    {
+      "clause": "R7A1-§9",
+      "text": "Non-negotiable outcomes: the amendment's own register of what implementation freedom does not relax — each item is covered by the R7-§2/§3/§4/§5 rows above and the blockers row below."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "R7-§0-baseline-and-freeze",
+      "clause": "R7-§0",
+      "requirement": "Branch from the exact R6 baseline; keep migrations 000 and 049–058 byte-immutable; put every schema correction in the new 059; preserve the external blockers unexpanded.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "architecture/migration-fixture-chains.json",
+        "docs/evidence/FBL-020-FINAL-STATE.json"
+      ],
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "a CHANGED body of an applied migration REFUSES the run, names the file and both digests"
+        },
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "an UNLISTED deletion variant is REFUSED"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "scripts/check-final-state.ts",
+        "scripts/migrate.ts ledger verification",
+        "ci.yml: Stage the pre-059 chain (058 included, 059 withheld)"
+      ],
+      "verdict": "PROVEN. The branch is fbl-020-r7 from ee5eb6b; git shows 000/049–058 untouched; 059 is the one new migration; the final-state record preserves every blocker."
+    },
+    {
+      "id": "R7-§1-discipline-as-amended",
+      "clause": "R7-§1",
+      "requirement": "Order and amendment checked in verbatim; normal, disclosed, forward-moving commits under FBL-020-R7-A1 §4; iteration on red under §5; no claim of a run that does not exist (§7).",
+      "implementation": [
+        "docs/orders/FBL-020-R7.md",
+        "docs/orders/FBL-020-R7-A1.md",
+        "docs/evidence/FBL-020-FINAL-STATE.json"
+      ],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "as shipped: the record describes this repository and every document restates it"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": ["scripts/check-final-state.ts"],
+      "verdict": "PROVEN. Both texts are checked in at the digests this map's authority block pins; every R7 commit is disclosed in the final-state record with run: null until its own run exists."
+    },
+    {
+      "id": "R7-§2.1-completion-clock",
+      "clause": "R7-§2.1",
+      "requirement": "succeedLoginTransactionWithin uses one fresh clock_timestamp() for the expiry predicate AND consumed_at; refusal classification reads the live clock; JS time never decides.",
+      "implementation": ["packages/identity-access/src/login-transaction.ts"],
+      "tests": [
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "login completion refuses after DB wall time crosses expiry inside the already-open admission transaction"
+        }
+      ],
+      "runtime_mutations": [
+        "login_completion_uses_transaction_start_time",
+        "login_success_ignores_expiry"
+      ],
+      "database_controls": [],
+      "gates": ["scripts/mutation-kill.ts"],
+      "verdict": "PROVEN. The named test freezes NOW() while the wall crosses expiry and requires the refusal; both mutations die against it."
+    },
+    {
+      "id": "R7-§2.2-missing-purpose-fails-closed",
+      "clause": "R7-§2.2",
+      "requirement": "presentedPurpose is explicitly string | null with the nullish defaults deleted on both legs; missing/non-string/wrong purpose terminates as callback_purpose_mismatch; the routes forward the handle and never pre-screen.",
+      "implementation": [
+        "packages/identity-access/src/login-transaction.ts",
+        "packages/identity-access/src/reauthentication.ts",
+        "apps/api/src/routes/auth.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/login-admission.test.ts",
+          "name": "a sealed cookie carrying NO PURPOSE AT ALL ends the transaction it names (R7 §2.2)"
+        },
+        {
+          "file": "tests/reauth-callback-lifecycle.test.ts",
+          "name": "a step-up callback whose sealed cookie carries NO PURPOSE ends its transaction"
+        }
+      ],
+      "runtime_mutations": [
+        "login_missing_callback_purpose_assumed",
+        "login_route_rejects_missing_purpose_before_lifecycle",
+        "stepup_missing_callback_purpose_assumed",
+        "stepup_route_rejects_missing_purpose_before_lifecycle"
+      ],
+      "database_controls": [],
+      "gates": [
+        "scripts/mutation-kill.ts",
+        "npm run typecheck (the field is required, so an omitted purpose no longer compiles)"
+      ],
+      "verdict": "PROVEN. Both real-route tests reseal the cookie without the purpose key and require the terminal row and the single failed event; all four mutations die."
+    },
+    {
+      "id": "R7-§2.3-truthful-terminal-reasons",
+      "clause": "R7-§2.3",
+      "requirement": "callback_pkce_mismatch and callback_redirect_mismatch exist beside callback_state_mismatch; classification is exact; each failure writes one failed terminal row and one identity.reauthentication.failed event.",
+      "implementation": ["packages/identity-access/src/reauthentication.ts"],
+      "tests": [
+        {
+          "file": "tests/identity-lifecycle-audit.test.ts",
+          "name": "the claim is SINGLE-USE and refuses a wrong state, a wrong verifier and a wrong callback"
+        }
+      ],
+      "runtime_mutations": [
+        "stepup_pkce_mismatch_mislabeled_as_state",
+        "stepup_redirect_mismatch_mislabeled_as_state"
+      ],
+      "database_controls": [],
+      "gates": ["scripts/mutation-kill.ts"],
+      "verdict": "PROVEN. The perturbation loop stages each defect against a fresh leg and pins the exact reason; both relabel mutations die."
+    },
+    {
+      "id": "R7-§3.1-support-tuple",
+      "clause": "R7-§3.1",
+      "requirement": "The session actor IS the approved requester (composite key, enforced in full for every new write); requester and actor are REAL platform-scope links; the platform_support and user labels are bound to the actor's real scope.",
+      "implementation": ["migrations/059_policy_evidence_integrity_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a support session cannot substitute another REAL platform actor for the approved requester"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a dealership link cannot be recorded as a platform-support actor"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a dealership link can neither file nor hold a support delegation"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "support_session_actor_substitutable",
+        "support_requester_scope_unchecked",
+        "support_session_actor_scope_unchecked",
+        "platform_support_label_unbound",
+        "user_label_unbound",
+        "v4_structural_judge_absent"
+      ],
+      "gates": [
+        "scripts/database-control-mutations.ts",
+        "scripts/upgrade-precheck-refusals.ts",
+        "scripts/verify-upgrade-state.ts --phase=post-059"
+      ],
+      "verdict": "PROVEN. Every negative is a REAL cross-wired row with a same-shape control leg; each control and clause dies alone; the §0 prechecks are proven to refuse on copies of the used drill database."
+    },
+    {
+      "id": "R7-§3.2-approval-bounds",
+      "clause": "R7-§3.2",
+      "requirement": "Authority fields immutable once written; a session exists only under a decided approval, starts no earlier and lasts no longer than requested; the approving grant is the approval it claims — action, exact request, assurance, MFA certification — over an effective approved scope.",
+      "implementation": ["migrations/059_policy_evidence_integrity_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "request and session authority fields are immutable once written"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a one-minute approval cannot produce a longer session"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a session cannot begin before its approval was decided"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a session cannot exist under a request nobody approved"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a wrong-action or wrong-resource REAL grant cannot approve a support request"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an approval cannot cite a grant at the wrong assurance or without MFA certification"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an approved scope must be a real, effective node of the request tenant"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "support_request_authority_rewritable",
+        "support_session_window_rewritable",
+        "support_session_unbounded_by_approval",
+        "support_approval_grant_unjudged",
+        "request_authority_fields_rewritable",
+        "approval_identity_repointable",
+        "session_under_an_undecided_request",
+        "session_precedes_its_approval",
+        "session_outlives_the_approved_duration",
+        "approval_grant_action_unchecked",
+        "approval_grant_names_another_request",
+        "approval_grant_assurance_unchecked",
+        "approval_grant_mfa_certification_unchecked",
+        "approved_scope_need_not_be_effective"
+      ],
+      "gates": ["scripts/database-control-mutations.ts", "scripts/upgrade-precheck-refusals.ts"],
+      "verdict": "PROVEN. Whole-trigger drops and per-clause removals each kill their own named test; the drill's precheck probes prove the §0 refusals for the premature, overlong and wrong-grant retained shapes."
+    },
+    {
+      "id": "R7-§3.3-structural-delegation",
+      "clause": "R7-§3.3",
+      "requirement": "No action-name prefix bypasses tenant delegation; a control-plane decision is structurally platform-scoped with NULL tenant and no customer resource; the operational target tenant travels in its own metadata column.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "packages/identity-access/src/policy.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a platform-prefixed action cannot carry customer resource evidence without delegation"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a control-plane decision cannot smuggle a customer-resource payload"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "the control-plane target tenant cannot ride on a tenant-scoped decision"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a platform-NAMED action cannot free an identified actor from naming a tenant"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "support_tenant_allow_v4_needs_no_delegation",
+        "control_plane_carries_customer_payload",
+        "target_tenant_rides_authorization_rows",
+        "identified_actor_tenantless_by_name"
+      ],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. The R6-era platform.* forgeries are re-staged verbatim and refused structurally; the genuine control-plane shape is accepted with its target tenant in the metadata column; each CHECK dies alone."
+    },
+    {
+      "id": "R7-§3.4-resource-registry-and-snapshot",
+      "clause": "R7-§3.4",
+      "requirement": "resource_org_leaf is the ONE resource-scope registry, called by the runtime resolver and the evidence validator; the validated leaf is persisted as resource_rooftop_id; org bindings must sit on the resource's own ancestry; caller-supplied scope columns are validated, never trusted.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "packages/fixed-ops/src/security/scope-resolver.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a rooftop-A binding cannot authorize a real rooftop-B resource"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an ancestor binding can authorize a real descendant resource"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "nonexistent and foreign-tenant resources are rejected, and a supplied snapshot is validated"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a resource ALLOW cannot stand on a dead chain above its own resource"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a resource-rooftop snapshot cannot name another tenant’s rooftop"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a version-4 resource ALLOW cannot omit its validated rooftop snapshot"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "nonexistent_resource_authorizes",
+        "caller_snapshot_trusted",
+        "resource_chain_effectiveness_unchecked",
+        "binding_reaches_a_sibling_resource",
+        "resource_snapshot_escapes_the_tenant",
+        "v4_structural_judge_absent"
+      ],
+      "gates": [
+        "scripts/database-control-mutations.ts",
+        "ci.yml: The shipped engine writes version-4 evidence as the runtime role"
+      ],
+      "verdict": "PROVEN. The drill's after-059 stage additionally proves the SHIPPED resolver and the trigger agree on a real resource: the persisted snapshot equals the database's own resolution. FBL-020-R7-C1 §6 update: the resource_allow_snapshotless database-control mutation is RETIRED — 059’s pd_v4_resource_allow_names_its_rooftop CHECK is inert whenever a tenant is named (the structural trigger assigns the resolved leaf before the CHECK), so it was reachable only via the null-tenant lane §6 now forbids, making a mutation over it an un-killable survivor. The snapshot protection stays mutation-covered by v4_structural_judge_absent (the whole structural trigger) and system_resource_allow_needs_no_tenant (the null-tenant lane); the CHECK remains as immutable defense in depth. The named test still stands and passes, now refused by the §6 tenant requirement one rule earlier."
+    },
+    {
+      "id": "R7-§3.5-one-ancestry-authority",
+      "clause": "R7-§3.5",
+      "requirement": "org_ancestry_all / org_chain_defect / org_ancestry_effective are the one ancestry authority; the runtime resolver reads it; every evidence validator judges tenant, leaf and every ancestor as active and in-window at write time.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "packages/organization/src/repository.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an ALLOW cannot stand on an inactive or out-of-window chain — six ways"
+        },
+        {
+          "file": "tests/identity-evidence-reconstruction.test.ts",
+          "name": "an ALLOW cannot record an organization node that exists NOWHERE"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "decision_scope_chain_unjudged",
+        "chain_defects_invisible_to_the_authority",
+        "decision_scope_node_need_not_exist"
+      ],
+      "gates": [
+        "scripts/database-control-mutations.ts",
+        "scripts/verify-upgrade-state.ts --phase=post-059"
+      ],
+      "verdict": "PROVEN. Six distinct chain defects each name the defective node; the authority's own existence and effectiveness clauses die alone; the runtime resolves through the same function the validators judge with."
+    },
+    {
+      "id": "R7-§3.6-write-instant-liveness",
+      "clause": "R7-§3.6",
+      "requirement": "Bindings and delegated windows are judged at the actual write instant via clock_timestamp(); occurred_at is consistency-checked only and never dates authority; straddling transactions and backdated occurrences are refused.",
+      "implementation": ["migrations/059_policy_evidence_integrity_closure.sql"],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a transaction started before a binding expired and completed after it is refused"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "an expired support session combined with a backdated occurred_at is refused"
+        },
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "occurred_at is checked for consistency and can never BE the authority clock"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "binding_liveness_stops_at_transaction_start",
+        "binding_dead_at_the_write_instant",
+        "support_expiry_stops_at_occurred_at",
+        "occurred_at_may_lead_the_write_instant",
+        "occurred_at_may_trail_by_hours"
+      ],
+      "gates": ["scripts/database-control-mutations.ts"],
+      "verdict": "PROVEN. The straddling test proves the premise inside the open transaction (NOW() alive, clock_timestamp() expired) and judges the refusal outside the rolled-back probe, so no assertion can be swallowed."
+    },
+    {
+      "id": "R7-§3.7-privilege-model",
+      "clause": "R7-§3.7",
+      "requirement": "The policy_evidence.normalizing_decision GUC is gone as authorization; dealership_runtime (no child-table DML, not a member of the owner) and dealership_evidence_owner (owns the SECURITY DEFINER normalizer, fixed search_path) replace it; the API and worker assume the runtime role via DATABASE_RUNTIME_ROLE; parent/child equivalence is preserved.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "packages/platform/src/config.ts",
+        "packages/database/src/pool.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-reconstruction.test.ts",
+          "name": "a child row written with no normalizer behind it is refused"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [
+        "child_rows_have_no_authorized_writer",
+        "normalizer_stripped_of_its_own_authority",
+        "normalization_runs_with_caller_rights",
+        "owner_role_assumable_by_the_runtime"
+      ],
+      "gates": [
+        "scripts/database-control-mutations.ts",
+        "ci.yml: The shipped engine writes version-4 evidence as the runtime role",
+        "scripts/verify-upgrade-state.ts --phase=post-059"
+      ],
+      "verdict": "PROVEN. The forged-GUC child insert dies with SQLSTATE 42501 as the actual runtime role; the drill's after-059 stage proves the positive half — the runtime role's parent insert still normalizes through the database-owned path; all four privilege mutations die."
+    },
+    {
+      "id": "R7-§4-migration-rules-and-drill",
+      "clause": "R7-§4",
+      "requirement": "059 only, with 000/049–058 byte-immutable; evidence version 4 preserving 1–3; the exact-checksum pre-059 chain; the six-step populated drill; truthful actionable refusals that never instruct editing append-only evidence.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "architecture/migration-fixture-chains.json",
+        ".github/workflows/ci.yml",
+        "scripts/upgrade-precheck-refusals.ts",
+        "scripts/upgrade-post-057-activity.ts",
+        "scripts/verify-upgrade-state.ts",
+        "scripts/migrate.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/migration-ledger.test.ts",
+          "name": "an UNLISTED deletion variant is REFUSED"
+        },
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "the upgrade job runs every phase, the negative controls, and gates on their JSON"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": ["evidence_version_floor_never_moved"],
+      "gates": [
+        "ci.yml: Stage the pre-059 chain (058 included, 059 withheld)",
+        "ci.yml: Apply 058 ONLY, on top of the USED database",
+        "ci.yml: 059 precheck refusals (isolated copies of the used 058 database)",
+        "ci.yml: Apply 059 on top of the USED 058 database",
+        "ci.yml: The shipped engine writes version-4 evidence as the runtime role",
+        "ci.yml: Verify the 059 state and the integrity closure (phase=post-059)",
+        "ci.yml: Fingerprints must be identical (fresh chain vs upgrade path)"
+      ],
+      "verdict": "PROVEN. The complete drill ran green locally end to end from scratch: real 058 database, production-path activity, all five precheck refusals proven on copies with the ledger clean and the injected rows left exactly as written, 059 applied, every new invariant verified, fingerprints converged (21bf4e7cb1ac8d2c41b7e14c8fff906a68af47a59d51518097dafd4ced8a9363 on both paths)."
+    },
+    {
+      "id": "R7-§5-tests-mutations-gates",
+      "clause": "R7-§5",
+      "requirement": "The battery grows to 681 tests / 65 suites with zero failed, cancelled, skipped or todo; the ratchet stays at or below 53/123/1; the seven named runtime mutations and one database mutation per atomic predicate are independently killed with zero survivors; the full gate set is green.",
+      "implementation": [
+        "scripts/parse-test-summary.ts",
+        "scripts/quality-ratchet.ts",
+        "scripts/mutation-kill.ts",
+        "scripts/database-control-mutations.ts"
+      ],
+      "tests": [
+        {
+          "file": "tests/ci-gates.test.ts",
+          "name": "every mutation names code that EXISTS exactly once, in the file it claims"
+        }
+      ],
+      "runtime_mutations": [
+        "login_completion_uses_transaction_start_time",
+        "login_missing_callback_purpose_assumed",
+        "login_route_rejects_missing_purpose_before_lifecycle",
+        "stepup_missing_callback_purpose_assumed",
+        "stepup_route_rejects_missing_purpose_before_lifecycle",
+        "stepup_pkce_mismatch_mislabeled_as_state",
+        "stepup_redirect_mismatch_mislabeled_as_state"
+      ],
+      "database_controls": [],
+      "gates": [
+        "scripts/parse-test-summary.ts (MINIMUM_TESTS = 681, MINIMUM_SUITES = 65)",
+        "scripts/quality-ratchet.ts",
+        "scripts/mutation-kill.ts",
+        "scripts/database-control-mutations.ts"
+      ],
+      "verdict": "PROVEN locally: 681/65 with zero fail/cancel/skip/todo, ratchet at 53/123/1, 62 runtime mutations and 65 database controls with zero survivors. PENDING-CI for the exact-SHA run at the final head, which the return packet binds."
+    },
+    {
+      "id": "R7-§6-documentation",
+      "clause": "R7-§6",
+      "requirement": "Order and amendment verbatim; this map; the ONE canonical state record saying SUBMITTED FOR REVIEW — NOT ACCEPTED without claiming the final run exists; other documents reference it; external blockers preserved unexpanded.",
+      "implementation": [
+        "docs/orders/FBL-020-R7.md",
+        "docs/orders/FBL-020-R7-A1.md",
+        "docs/FBL-020-R7-REQUIREMENT-MAP.json",
+        "docs/evidence/FBL-020-FINAL-STATE.json"
+      ],
+      "tests": [
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "as shipped: the record describes this repository and every document restates it"
+        },
+        {
+          "file": "tests/delivery-documentation.test.ts",
+          "name": "the report names every migration on disk and every mapped battery"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "scripts/check-final-state.ts",
+        "scripts/check-requirement-map.ts",
+        "scripts/check-published-figures.ts"
+      ],
+      "verdict": "PROVEN. The record says SUBMITTED FOR REVIEW — NOT ACCEPTED; its commits_ahead entries carry run: null; the R6 missing-§5-text disclosure is preserved in the record's git history and the per-order rulings stand unedited."
+    },
+    {
+      "id": "R7-§7-return-packet",
+      "clause": "R7-§7",
+      "requirement": "An independently verifiable external package produced after CI succeeds, from the final Git object (no CRLF working-tree ZIP), binding commit, tree, run, jobs, artifacts, checksums and blockers; then stop for architect acceptance.",
+      "implementation": ["docs/orders/FBL-020-R7-A1.md"],
+      "tests": [],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": ["external: the return packet itself"],
+      "verdict": "PENDING-CI, then EXTERNAL by design: FBL-020-R7-A1 §§7–8 place the final commit-to-run binding and the packet outside the repository. Assembled after the exact-SHA run at the final head completes; nothing in this tree claims that run exists."
+    },
+    {
+      "id": "R7A1-§9-non-negotiable-outcomes",
+      "clause": "R7A1-§9",
+      "requirement": "The amendment's outcome register: write-time truth, fail-closed purposes, truthful reasons, relational coherence, no name-prefix bypass, resource ancestry binding, effective authority, unforgeable normalized evidence, unedited history, immutable prior migrations, green gates, truthful documentation, Version 1.0 external copies, external WorkOS certification, FBL-030 blocked.",
+      "implementation": [
+        "migrations/059_policy_evidence_integrity_closure.sql",
+        "packages/identity-access/src/login-transaction.ts",
+        "packages/identity-access/src/reauthentication.ts",
+        "docs/evidence/FBL-020-FINAL-STATE.json"
+      ],
+      "tests": [
+        {
+          "file": "tests/identity-evidence-integrity.test.ts",
+          "name": "a support session cannot substitute another REAL platform actor for the approved requester"
+        }
+      ],
+      "runtime_mutations": [],
+      "database_controls": [],
+      "gates": [
+        "every gate named by the rows above; this row exists so the amendment's own register is a clause no requirement can silently drop"
+      ],
+      "verdict": "PROVEN through the R7-§2/§3/§4/§5/§6 rows above, each of which cites its own tests, mutations and gates; the two external items (project copies, WorkOS) remain EXTERNAL and are preserved as blockers in the final-state record."
+    }
+  ]
+}

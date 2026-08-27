@@ -1,0 +1,2255 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { after, beforeEach, describe, test } from 'node:test';
+import {
+  bootstrapAdministrator,
+  ensureActiveConnection,
+  fixtureAuthorizationStateWrite,
+  mintReauthGrant,
+  resetDatabase,
+  seedDealerGroup,
+  seedLegalEntity,
+  seedLocalSession,
+  seedRooftop,
+  seedTenantViaService,
+  shiftSupportWindowIntoThePast,
+  skipIntegration,
+} from '@dealer/test-kit';
+import { closePool, query, withTransaction, type Executor } from '@dealer/database';
+import { grantRole } from '@dealer/identity-access';
+
+/**
+ * FBL-020-R7 §3 — DIRECT-SQL ADVERSARIAL TESTS FOR THE INTEGRITY CLOSURE.
+ *
+ * The same discipline as `identity-evidence-reconstruction.test.ts`, for the same
+ * reason: every claim here is that a piece of evidence is UNREPRESENTABLE, and the
+ * adversary that matters writes SQL. Every negative case is built from REAL,
+ * CROSS-WIRED rows — a real second platform person, a real sibling rooftop, a real
+ * binding whose window really closes while a transaction is really open — and every
+ * rule under test carries a control leg proving the honest shape is still accepted.
+ *
+ * What migration 059 closes, clause by clause, is in its own header; this battery is
+ * the §3 evidence for it: the support tuple (§3.1), the approval bounds (§3.2), the
+ * structural control-plane rule (§3.3), the resource-ancestry rule (§3.4), the
+ * effective-chain rule (§3.5) and write-instant liveness (§3.6). §3.7's runtime-role
+ * tests live beside the writer-guard history in the reconstruction battery.
+ */
+describe(
+  'policy-evidence integrity closure (FBL-020-R7 §3)',
+  { skip: skipIntegration ? 'set TEST_DATABASE_URL to run' : false },
+  () => {
+    const CHECK_VIOLATION = '23514';
+    const FK_VIOLATION = '23503';
+    const RAISED = 'P0001';
+
+    after(async () => {
+      await closePool();
+    });
+
+    async function assertRefusedBy(
+      op: Promise<unknown>,
+      by: { state: string; constraint?: string; message?: string },
+      what: string,
+    ): Promise<void> {
+      await assert.rejects(
+        op,
+        (err: unknown) => {
+          const e = err as { code?: unknown; constraint?: unknown; message?: string };
+          assert.equal(
+            e.code,
+            by.state,
+            `${what}: expected SQLSTATE ${by.state}, got ${String(e.code)}: ${String(e.message)}`,
+          );
+          if (by.constraint !== undefined) {
+            assert.equal(
+              e.constraint,
+              by.constraint,
+              `${what}: expected constraint ${by.constraint}, got ${String(e.constraint)}`,
+            );
+          }
+          if (by.message !== undefined) {
+            assert.ok(
+              (e.message ?? '').includes(by.message),
+              `${what}: expected message containing ${JSON.stringify(by.message)}, got ${JSON.stringify(e.message)}`,
+            );
+          }
+          return true;
+        },
+        what,
+      );
+    }
+
+    async function activatedLink(
+      tenantId: string | null,
+    ): Promise<{ linkId: string; subject: string; connectionId: string }> {
+      const subject = 'user_' + randomUUID();
+      const r = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO user_links
+           (actor_scope, tenant_id, provider, provider_user_id, status, activated_at,
+            connection_id, issuer, provider_organization_id)
+         SELECT $3, $1, 'workos', $2, 'activated', NOW(),
+                c.connection_id, c.issuer, c.provider_organization_id
+           FROM identity_provider_connections c
+          WHERE c.tenant_id IS NOT DISTINCT FROM $1 AND c.status = 'active' LIMIT 1
+         RETURNING user_link_id, connection_id`,
+        [tenantId, subject, tenantId === null ? 'platform' : 'dealership'],
+      );
+      const row = r.rows[0] as Record<string, unknown>;
+      return { linkId: String(row.user_link_id), subject, connectionId: String(row.connection_id) };
+    }
+
+    async function grant(
+      tenantId: string | null,
+      userLinkId: string,
+      options: { role?: string; scopeLevel?: string; scopeId?: string | null } = {},
+    ): Promise<string> {
+      const granted = await grantRole({
+        actingUserLinkId: await bootstrapAdministrator(tenantId),
+        tenantId,
+        userLinkId,
+        role: options.role ?? 'service_advisor',
+        scopeLevel: options.scopeLevel ?? 'tenant',
+        scopeId: options.scopeId === undefined ? tenantId : options.scopeId,
+        resourceType: null,
+        resourceId: null,
+      });
+      return granted.roleBindingId;
+    }
+
+    async function bindingVersion(roleBindingId: string): Promise<number> {
+      const r = await query(
+        `SELECT authorization_version FROM role_bindings WHERE role_binding_id = $1`,
+        [roleBindingId],
+      );
+      return Number((r.rows[0] as Record<string, unknown>).authorization_version);
+    }
+
+    interface Fixture {
+      tenantId: string;
+      otherTenantId: string;
+      /** dealership actor of the tenant, live session, tenant-scope binding */
+      linkId: string;
+      subject: string;
+      connectionId: string;
+      sessionId: string;
+      roleBindingId: string;
+      roleBindingVersion: number;
+      /** the same actor's rooftop-A and legal-entity bindings */
+      rooftopABindingId: string;
+      rooftopABindingVersion: number;
+      entityBindingId: string;
+      entityBindingVersion: number;
+      /** the chain */
+      dealerGroupA: string;
+      legalEntityA: string;
+      rooftopA: string;
+      rooftopB: string;
+      foreignRooftop: string;
+      /** two REAL platform people, each with a live session */
+      platformLinkId: string;
+      platformSubject: string;
+      platformConnectionId: string;
+      platformSessionId: string;
+      platformBindingId: string;
+      platformBindingVersion: number;
+      platformTwoLinkId: string;
+      /** real repair orders */
+      roAtRooftopA: string;
+      roAtRooftopB: string;
+      foreignRo: string;
+    }
+
+    let f: Fixture;
+
+    beforeEach(async () => {
+      await resetDatabase();
+      const tenant = await seedTenantViaService({ name: 'Integrity Motors', status: 'active' });
+      const other = await seedTenantViaService({ name: 'Elsewhere Motors', status: 'active' });
+      await ensureActiveConnection(tenant.tenantId);
+      await ensureActiveConnection(other.tenantId);
+      await ensureActiveConnection(null);
+
+      const group = await seedDealerGroup({
+        tenantId: tenant.tenantId,
+        name: 'Integrity Group',
+        status: 'active',
+      });
+      const entity = await seedLegalEntity({
+        tenantId: tenant.tenantId,
+        dealerGroupId: group.dealerGroupId,
+        name: 'Integrity Entity LLC',
+        status: 'active',
+      });
+      const rooftopA = await seedRooftop({
+        tenantId: tenant.tenantId,
+        legalEntityId: entity.legalEntityId,
+        name: 'Integrity North',
+        status: 'active',
+      });
+      const rooftopB = await seedRooftop({
+        tenantId: tenant.tenantId,
+        legalEntityId: entity.legalEntityId,
+        name: 'Integrity South',
+        status: 'active',
+      });
+      const foreignGroup = await seedDealerGroup({
+        tenantId: other.tenantId,
+        name: 'Elsewhere Group',
+        status: 'active',
+      });
+      const foreignEntity = await seedLegalEntity({
+        tenantId: other.tenantId,
+        dealerGroupId: foreignGroup.dealerGroupId,
+        name: 'Elsewhere Entity LLC',
+        status: 'active',
+      });
+      const foreignRooftop = await seedRooftop({
+        tenantId: other.tenantId,
+        legalEntityId: foreignEntity.legalEntityId,
+        name: 'Elsewhere Central',
+        status: 'active',
+      });
+
+      const person = await activatedLink(tenant.tenantId);
+      const session = await seedLocalSession(person.linkId);
+      const roleBindingId = await grant(tenant.tenantId, person.linkId);
+      const rooftopABindingId = await grant(tenant.tenantId, person.linkId, {
+        role: 'technician',
+        scopeLevel: 'rooftop',
+        scopeId: rooftopA.rooftopId,
+      });
+      const entityBindingId = await grant(tenant.tenantId, person.linkId, {
+        role: 'service_manager',
+        scopeLevel: 'legal_entity',
+        scopeId: entity.legalEntityId,
+      });
+
+      const platform = await activatedLink(null);
+      const platformSession = await seedLocalSession(platform.linkId);
+      const platformBindingId = await grant(null, platform.linkId, {
+        role: 'platform_support',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
+      const platformTwo = await activatedLink(null);
+
+      // real Fixed Ops resources, one per rooftop plus one in the other tenant
+      const roAtRooftopA = randomUUID();
+      const roAtRooftopB = randomUUID();
+      const foreignRo = randomUUID();
+      for (const [ro, tid, loc] of [
+        [roAtRooftopA, tenant.tenantId, rooftopA.rooftopId],
+        [roAtRooftopB, tenant.tenantId, rooftopB.rooftopId],
+        [foreignRo, other.tenantId, foreignRooftop.rooftopId],
+      ] as const) {
+        await query(
+          `INSERT INTO repair_orders (ro_id, tenant_id, location_id, mdm_customer_id, mdm_vehicle_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [ro, tid, loc, randomUUID(), randomUUID()],
+        );
+      }
+
+      f = {
+        tenantId: tenant.tenantId,
+        otherTenantId: other.tenantId,
+        linkId: person.linkId,
+        subject: person.subject,
+        connectionId: person.connectionId,
+        sessionId: session.sessionId,
+        roleBindingId,
+        roleBindingVersion: await bindingVersion(roleBindingId),
+        rooftopABindingId,
+        rooftopABindingVersion: await bindingVersion(rooftopABindingId),
+        entityBindingId,
+        entityBindingVersion: await bindingVersion(entityBindingId),
+        dealerGroupA: group.dealerGroupId,
+        legalEntityA: entity.legalEntityId,
+        rooftopA: rooftopA.rooftopId,
+        rooftopB: rooftopB.rooftopId,
+        foreignRooftop: foreignRooftop.rooftopId,
+        platformLinkId: platform.linkId,
+        platformSubject: platform.subject,
+        platformConnectionId: platform.connectionId,
+        platformSessionId: platformSession.sessionId,
+        platformBindingId,
+        platformBindingVersion: await bindingVersion(platformBindingId),
+        platformTwoLinkId: platformTwo.linkId,
+        roAtRooftopA,
+        roAtRooftopB,
+        foreignRo,
+      };
+    });
+
+    /**
+     * ONE complete current-version ALLOW, written by hand — the same pseudo-keys as
+     * the sibling batteries: array literals for the matched bindings, and the window
+     * and authentication instants read from the rows they must equal INSIDE the
+     * INSERT (a value that round-trips through a JavaScript `Date` is a different
+     * instant). An optional executor lets a case run inside its own transaction —
+     * which is exactly what the write-instant tests need.
+     */
+    async function insertAllow(
+      overrides: Record<string, unknown> = {},
+      executor?: Executor,
+    ): Promise<void> {
+      const row: Record<string, unknown> = {
+        tenant_id: f.tenantId,
+        actor_user_link_id: f.linkId,
+        actor_type: 'user',
+        action: 'service.ro.view',
+        decision: 'allow',
+        reason_code: 'ALLOW_ROLE_BINDING',
+        policy_version: 'fbl-020.1',
+        request_id: 'req_' + randomUUID(),
+        correlation_id: 'corr_' + randomUUID(),
+        scope_level: 'tenant',
+        scope_id: f.tenantId,
+        session_id: f.sessionId,
+        connection_id: f.connectionId,
+        actor_provider_subject: f.subject,
+        ...overrides,
+      };
+      const emptyAuthority = row.matched_role_binding_ids === null;
+      const bindingIds = Array.isArray(row.matched_role_binding_ids)
+        ? (row.matched_role_binding_ids as readonly string[])
+        : [f.roleBindingId];
+      const bindingVersions = Array.isArray(row.matched_authorization_versions)
+        ? (row.matched_authorization_versions as readonly number[])
+        : [f.roleBindingVersion];
+      delete row.matched_role_binding_ids;
+      delete row.matched_authorization_versions;
+      const windowFrom = (row.support_session_id as string | undefined) ?? null;
+      const authTimeFrom = (row.session_id as string | null | undefined) ?? null;
+      const columns = Object.keys(row);
+      const placeholders = columns.map((_, i) => `$${i + 1}`);
+      const matched = emptyAuthority
+        ? `'{}'::uuid[], '{}'::bigint[]`
+        : `ARRAY[${bindingIds.map((b) => `'${b}'`).join(',')}]::uuid[], ` +
+          `ARRAY[${bindingVersions.join(',')}]::bigint[]`;
+      const windowExpression =
+        windowFrom === null
+          ? `NULL::timestamptz`
+          : `(SELECT s.expires_at FROM support_access_sessions s
+                WHERE s.support_session_id = '${windowFrom}')`;
+      const authTimeExpression =
+        authTimeFrom === null
+          ? `NULL::timestamptz`
+          : `(SELECT s.auth_time FROM identity_sessions s
+                WHERE s.session_id = '${authTimeFrom}')`;
+      const run = executor ?? { query };
+      await run.query(
+        `INSERT INTO policy_decisions (${columns.join(', ')},
+            matched_role_binding_ids, matched_authorization_versions,
+            support_session_expires_at, auth_time)
+         VALUES (${placeholders.join(', ')}, ${matched}, ${windowExpression},
+                 ${authTimeExpression})`,
+        columns.map((c) => row[c]),
+      );
+    }
+
+    async function countEvidence(): Promise<number> {
+      const r = await query(`SELECT COUNT(*)::int AS n FROM policy_decisions`);
+      return Number((r.rows[0] as { n: number }).n);
+    }
+
+    /** Files a support request for the platform actor; approves it unless told not to. */
+    async function supportRequest(options: {
+      requester?: string;
+      approve?: boolean;
+      durationMinutes?: number;
+      scopeLevel?: string;
+      scopeId?: string | null;
+      grantAction?: string;
+      grantResourceId?: string | null;
+    }): Promise<{ requestId: string; deciderId: string }> {
+      const requester = options.requester ?? f.platformLinkId;
+      const requestId = String(
+        (
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `INSERT INTO support_access_requests
+               (tenant_id, requester_user_link_id, requested_actions, reason,
+                requested_duration_minutes, scope_level, scope_id)
+             VALUES ($1, $2, ARRAY['service.ro.view'], 'r7 integrity fixture', $3, $4, $5)
+             RETURNING request_id`,
+            [
+              f.tenantId,
+              requester,
+              options.durationMinutes ?? 30,
+              options.scopeLevel ?? 'tenant',
+              options.scopeId ?? null,
+            ],
+          )
+        ).rows[0]?.request_id,
+      );
+      const deciderId = await bootstrapAdministrator(f.tenantId);
+      if (options.approve !== false) {
+        await mintReauthGrant({
+          tenantId: f.tenantId,
+          userLinkId: deciderId,
+          action: options.grantAction ?? 'identity.support.approve',
+          resourceType: 'support_access_request',
+          resourceId:
+            options.grantResourceId === undefined
+              ? requestId
+              : (options.grantResourceId ?? requestId),
+        });
+        // The approval CONSUMES the grant at the approval instant, exactly as
+        // the atomic production path does: two statements under ONE transaction
+        // clock (NOW() is transaction-stable), so `consumed_at` equals
+        // `decided_at` — the coherence 060 §5 (FBL-020-R7-C2) now requires of
+        // every approved state. Two statements rather than one WITH, because a
+        // data-modifying CTE's effect is invisible to triggers firing in the
+        // same statement.
+        await withTransaction(async (executor) => {
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE reauthentication_grants gr SET consumed_at = NOW()
+              WHERE gr.grant_id = (
+                SELECT g.grant_id FROM reauthentication_grants g
+                 WHERE g.user_link_id = $1 ORDER BY g.created_at DESC LIMIT 1)
+                AND gr.consumed_at IS NULL`,
+            [deciderId],
+            { executor },
+          );
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE support_access_requests
+                SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                    approval_grant_id = (
+                      SELECT g.grant_id FROM reauthentication_grants g
+                       WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+              WHERE request_id = $1`,
+            [requestId, deciderId],
+            { executor },
+          );
+        });
+      }
+      return { requestId, deciderId };
+    }
+
+    // ══ §3.1 — the support tuple ═══════════════════════════════════════════
+
+    test('a support session cannot substitute another REAL platform actor for the approved requester', async () => {
+      const { requestId } = await supportRequest({});
+      // The substitute is REAL, platform-scope, activated — everything a support
+      // actor must be, except the one thing that matters: not the person this
+      // approval delegated to. Before R7 nothing referential refused this row.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_sessions
+             (request_id, tenant_id, actor_user_link_id, expires_at)
+           VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+          [requestId, f.tenantId, f.platformTwoLinkId],
+        ),
+        { state: FK_VIOLATION, constraint: 'sas_actor_is_the_approved_requester' },
+        'a session naming a platform person the approval never delegated to',
+      );
+      // THE CONTROL LEG: the approved requester's own session is accepted.
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO support_access_sessions
+           (request_id, tenant_id, actor_user_link_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+        [requestId, f.tenantId, f.platformLinkId],
+      );
+      const rows = await query(`SELECT 1 FROM support_access_sessions`);
+      assert.equal(rows.rows.length, 1, 'the honest tuple is accepted');
+    });
+
+    test('a dealership link cannot be recorded as a platform-support actor', async () => {
+      const { requestId } = await supportRequest({});
+      const sessions = await query(
+        `SELECT support_session_id FROM support_access_sessions WHERE request_id = $1`,
+        [requestId],
+      );
+      // Create the legitimate session so every OTHER fact of the row can be real.
+      const sessionId =
+        sessions.rows.length > 0
+          ? String((sessions.rows[0] as Record<string, unknown>).support_session_id)
+          : String(
+              (
+                await fixtureAuthorizationStateWrite(
+                  'seed-authorization-state',
+                  `INSERT INTO support_access_sessions
+                     (request_id, tenant_id, actor_user_link_id, expires_at)
+                   VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+                   RETURNING support_session_id`,
+                  [requestId, f.tenantId, f.platformLinkId],
+                )
+              ).rows[0]?.support_session_id,
+            );
+      // The DEALERSHIP actor of this very tenant, wearing the platform-support
+      // label — the R6-era forgery every earlier support adversary was built on.
+      // The label is now bound to the actor's REAL scope.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'platform_support',
+          reason_code: 'ALLOW_SUPPORT_SESSION',
+          matched_role_binding_ids: null,
+          support_session_id: sessionId,
+          support_request_id: requestId,
+        }),
+        { state: RAISED, message: 'cannot be recorded as a platform-support actor' },
+        'a dealership link wearing the platform-support label',
+      );
+      assert.equal(await countEvidence(), 0);
+      // THE CONTROL LEG: the real platform person, same session, is accepted.
+      await insertAllow({
+        actor_type: 'platform_support',
+        reason_code: 'ALLOW_SUPPORT_SESSION',
+        matched_role_binding_ids: null,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
+        support_session_id: sessionId,
+        support_request_id: requestId,
+        support_authority_binding_id: f.platformBindingId,
+        support_authority_binding_version: f.platformBindingVersion,
+      });
+      assert.equal(await countEvidence(), 1);
+    });
+
+    // ══ §3.2 — a session may not exceed or precede its approval ════════════
+
+    test('a one-minute approval cannot produce a longer session', async () => {
+      const { requestId } = await supportRequest({ durationMinutes: 1 });
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_sessions
+             (request_id, tenant_id, actor_user_link_id, expires_at)
+           VALUES ($1, $2, $3, NOW() + INTERVAL '2 minutes')`,
+          [requestId, f.tenantId, f.platformLinkId],
+        ),
+        { state: RAISED, message: 'cannot produce a longer session' },
+        'a two-minute session under a one-minute approval',
+      );
+      // THE CONTROL LEG: exactly the requested minute is accepted.
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO support_access_sessions
+           (request_id, tenant_id, actor_user_link_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '1 minute')`,
+        [requestId, f.tenantId, f.platformLinkId],
+      );
+    });
+
+    test('a session cannot begin before its approval was decided', async () => {
+      const { requestId } = await supportRequest({});
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_sessions
+             (request_id, tenant_id, actor_user_link_id, granted_at, expires_at)
+           VALUES ($1, $2, $3, NOW() - INTERVAL '5 minutes', NOW() + INTERVAL '10 minutes')`,
+          [requestId, f.tenantId, f.platformLinkId],
+        ),
+        { state: RAISED, message: 'cannot begin before its approval' },
+        'a session granted before the decision that authorizes it',
+      );
+    });
+
+    test('a wrong-action or wrong-resource REAL grant cannot approve a support request', async () => {
+      // Both grants are REAL, high-assurance, MFA-certified and unexpired. One was
+      // minted for a different ACTION; the other for a different REQUEST. Before R7
+      // only the consuming code judged either fact.
+      const wrongAction = await supportRequest({ approve: false });
+      const decider = await bootstrapAdministrator(f.tenantId);
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: decider,
+        action: 'service.ro.void',
+        resourceType: 'support_access_request',
+        resourceId: wrongAction.requestId,
+      });
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [wrongAction.requestId, decider],
+        ),
+        { state: RAISED, message: 'only an identity.support.approve grant approves' },
+        'an approval citing a grant minted for a different action',
+      );
+
+      const wrongResource = await supportRequest({ approve: false });
+      const otherRequest = await supportRequest({ approve: false });
+      const decider2 = await bootstrapAdministrator(f.tenantId);
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: decider2,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: otherRequest.requestId,
+      });
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [wrongResource.requestId, decider2],
+        ),
+        { state: RAISED, message: 'a grant approves exactly the request it names' },
+        'an approval citing a grant minted for a different request',
+      );
+    });
+
+    test('an approved scope must be a real, effective node of the request tenant', async () => {
+      // nonexistent
+      await assertRefusedBy(
+        supportRequest({ scopeLevel: 'rooftop', scopeId: randomUUID() }),
+        { state: RAISED, message: 'cannot delegate a scope that does not effectively exist' },
+        'an approval of a rooftop nobody built',
+      );
+      // foreign-tenant: a REAL rooftop of the other tenant
+      await assertRefusedBy(
+        supportRequest({ scopeLevel: 'rooftop', scopeId: f.foreignRooftop }),
+        { state: RAISED, message: 'cannot delegate a scope that does not effectively exist' },
+        'an approval of another tenant’s real rooftop',
+      );
+      // inactive scope
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`,
+        [f.rooftopB],
+      );
+      await assertRefusedBy(
+        supportRequest({ scopeLevel: 'rooftop', scopeId: f.rooftopB }),
+        { state: RAISED, message: 'cannot delegate a scope that does not effectively exist' },
+        'an approval of an archived rooftop',
+      );
+      // out-of-window ancestor: the legal entity above rooftop A ages out
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE legal_entities
+            SET effective_from = NOW() - INTERVAL '2 days',
+                effective_to = NOW() - INTERVAL '1 minute'
+          WHERE legal_entity_id = $1`,
+        [f.legalEntityA],
+      );
+      await assertRefusedBy(
+        supportRequest({ scopeLevel: 'rooftop', scopeId: f.rooftopA }),
+        { state: RAISED, message: 'cannot delegate a scope that does not effectively exist' },
+        'an approval whose scope stands under an aged-out ancestor',
+      );
+      // THE CONTROL LEG: restore the chain; the same scope approves.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE legal_entities SET effective_to = NULL WHERE legal_entity_id = $1`,
+        [f.legalEntityA],
+      );
+      const ok = await supportRequest({ scopeLevel: 'rooftop', scopeId: f.rooftopA });
+      const status = await query(
+        `SELECT status FROM support_access_requests WHERE request_id = $1`,
+        [ok.requestId],
+      );
+      assert.equal(String((status.rows[0] as Record<string, unknown>).status), 'approved');
+    });
+
+    test('request and session authority fields are immutable once written', async () => {
+      const { requestId } = await supportRequest({});
+      const sessionId = String(
+        (
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `INSERT INTO support_access_sessions
+               (request_id, tenant_id, actor_user_link_id, expires_at)
+             VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+             RETURNING support_session_id`,
+            [requestId, f.tenantId, f.platformLinkId],
+          )
+        ).rows[0]?.support_session_id,
+      );
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests SET requested_duration_minutes = 60
+            WHERE request_id = $1`,
+          [requestId],
+        ),
+        { state: RAISED, message: 'are the AUTHORITY of request' },
+        'widening an approved request’s duration after the fact',
+      );
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_sessions SET expires_at = NOW() + INTERVAL '2 hours'
+            WHERE support_session_id = $1`,
+          [sessionId],
+        ),
+        { state: RAISED, message: 'are the AUTHORITY of session' },
+        'extending a live session’s window after the fact',
+      );
+      // The approval identity — decider, instant, grant — is SET ONCE by the
+      // decision and never moved afterwards.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests SET decided_at = NOW() - INTERVAL '1 hour'
+            WHERE request_id = $1`,
+          [requestId],
+        ),
+        { state: RAISED, message: 'is written once by the decision' },
+        're-dating an approval after the fact',
+      );
+    });
+
+    // ══ §3.3 — no action name decides delegation ═══════════════════════════
+
+    test('a platform-prefixed action cannot carry customer resource evidence without delegation', async () => {
+      // The R6-era shape, verbatim: a platform person, their REAL platform binding
+      // as authority, an action whose NAME starts with `platform.` — and a customer
+      // tenant plus a customer resource in the evidence, with no delegated-support
+      // session anywhere. The v2 rule exempted this row BECAUSE OF ITS NAME.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'platform_support',
+          reason_code: 'ALLOW_PLATFORM_ROLE',
+          action: 'platform.tenant.inspect',
+          actor_user_link_id: f.platformLinkId,
+          session_id: f.platformSessionId,
+          connection_id: f.platformConnectionId,
+          actor_provider_subject: f.platformSubject,
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+          matched_role_binding_ids: [f.platformBindingId],
+          matched_authorization_versions: [f.platformBindingVersion],
+        }),
+        { state: CHECK_VIOLATION, constraint: 'pd_v4_support_tenant_allow_is_delegated' },
+        'a platform-named allow reaching into a tenant with no delegation',
+      );
+      assert.equal(await countEvidence(), 0);
+
+      // THE CONTROL LEG — a GENUINE control-plane decision: structurally platform-
+      // scoped, NO authorization tenant, NO customer-resource payload, real platform
+      // authority; the tenant it operated ON travels as metadata in its own column.
+      await insertAllow({
+        actor_type: 'platform_support',
+        reason_code: 'ALLOW_PLATFORM_ROLE',
+        action: 'platform.tenant.inspect',
+        tenant_id: null,
+        scope_level: 'platform',
+        scope_id: null,
+        control_plane_target_tenant_id: f.tenantId,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
+        matched_role_binding_ids: [f.platformBindingId],
+        matched_authorization_versions: [f.platformBindingVersion],
+      });
+      const stored = await query(
+        `SELECT tenant_id, control_plane_target_tenant_id FROM policy_decisions`,
+      );
+      const row = stored.rows[0] as Record<string, unknown>;
+      assert.equal(row.tenant_id, null, 'the authorization tenant is structurally NULL');
+      assert.equal(
+        String(row.control_plane_target_tenant_id),
+        f.tenantId,
+        'and the operational target lives in its own metadata column',
+      );
+    });
+
+    // ══ §3.4 — resource decisions tied to their organization ancestry ═══════
+
+    test('a rooftop-A binding cannot authorize a real rooftop-B resource', async () => {
+      await assertRefusedBy(
+        insertAllow({
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopB,
+          scope_level: 'rooftop',
+          scope_id: f.rooftopA,
+          matched_role_binding_ids: [f.rooftopABindingId],
+          matched_authorization_versions: [f.rooftopABindingVersion],
+        }),
+        { state: RAISED, message: 'never authorizes a sibling' },
+        'a rooftop-A binding recorded as authority over a rooftop-B repair order',
+      );
+      assert.equal(await countEvidence(), 0);
+      // THE CONTROL LEG: the SAME binding over ITS OWN rooftop's resource.
+      await insertAllow({
+        resource_type: 'repair_order',
+        resource_id: f.roAtRooftopA,
+        scope_level: 'rooftop',
+        scope_id: f.rooftopA,
+        matched_role_binding_ids: [f.rooftopABindingId],
+        matched_authorization_versions: [f.rooftopABindingVersion],
+      });
+      const snap = await query(`SELECT resource_rooftop_id FROM policy_decisions`);
+      assert.equal(
+        String((snap.rows[0] as Record<string, unknown>).resource_rooftop_id),
+        f.rooftopA,
+        'and the decision carries the DATABASE-validated leaf snapshot',
+      );
+    });
+
+    test('an ancestor binding can authorize a real descendant resource', async () => {
+      await insertAllow({
+        resource_type: 'repair_order',
+        resource_id: f.roAtRooftopA,
+        scope_level: 'legal_entity',
+        scope_id: f.legalEntityA,
+        matched_role_binding_ids: [f.entityBindingId],
+        matched_authorization_versions: [f.entityBindingVersion],
+      });
+      assert.equal(await countEvidence(), 1, 'the legal-entity binding reaches its own rooftop');
+    });
+
+    test('nonexistent and foreign-tenant resources are rejected, and a supplied snapshot is validated', async () => {
+      await assertRefusedBy(
+        insertAllow({ resource_type: 'repair_order', resource_id: randomUUID() }),
+        { state: RAISED, message: 'does not resolve to an organization node' },
+        'a repair order nobody created',
+      );
+      await assertRefusedBy(
+        insertAllow({ resource_type: 'repair_order', resource_id: f.foreignRo }),
+        { state: RAISED, message: 'does not resolve to an organization node' },
+        'another tenant’s real repair order',
+      );
+      // The caller-supplied snapshot is VALIDATED, never trusted: a real resource
+      // with somebody else's rooftop written into the snapshot column.
+      await assertRefusedBy(
+        insertAllow({
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+          resource_rooftop_id: f.rooftopB,
+        }),
+        { state: RAISED, message: 'is validated, never trusted' },
+        'a caller-supplied resource snapshot that disagrees with the database',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    // ══ §3.5 — the whole chain, tenant included, at evidence-write time ═════
+
+    test('an ALLOW cannot stand on an inactive or out-of-window chain — six ways', async () => {
+      const rooftopAllow = {
+        scope_level: 'rooftop',
+        scope_id: f.rooftopA,
+        matched_role_binding_ids: [f.rooftopABindingId],
+        matched_authorization_versions: [f.rooftopABindingVersion],
+      };
+      // Each perturbation is a CLOSURE whose SQL literal sits DIRECTLY inside a
+      // `fixtureAuthorizationStateWrite(...)` call, which is where the
+      // owned-mutation guard requires a fixture's authorization-state write to be
+      // declared — SQL held as loose data, or routed through a local wrapper,
+      // would be lexically invisible to it.
+      const cases: ReadonlyArray<[string, string, () => Promise<unknown>]> = [
+        [
+          'inactive tenant',
+          'tenant',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE tenants SET status = 'suspended' WHERE tenant_id = $1`,
+              [f.tenantId],
+            ),
+        ],
+        [
+          'expired tenant window',
+          'tenant',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE tenants
+                  SET effective_from = NOW() - INTERVAL '2 days',
+                      effective_to = NOW() - INTERVAL '1 minute'
+                WHERE tenant_id = $1`,
+              [f.tenantId],
+            ),
+        ],
+        [
+          'inactive leaf',
+          'rooftop',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+        ],
+        [
+          'future-effective leaf',
+          'rooftop',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET effective_from = NOW() + INTERVAL '1 hour' WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+        ],
+        [
+          'inactive ancestor',
+          'legal_entity',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE legal_entities SET status = 'archived' WHERE legal_entity_id = $1`,
+              [f.legalEntityA],
+            ),
+        ],
+        [
+          'expired ancestor window',
+          'legal_entity',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE legal_entities
+                  SET effective_from = NOW() - INTERVAL '2 days',
+                      effective_to = NOW() - INTERVAL '1 minute'
+                WHERE legal_entity_id = $1`,
+              [f.legalEntityA],
+            ),
+        ],
+      ];
+      const restoreChain = async (): Promise<void> => {
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE tenants SET status = 'active', effective_to = NULL WHERE tenant_id = $1`,
+          [f.tenantId],
+        );
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE rooftops
+              SET status = 'active', effective_from = NOW() - INTERVAL '1 day'
+            WHERE rooftop_id = $1`,
+          [f.rooftopA],
+        );
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE legal_entities SET status = 'active', effective_to = NULL WHERE legal_entity_id = $1`,
+          [f.legalEntityA],
+        );
+      };
+      for (const [label, offendingLevel, perturb] of cases) {
+        await perturb();
+        await assertRefusedBy(
+          insertAllow(rooftopAllow),
+          { state: RAISED, message: offendingLevel },
+          `${label}: the chain judge must name the defective node`,
+        );
+        await restoreChain();
+      }
+      assert.equal(await countEvidence(), 0, 'none of the six wrote evidence');
+      // THE CONTROL LEG: the restored, fully active chain is accepted.
+      await insertAllow(rooftopAllow);
+      assert.equal(await countEvidence(), 1);
+    });
+
+    // ══ §3.6 — liveness at the ACTUAL write instant ═════════════════════════
+
+    test('a transaction started before a binding expired and completed after it is refused', async () => {
+      // A holder object rather than three `let`s: assignments made inside the
+      // transaction callback are invisible to control-flow narrowing, which
+      // would otherwise type the captured values as `never` at the judgment
+      // site below.
+      const seen: {
+        facts: { alive_by_txn_clock: boolean; expired_by_wall_clock: boolean } | null;
+        refusal: { code?: string; message?: string } | null;
+        completed: boolean;
+      } = { facts: null, refusal: null, completed: false };
+      await withTransaction(async (executor) => {
+        // Inside this transaction NOW() is frozen. Close the binding's window a few
+        // hundred milliseconds ahead of the LIVE clock, then let the wall cross it
+        // while the transaction stays open — the exact custody-transaction shape.
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE role_bindings
+              SET effective_to = clock_timestamp() + INTERVAL '350 milliseconds'
+            WHERE role_binding_id = $1`,
+          [f.roleBindingId],
+          { executor },
+        );
+        await executor.query(`SELECT pg_sleep(0.7)`);
+        const probe = await executor.query(
+          `SELECT (effective_to > NOW()) AS alive_by_txn_clock,
+                  (effective_to <= clock_timestamp()) AS expired_by_wall_clock
+             FROM role_bindings WHERE role_binding_id = $1`,
+          [f.roleBindingId],
+        );
+        // CAPTURED inside the transaction, JUDGED outside it: the trailing
+        // catch absorbs the abort the refusal causes, and any assertion placed
+        // in here would be absorbed with it — a dead assertion no mutation
+        // could ever fail.
+        seen.facts = probe.rows[0] as {
+          alive_by_txn_clock: boolean;
+          expired_by_wall_clock: boolean;
+        };
+        try {
+          await insertAllow({}, executor);
+          seen.completed = true;
+        } catch (err) {
+          seen.refusal = err as { code?: string; message?: string };
+        }
+        // Roll back either way, so a wrongly-accepted row can never commit.
+        throw new Error('probe transaction always rolls back');
+      }).catch(() => undefined);
+      const facts = seen.facts;
+      const refusal = seen.refusal;
+      assert.ok(facts, 'the premise probe ran');
+      assert.equal(facts.alive_by_txn_clock, true, 'premise: NOW() has not reached the window');
+      assert.equal(facts.expired_by_wall_clock, true, 'premise: clock_timestamp() has crossed it');
+      assert.equal(seen.completed, false, 'the straddling write must not complete');
+      assert.ok(refusal, 'it must be refused');
+      assert.equal(String(refusal.code), 'P0001', 'by the write-instant rule itself');
+      assert.ok(
+        String(refusal.message).includes('at the actual write instant'),
+        `the refusal names the write instant, got: ${String(refusal.message)}`,
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('an expired support session combined with a backdated occurred_at is refused', async () => {
+      const { requestId } = await supportRequest({});
+      const sessionId = String(
+        (
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `INSERT INTO support_access_sessions
+               (request_id, tenant_id, actor_user_link_id, expires_at)
+             VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+             RETURNING support_session_id`,
+            [requestId, f.tenantId, f.platformLinkId],
+          )
+        ).rows[0]?.support_session_id,
+      );
+      await shiftSupportWindowIntoThePast(sessionId);
+      // `occurred_at` is backdated INSIDE the shifted window, so every recorded
+      // instant is self-consistent — and the row is still refused, because
+      // liveness is judged at the actual write instant, which no recorded
+      // timestamp can stand in for.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'platform_support',
+          reason_code: 'ALLOW_SUPPORT_SESSION',
+          matched_role_binding_ids: null,
+          actor_user_link_id: f.platformLinkId,
+          session_id: f.platformSessionId,
+          connection_id: f.platformConnectionId,
+          actor_provider_subject: f.platformSubject,
+          support_session_id: sessionId,
+          support_request_id: requestId,
+          occurred_at: new Date(Date.now() - 45 * 60 * 1000),
+        }),
+        { state: RAISED, message: 'support session' },
+        'a support allow backdated into a window that has since closed',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    // ══ §3.1/§3.2 — the clauses the tests above leave unnamed ══════════════
+
+    test('a dealership link can neither file nor hold a support delegation', async () => {
+      // FILING: the requester-scope trigger answers before anything referential.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_requests
+             (tenant_id, requester_user_link_id, requested_actions, reason,
+              requested_duration_minutes, scope_level, scope_id)
+           VALUES ($1, $2, ARRAY['service.ro.view'], 'r7 integrity fixture', 30, 'tenant', NULL)`,
+          [f.tenantId, f.linkId],
+        ),
+        { state: RAISED, message: 'a dealership link cannot request it' },
+        'a support request filed by a dealership link',
+      );
+      // HOLDING: under a REAL approved delegation, the dealership actor dies at
+      // the scope rule ITSELF — pinned as a raise with its own words, so this
+      // test still names the defect even where the composite tuple FK (which
+      // would refuse the same row for a different reason) is out of the picture.
+      const { requestId } = await supportRequest({});
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_sessions
+             (request_id, tenant_id, actor_user_link_id, expires_at)
+           VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+          [requestId, f.tenantId, f.linkId],
+        ),
+        { state: RAISED, message: 'a dealership link cannot hold one' },
+        'a support session held by a dealership link',
+      );
+      // THE CONTROL LEG: the platform requester holds the same shape.
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO support_access_sessions
+           (request_id, tenant_id, actor_user_link_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+        [requestId, f.tenantId, f.platformLinkId],
+      );
+    });
+
+    test('a session cannot exist under a request nobody approved', async () => {
+      const { requestId } = await supportRequest({ approve: false });
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO support_access_sessions
+             (request_id, tenant_id, actor_user_link_id, expires_at)
+           VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+          [requestId, f.tenantId, f.platformLinkId],
+        ),
+        { state: RAISED, message: 'a session exists only under an approved, decided request' },
+        'a session under a pending request',
+      );
+      // THE CONTROL LEG: the same tuple under a decided approval is accepted.
+      const approved = await supportRequest({});
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO support_access_sessions
+           (request_id, tenant_id, actor_user_link_id, expires_at)
+         VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')`,
+        [approved.requestId, f.tenantId, f.platformLinkId],
+      );
+    });
+
+    test('an approval cannot cite a grant at the wrong assurance or without MFA certification', async () => {
+      const { requestId, deciderId } = await supportRequest({ approve: false });
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: deciderId,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      // The approval consumes at the approval instant, like the atomic path —
+      // so a refusal here is attributable to the grant's ASSURANCE facts, not
+      // to 060 §5's separate consumption coherence.
+      const approve = () =>
+        withTransaction(async (executor) => {
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE reauthentication_grants gr SET consumed_at = NOW()
+              WHERE gr.grant_id = (
+                SELECT g.grant_id FROM reauthentication_grants g
+                 WHERE g.user_link_id = $1 ORDER BY g.created_at DESC LIMIT 1)
+                AND gr.consumed_at IS NULL`,
+            [deciderId],
+            { executor },
+          );
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE support_access_requests
+                SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                    approval_grant_id = (
+                      SELECT g.grant_id FROM reauthentication_grants g
+                       WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+              WHERE request_id = $1`,
+            [requestId, deciderId],
+            { executor },
+          );
+        });
+      // The REAL grant, demoted to the lower assurance the grants table still
+      // legally carries — just never for approving support access.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE reauthentication_grants SET assurance_level = 'fresh_only'
+          WHERE user_link_id = $1`,
+        [deciderId],
+      );
+      await assertRefusedBy(
+        approve(),
+        { state: RAISED, message: 'requires fresh_and_mfa_policy' },
+        'an approval citing a fresh_only grant',
+      );
+      // The right assurance, stripped of its MFA-policy certification.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE reauthentication_grants
+            SET assurance_level = 'fresh_and_mfa_policy', mfa_policy_certified_at_issue = FALSE
+          WHERE user_link_id = $1`,
+        [deciderId],
+      );
+      await assertRefusedBy(
+        approve(),
+        { state: RAISED, message: 'without MFA policy certification' },
+        'an approval citing an uncertified grant',
+      );
+      // THE CONTROL LEG: restored to what the production path mints, it approves.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE reauthentication_grants SET mfa_policy_certified_at_issue = TRUE
+          WHERE user_link_id = $1`,
+        [deciderId],
+      );
+      await approve();
+      const status = await query(
+        `SELECT status FROM support_access_requests WHERE request_id = $1`,
+        [requestId],
+      );
+      assert.equal(String((status.rows[0] as Record<string, unknown>).status), 'approved');
+    });
+
+    // ══ §3.3/§3.4 — the version-4 CHECKs and the snapshot key, one by one ═══
+
+    test('a resource ALLOW cannot stand on a dead chain above its own resource', async () => {
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`,
+        [f.rooftopA],
+      );
+      await assertRefusedBy(
+        insertAllow({ resource_type: 'repair_order', resource_id: f.roAtRooftopA }),
+        { state: RAISED, message: 'chain above resource' },
+        'a resource allow whose own rooftop has been archived',
+      );
+      assert.equal(await countEvidence(), 0);
+      // THE CONTROL LEG: restore the chain; the same evidence is accepted.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE rooftops SET status = 'active' WHERE rooftop_id = $1`,
+        [f.rooftopA],
+      );
+      await insertAllow({ resource_type: 'repair_order', resource_id: f.roAtRooftopA });
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a resource-rooftop snapshot cannot name another tenant’s rooftop', async () => {
+      await assertRefusedBy(
+        insertAllow({ resource_rooftop_id: f.foreignRooftop }),
+        { state: FK_VIOLATION, constraint: 'pd_resource_rooftop_in_tenant' },
+        'a snapshot naming a rooftop outside the decision’s tenant',
+      );
+      assert.equal(await countEvidence(), 0);
+      // THE CONTROL LEG: the tenant’s own rooftop satisfies the key.
+      await insertAllow({ resource_rooftop_id: f.rooftopA });
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a control-plane decision cannot smuggle a customer-resource payload', async () => {
+      // The genuine control-plane shape (proved by the delegation test’s control
+      // leg) with ONE change: a customer resource in the evidence columns.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'platform_support',
+          reason_code: 'ALLOW_PLATFORM_ROLE',
+          action: 'platform.tenant.inspect',
+          tenant_id: null,
+          scope_level: 'platform',
+          scope_id: null,
+          actor_user_link_id: f.platformLinkId,
+          session_id: f.platformSessionId,
+          connection_id: f.platformConnectionId,
+          actor_provider_subject: f.platformSubject,
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+          resource_rooftop_id: f.rooftopA,
+          matched_role_binding_ids: [f.platformBindingId],
+          matched_authorization_versions: [f.platformBindingVersion],
+        }),
+        { state: CHECK_VIOLATION, constraint: 'pd_v4_control_plane_is_structural' },
+        'a structurally platform-scoped row carrying a customer resource',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('the control-plane target tenant cannot ride on a tenant-scoped decision', async () => {
+      await assertRefusedBy(
+        insertAllow({ control_plane_target_tenant_id: f.otherTenantId }),
+        { state: CHECK_VIOLATION, constraint: 'pd_v4_target_tenant_is_metadata' },
+        'target-tenant metadata on an ordinary tenant decision',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('a platform-NAMED action cannot free an identified actor from naming a tenant', async () => {
+      // The v2 completeness rule exempted this row BY NAME (`platform.*`); the
+      // v4 rule is structural and the name buys nothing.
+      await assertRefusedBy(
+        insertAllow({ action: 'platform.tenant.inspect', tenant_id: null, scope_id: null }),
+        { state: CHECK_VIOLATION, constraint: 'pd_v4_identified_actor_names_a_tenant' },
+        'an identified dealership actor with no tenant under a platform-named action',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('a version-4 resource ALLOW cannot omit its validated rooftop snapshot', async () => {
+      // FBL-020-R7-C1 §6 closed the null-tenant system lane this test used to
+      // reach the snapshot CHECK through: a resource ALLOW must now name a
+      // tenant (migration 060), so 059's resolution trigger always fires and no
+      // resource ALLOW can be snapshot-less. The same row is therefore refused
+      // one rule EARLIER now — by the tenant requirement — which is the closure,
+      // not a regression. The snapshot CHECK stands as a backstop beneath it.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'system',
+          actor_user_link_id: null,
+          session_id: null,
+          connection_id: null,
+          actor_provider_subject: null,
+          tenant_id: null,
+          scope_level: null,
+          scope_id: null,
+          action: 'system.retention.sweep',
+          reason_code: 'ALLOW_SYSTEM_POLICY',
+          matched_role_binding_ids: null,
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+        }),
+        // Two constraints legitimately refuse this row post-060 — the 059
+        // snapshot rule (no rooftop) and the 060 tenant rule (no tenant) — and
+        // CHECK evaluation order is not guaranteed, so the violation is asserted
+        // without pinning which of the two speaks first.
+        { state: CHECK_VIOLATION },
+        'a system resource allow with no tenant and no database-validated leaf',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('a resource ALLOW that omits its snapshot receives the database’s own resolution', async () => {
+      /*
+       * FBL-020-R7-C2 §6 — the positive half of the snapshot rule, pinned on
+       * its own: the production writer OMITS resource_rooftop_id and the
+       * structural trigger ASSIGNS the database's resolution before 059's
+       * pd_v4_resource_allow_names_its_rooftop CHECK is evaluated. That
+       * assignment is the piece of the stack that took over the (now
+       * unreachable) CHECK's job, and the one-for-one replacement mutation
+       * `resource_allow_snapshot_unassigned` removes exactly it — under which
+       * this insert dies on the CHECK instead of landing — so this test is what
+       * kills that mutation.
+       */
+      await insertAllow({ resource_type: 'repair_order', resource_id: f.roAtRooftopA });
+      const stored = await query(
+        `SELECT resource_rooftop_id FROM policy_decisions WHERE resource_id = $1`,
+        [f.roAtRooftopA],
+      );
+      assert.equal(stored.rows.length, 1, 'the snapshotless insert landed');
+      assert.equal(
+        String((stored.rows[0] as Record<string, unknown>).resource_rooftop_id),
+        f.rooftopA,
+        'and carries the database’s own resolution, not an absent or caller value',
+      );
+    });
+
+    test('occurred_at is checked for consistency and can never BE the authority clock', async () => {
+      await assertRefusedBy(
+        insertAllow({ occurred_at: new Date(Date.now() + 60_000) }),
+        { state: RAISED, message: 'cannot predate itself' },
+        'evidence dated in the future of its own write',
+      );
+      await assertRefusedBy(
+        insertAllow({ occurred_at: new Date(Date.now() - 2 * 60 * 60 * 1000) }),
+        { state: RAISED, message: 'cannot stand in for authority' },
+        'evidence backdated by hours',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    // ══ FBL-020-R7-C1 §4/§5/§6/§7 — THE ACCEPTANCE CORRECTIONS ═══════════════
+    //
+    // Migration 060 layers these over the immutable 059. Each is a real,
+    // cross-wired row that 059 accepted and 060 refuses, with an accepted
+    // control leg. The helpers reuse the fixture above: `f.platformLinkId` is a
+    // REAL platform person, `f.platformBindingId` their platform authority,
+    // `f.roAtRooftopA`/`f.roAtRooftopB` real resources under sibling rooftops.
+
+    // A live approved support session for the platform person, at a given scope.
+    async function liveSupportSession(
+      scopeLevel: string,
+      scopeId: string | null,
+    ): Promise<{ requestId: string; sessionId: string }> {
+      const { requestId } = await supportRequest({ scopeLevel, scopeId });
+      const sessionId = String(
+        (
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `INSERT INTO support_access_sessions
+               (request_id, tenant_id, actor_user_link_id, expires_at)
+             VALUES ($1, $2, $3, NOW() + INTERVAL '30 minutes')
+             RETURNING support_session_id`,
+            [requestId, f.tenantId, f.platformLinkId],
+          )
+        ).rows[0]?.support_session_id,
+      );
+      return { requestId, sessionId };
+    }
+
+    // A delegated (support-session) ALLOW row, its scope matching the approval
+    // (so 058/059 accept it) and its resource free to name anything real. Since
+    // FBL-020-R7-C2 §3 it names the EXACT supporting authority — the platform
+    // binding the evaluation relied upon, at the version it observed — which
+    // 060 §2 revalidates at the write instant.
+    function supportAllow(
+      session: { requestId: string; sessionId: string },
+      scopeLevel: string,
+      scopeId: string | null,
+      overrides: Record<string, unknown> = {},
+    ): Record<string, unknown> {
+      return {
+        actor_type: 'platform_support',
+        reason_code: 'ALLOW_SUPPORT_SESSION',
+        matched_role_binding_ids: null,
+        actor_user_link_id: f.platformLinkId,
+        session_id: f.platformSessionId,
+        connection_id: f.platformConnectionId,
+        actor_provider_subject: f.platformSubject,
+        support_session_id: session.sessionId,
+        support_request_id: session.requestId,
+        support_authority_binding_id: f.platformBindingId,
+        support_authority_binding_version: f.platformBindingVersion,
+        scope_level: scopeLevel,
+        scope_id: scopeId,
+        ...overrides,
+      };
+    }
+
+    // ── §4 — support authority must be LIVE at the write instant ────────────
+
+    test('a support ALLOW is refused when the actor’s platform binding is revoked before the write', async () => {
+      const session = await liveSupportSession('tenant', null);
+      // The platform authority the engine read at evaluation is REVOKED between
+      // evaluation and the evidence write — the exact race 060 §4 closes.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW() WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: 'revoked between evaluation and the write records nothing' },
+        'a delegation whose platform authority was revoked before the write',
+      );
+      assert.equal(await countEvidence(), 0, 'no policy ALLOW is left behind');
+      // THE CONTROL LEG: with the binding restored, the same row is accepted.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET status = 'active', revoked_at = NULL WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await insertAllow(supportAllow(session, 'tenant', null));
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a support ALLOW is refused when the actor’s platform binding ages out before the write', async () => {
+      const session = await liveSupportSession('tenant', null);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings
+            SET effective_from = NOW() - INTERVAL '2 days',
+                effective_to = NOW() - INTERVAL '1 minute'
+          WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: 'aged out between evaluation and the write records nothing' },
+        'a delegation whose platform authority aged out before the write',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    // ── FBL-020-R7-C2 §3 — the EXACT supporting authority, revalidated ──────
+
+    test('a support ALLOW cannot omit the exact supporting authority it relied upon', async () => {
+      const session = await liveSupportSession('tenant', null);
+      await assertRefusedBy(
+        insertAllow(
+          supportAllow(session, 'tenant', null, {
+            support_authority_binding_id: null,
+            support_authority_binding_version: null,
+          }),
+        ),
+        { state: RAISED, message: 'must name the exact platform role binding' },
+        'a delegated ALLOW claiming only that some platform authority existed',
+      );
+      assert.equal(await countEvidence(), 0);
+      // CONTROL: the same row NAMING its authority is accepted.
+      await insertAllow(supportAllow(session, 'tenant', null));
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('an unrelated surviving platform binding cannot mask the loss of the supporting authority', async () => {
+      const session = await liveSupportSession('tenant', null);
+      // The actor gains a SECOND live platform binding, and a second platform
+      // person holds their own — both real, both live, both scope platform.
+      await grant(null, f.platformLinkId, {
+        role: 'platform_admin',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
+      const strangerBindingId = await grant(null, f.platformTwoLinkId, {
+        role: 'platform_support',
+        scopeLevel: 'platform',
+        scopeId: null,
+      });
+      const strangerVersion = await bindingVersion(strangerBindingId);
+      // (i) SOMEBODY ELSE'S live platform binding named as the authority: not
+      // the actor's, so it is not what this evaluation relied upon.
+      await assertRefusedBy(
+        insertAllow(
+          supportAllow(session, 'tenant', null, {
+            support_authority_binding_id: strangerBindingId,
+            support_authority_binding_version: strangerVersion,
+          }),
+        ),
+        { state: RAISED, message: 'an unrelated surviving platform binding cannot stand in' },
+        'another person’s live platform binding named as the supporting authority',
+      );
+      // (ii) the NAMED binding is revoked; the actor's OTHER platform binding
+      // survives, live and allowed — and must not mask the loss.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW() WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: 'revoked between evaluation and the write records nothing' },
+        'the named authority revoked while an unrelated binding of the same actor survives',
+      );
+      assert.equal(await countEvidence(), 0, 'no ALLOW landed under the surviving binding');
+    });
+
+    test('a supporting binding stripped of its support role refuses the write', async () => {
+      const session = await liveSupportSession('tenant', null);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET role = 'platform_viewer' WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: 'not an allowed support-authority role' },
+        'a supporting binding moved out of the support roles between evaluation and write',
+      );
+      assert.equal(await countEvidence(), 0);
+      // CONTROL: with the role restored, the same row is accepted.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET role = 'platform_support' WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await insertAllow(supportAllow(session, 'tenant', null));
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a supporting binding changed since evaluation refuses the write', async () => {
+      const session = await liveSupportSession('tenant', null);
+      // The binding is re-versioned — a re-grant, a re-scope, any change at
+      // all — after the evaluation observed it. Same id, different authority.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET authorization_version = authorization_version + 1
+          WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: 'must be re-evaluated, not recorded' },
+        'a supporting binding re-versioned between evaluation and the write',
+      );
+      assert.equal(await countEvidence(), 0);
+      // CONTROL: evidence naming the CURRENT version is accepted.
+      await insertAllow(
+        supportAllow(session, 'tenant', null, {
+          support_authority_binding_version: await bindingVersion(f.platformBindingId),
+        }),
+      );
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a deactivated support actor’s delegation records nothing', async () => {
+      const session = await liveSupportSession('tenant', null);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE user_links SET status = 'deactivated', deactivated_at = NOW()
+          WHERE user_link_id = $1`,
+        [f.platformLinkId],
+      );
+      await assertRefusedBy(
+        insertAllow(supportAllow(session, 'tenant', null)),
+        { state: RAISED, message: "deactivated actor's delegation records nothing" },
+        'a delegation whose actor was deactivated before the write',
+      );
+      assert.equal(await countEvidence(), 0);
+      // CONTROL: reactivated, the same delegation is accepted.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE user_links SET status = 'activated', deactivated_at = NULL
+          WHERE user_link_id = $1`,
+        [f.platformLinkId],
+      );
+      await insertAllow(supportAllow(session, 'tenant', null));
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('a refused support write leaves neither policy nor audit ALLOW evidence', async () => {
+      const session = await liveSupportSession('tenant', null);
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET status = 'revoked', revoked_at = NOW() WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      // The evidence row and its identity.support.used audit row are ONE
+      // transaction in the production writer; here the pair is attempted the
+      // same way, and the trigger refusal aborts BOTH.
+      await assert.rejects(
+        withTransaction(async (executor) => {
+          await executor.query(
+            `INSERT INTO audit_events
+               (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+             VALUES ($1, 'identity.support.used', 'support_access_session', $2, $3, '{}')`,
+            [f.tenantId, session.sessionId, f.platformLinkId],
+          );
+          await insertAllow(supportAllow(session, 'tenant', null), executor);
+        }),
+        'the refused support write must abort its transaction',
+      );
+      assert.equal(await countEvidence(), 0, 'no policy ALLOW evidence survives');
+      const audits = await query(
+        `SELECT 1 FROM audit_events WHERE event_type = 'identity.support.used'`,
+      );
+      assert.equal(audits.rows.length, 0, 'no audit ALLOW evidence survives');
+      // CONTROL: with the authority restored the same pair lands intact.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE role_bindings SET status = 'active', revoked_at = NULL WHERE role_binding_id = $1`,
+        [f.platformBindingId],
+      );
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `INSERT INTO audit_events
+             (tenant_id, event_type, entity_type, entity_id, actor_user_id, details)
+           VALUES ($1, 'identity.support.used', 'support_access_session', $2, $3, '{}')`,
+          [f.tenantId, session.sessionId, f.platformLinkId],
+        );
+        await insertAllow(supportAllow(session, 'tenant', null), executor);
+      });
+      assert.equal(await countEvidence(), 1);
+      const kept = await query(
+        `SELECT 1 FROM audit_events WHERE event_type = 'identity.support.used'`,
+      );
+      assert.equal(kept.rows.length, 1, 'the legitimate pair lands together');
+    });
+
+    // ── §5 — the approved scope must cover the actual resource ──────────────
+
+    test('a rooftop-A support approval cannot authorize a rooftop-B resource', async () => {
+      const session = await liveSupportSession('rooftop', f.rooftopA);
+      // The decision RECORDS the approved scope (rooftop A) — so 058/059 accept
+      // it — but names a resource in rooftop B. 060 §5 relates the two.
+      await assertRefusedBy(
+        insertAllow(
+          supportAllow(session, 'rooftop', f.rooftopA, {
+            resource_type: 'repair_order',
+            resource_id: f.roAtRooftopB,
+          }),
+        ),
+        { state: RAISED, message: 'is NOT under that approved scope' },
+        'a rooftop-A delegation recorded against a rooftop-B repair order',
+      );
+      assert.equal(await countEvidence(), 0);
+      // CONTROL: the SAME approval over ITS OWN rooftop’s resource is accepted.
+      await insertAllow(
+        supportAllow(session, 'rooftop', f.rooftopA, {
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+        }),
+      );
+      assert.equal(await countEvidence(), 1);
+    });
+
+    test('an ancestor support approval reaches a descendant resource, and a foreign resource is refused', async () => {
+      // A legal-entity approval reaches a repair order under one of its rooftops.
+      const entity = await liveSupportSession('legal_entity', f.legalEntityA);
+      await insertAllow(
+        supportAllow(entity, 'legal_entity', f.legalEntityA, {
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+        }),
+      );
+      assert.equal(await countEvidence(), 1, 'an ancestor scope reaches its descendant resource');
+
+      // A foreign-tenant resource under the same approval is refused (059 resolves
+      // it to nothing in this tenant before 060 §5 is even reached).
+      await assertRefusedBy(
+        insertAllow(
+          supportAllow(entity, 'legal_entity', f.legalEntityA, {
+            resource_type: 'repair_order',
+            resource_id: f.foreignRo,
+          }),
+        ),
+        { state: RAISED, message: 'does not resolve to an organization node' },
+        'a foreign-tenant resource under a real approval',
+      );
+    });
+
+    // ── §6 — the system lane is no escape from validation ───────────────────
+
+    test('a system resource ALLOW cannot carry a null tenant and a fabricated rooftop snapshot', async () => {
+      // The R7-era bypass verbatim: a system row, NULL authorization tenant, a
+      // fabricated rooftop snapshot that satisfied pd_v4_resource_allow_names_
+      // its_rooftop while skipping resolution. 060 requires a resource ALLOW to
+      // name a tenant, so 059’s resolution trigger always fires.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'system',
+          actor_user_link_id: null,
+          session_id: null,
+          connection_id: null,
+          actor_provider_subject: null,
+          tenant_id: null,
+          scope_level: null,
+          scope_id: null,
+          action: 'system.retention.sweep',
+          reason_code: 'ALLOW_SYSTEM_POLICY',
+          matched_role_binding_ids: null,
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+          resource_rooftop_id: f.rooftopB,
+        }),
+        { state: CHECK_VIOLATION, constraint: 'pd_resource_allow_names_a_tenant' },
+        'a system resource ALLOW with no authorization tenant',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('a system resource ALLOW that names a tenant is validated against the real resolution', async () => {
+      // With a tenant present, 059’s resolution fires and refuses a fabricated
+      // snapshot — the system lane gets no exemption from real resolution.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'system',
+          actor_user_link_id: null,
+          session_id: null,
+          connection_id: null,
+          actor_provider_subject: null,
+          scope_level: null,
+          scope_id: null,
+          action: 'system.retention.sweep',
+          reason_code: 'ALLOW_SYSTEM_POLICY',
+          matched_role_binding_ids: null,
+          resource_type: 'repair_order',
+          resource_id: f.roAtRooftopA,
+          resource_rooftop_id: f.rooftopB,
+        }),
+        { state: RAISED, message: 'is validated, never trusted' },
+        'a system resource ALLOW with a fabricated rooftop snapshot',
+      );
+      // A nonexistent resource under a system row is refused too.
+      await assertRefusedBy(
+        insertAllow({
+          actor_type: 'system',
+          actor_user_link_id: null,
+          session_id: null,
+          connection_id: null,
+          actor_provider_subject: null,
+          scope_level: null,
+          scope_id: null,
+          action: 'system.retention.sweep',
+          reason_code: 'ALLOW_SYSTEM_POLICY',
+          matched_role_binding_ids: null,
+          resource_type: 'repair_order',
+          resource_id: randomUUID(),
+        }),
+        { state: RAISED, message: 'does not resolve to an organization node' },
+        'a system resource ALLOW naming a resource that is nowhere',
+      );
+      assert.equal(await countEvidence(), 0);
+    });
+
+    test('a system row cannot carry human, credential or support evidence', async () => {
+      // The actor and the (complete) credential group are pinned to MY closure
+      // constraint; the support-session case is refused by defense in depth
+      // (a system row is not platform_support), which is the mixed-evidence
+      // closure the order requires, so it is asserted refused without pinning
+      // which of the overlapping rules speaks first.
+      const systemBase = {
+        actor_type: 'system',
+        actor_user_link_id: null,
+        session_id: null,
+        connection_id: null,
+        actor_provider_subject: null,
+        scope_level: 'tenant',
+        scope_id: f.tenantId,
+        action: 'system.retention.sweep',
+        reason_code: 'ALLOW_SYSTEM_POLICY',
+        matched_role_binding_ids: null,
+      };
+      // The human-actor case is pinned to MY closure constraint. The credential
+      // and support cases are refused by defense-in-depth constraints that
+      // legitimately speak first (a presented session needs a real actor; a
+      // support row must be platform_support) — the mixed-evidence closure the
+      // order requires holds whichever overlapping rule fires.
+      await assertRefusedBy(
+        insertAllow({ ...systemBase, actor_user_link_id: f.linkId }),
+        { state: CHECK_VIOLATION, constraint: 'pd_system_row_carries_no_human_evidence' },
+        'a system row carrying a human actor',
+      );
+      await assertRefusedBy(
+        insertAllow({
+          ...systemBase,
+          session_id: f.sessionId,
+          connection_id: f.connectionId,
+          actor_provider_subject: f.subject,
+        }),
+        { state: CHECK_VIOLATION },
+        'a system row carrying a presented credential',
+      );
+      // The support-evidence case: since C2 §3 the write-instant authority
+      // trigger (a BEFORE trigger, so it speaks before any CHECK) refuses a
+      // support ALLOW that names no supporting binding — and a system row
+      // could never name one it is allowed to carry, because the §6 CHECK
+      // forbids a system row every piece of human or support evidence. Either
+      // refusal closes the same door; the row is asserted unrepresentable
+      // without pinning which overlapping rule speaks first.
+      await assert.rejects(
+        insertAllow({
+          ...systemBase,
+          support_session_id: randomUUID(),
+          support_request_id: randomUUID(),
+        }),
+        (err: unknown) => {
+          const code = (err as { code?: string }).code;
+          assert.ok(
+            code === CHECK_VIOLATION || code === RAISED,
+            `a system row carrying support evidence is refused (got ${String(code)})`,
+          );
+          return true;
+        },
+        'a system row carrying a support session',
+      );
+      assert.equal(await countEvidence(), 0);
+      // THE STRUCTURAL POSITIVE CONTROL: a pure system tenant-scope decision.
+      await insertAllow({
+        actor_type: 'system',
+        actor_user_link_id: null,
+        session_id: null,
+        connection_id: null,
+        actor_provider_subject: null,
+        scope_level: 'tenant',
+        scope_id: f.tenantId,
+        action: 'system.retention.sweep',
+        reason_code: 'ALLOW_SYSTEM_POLICY',
+        matched_role_binding_ids: null,
+      });
+      assert.equal(await countEvidence(), 1, 'a pure system decision is accepted');
+    });
+
+    // ── §7 — the complete approval transition is validated on every approval ─
+
+    test('a staged pending-then-approved transition cannot bypass scope validation', async () => {
+      // Stage the bypass: a pending request with a grant already attached for a
+      // DEFECTIVE (archived) rooftop, then flip status to approved WITHOUT
+      // touching the grant id — the shape 059’s unchanged-grant early return
+      // skipped. 060 re-validates the complete invariant on every approved state.
+      // Each drift/restore is a CLOSURE whose SQL literal sits DIRECTLY inside a
+      // fixtureAuthorizationStateWrite(...) call, where the owned-mutation guard
+      // requires a fixture's authorization-state write to be declared — SQL held
+      // in a variable would be lexically invisible to it.
+      const cases: ReadonlyArray<[string, () => Promise<unknown>, () => Promise<unknown>]> = [
+        [
+          'an archived rooftop',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET status = 'archived' WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET status = 'active', effective_from = NOW() - INTERVAL '1 day', effective_to = NULL WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+        ],
+        [
+          'a future-effective rooftop',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET effective_from = NOW() + INTERVAL '1 hour' WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE rooftops SET status = 'active', effective_from = NOW() - INTERVAL '1 day', effective_to = NULL WHERE rooftop_id = $1`,
+              [f.rooftopA],
+            ),
+        ],
+        [
+          'an aged-out ancestor',
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE legal_entities
+                  SET effective_from = NOW() - INTERVAL '2 days', effective_to = NOW() - INTERVAL '1 minute'
+                WHERE legal_entity_id = $1`,
+              [f.legalEntityA],
+            ),
+          () =>
+            fixtureAuthorizationStateWrite(
+              'simulate-authorization-drift',
+              `UPDATE legal_entities SET status = 'active', effective_from = NOW() - INTERVAL '1 day', effective_to = NULL WHERE legal_entity_id = $1`,
+              [f.legalEntityA],
+            ),
+        ],
+      ];
+      for (const [label, drift, restore] of cases) {
+        // A pending request at the rooftop-A scope, grant attached while pending.
+        const { requestId, deciderId } = await supportRequest({
+          approve: false,
+          scopeLevel: 'rooftop',
+          scopeId: f.rooftopA,
+        });
+        await mintReauthGrant({
+          tenantId: f.tenantId,
+          userLinkId: deciderId,
+          action: 'identity.support.approve',
+          resourceType: 'support_access_request',
+          resourceId: requestId,
+        });
+        await fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET approval_grant_id = (SELECT g.grant_id FROM reauthentication_grants g
+                                        WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [requestId, deciderId],
+        );
+        // Now the scope goes defective, and the staged flip to approved runs.
+        // The flip consumes the staged grant at its own instant (as a bypass
+        // that wanted to survive C2 §5's consumption coherence would have to),
+        // so the refusal this test pins is the SCOPE re-check — the clause
+        // 059's unchanged-grant early return used to skip.
+        await drift();
+        await assertRefusedBy(
+          withTransaction(async (executor) => {
+            await fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE reauthentication_grants gr SET consumed_at = NOW()
+                WHERE gr.grant_id = (
+                  SELECT r.approval_grant_id FROM support_access_requests r
+                   WHERE r.request_id = $1)
+                  AND gr.consumed_at IS NULL`,
+              [requestId],
+              { executor },
+            );
+            await fixtureAuthorizationStateWrite(
+              'adversarial-bypass-attempt',
+              `UPDATE support_access_requests
+                  SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2
+                WHERE request_id = $1`,
+              [requestId, deciderId],
+              { executor },
+            );
+          }),
+          { state: RAISED, message: 'does not effectively exist' },
+          `a staged approval over ${label}`,
+        );
+        await restore();
+      }
+    });
+
+    test('a request cannot become approved from a terminal state', async () => {
+      const { requestId, deciderId } = await supportRequest({ approve: false });
+      // Drive it to denied first.
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `UPDATE support_access_requests
+            SET status = 'denied', decided_at = NOW(), decided_by_user_link_id = $2
+          WHERE request_id = $1`,
+        [requestId, deciderId],
+      );
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: deciderId,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET status = 'approved',
+                  approval_grant_id = (SELECT g.grant_id FROM reauthentication_grants g
+                                        WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [requestId, deciderId],
+        ),
+        { state: RAISED, message: 'cannot become approved from status' },
+        'a denied request re-opened as approved',
+      );
+    });
+
+    test('a valid atomic approval is accepted', async () => {
+      // The control leg for §7: the honest, all-at-once approval the production
+      // path takes still succeeds.
+      const { requestId } = await supportRequest({ scopeLevel: 'rooftop', scopeId: f.rooftopA });
+      const status = await query(
+        `SELECT status FROM support_access_requests WHERE request_id = $1`,
+        [requestId],
+      );
+      assert.equal(String((status.rows[0] as Record<string, unknown>).status), 'approved');
+    });
+
+    // ══ FBL-020-R7-C2 §5 — the grant's CONSUMPTION is part of the approval ═══
+
+    test('an approval citing an unconsumed grant is refused', async () => {
+      const { requestId, deciderId } = await supportRequest({ approve: false });
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: deciderId,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      // Everything else about this approval is healthy — right action, this
+      // request, high assurance, effective scope — except that the grant was
+      // never SPENT. A step-up that never paid for anything approves nothing.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [requestId, deciderId],
+        ),
+        { state: RAISED, message: 'was never consumed' },
+        'an approval citing a grant that was never spent',
+      );
+    });
+
+    test('an approval whose grant expired before its instants is refused', async () => {
+      const { requestId, deciderId } = await supportRequest({ approve: false });
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: deciderId,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      // The grant's window CLOSED before the consumption/approval instant —
+      // consumed and decided coherently (same transaction clock), but both
+      // after the grant had already died.
+      await assertRefusedBy(
+        withTransaction(async (executor) => {
+          await fixtureAuthorizationStateWrite(
+            'simulate-authorization-drift',
+            `UPDATE reauthentication_grants gr
+                SET issued_at = NOW() - INTERVAL '10 minutes',
+                    expires_at = NOW() - INTERVAL '1 second',
+                    consumed_at = NOW()
+              WHERE gr.grant_id = (
+                SELECT g.grant_id FROM reauthentication_grants g
+                 WHERE g.user_link_id = $1 ORDER BY g.created_at DESC LIMIT 1)`,
+            [deciderId],
+            { executor },
+          );
+          await fixtureAuthorizationStateWrite(
+            'adversarial-bypass-attempt',
+            `UPDATE support_access_requests
+                SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                    approval_grant_id = (
+                      SELECT g.grant_id FROM reauthentication_grants g
+                       WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+              WHERE request_id = $1`,
+            [requestId, deciderId],
+            { executor },
+          );
+        }),
+        { state: RAISED, message: 'an expired grant approves nothing' },
+        'an approval whose grant expired before its consumption and decision',
+      );
+    });
+
+    test('an approval whose grant was consumed at another instant is refused', async () => {
+      const { requestId, deciderId } = await supportRequest({ approve: false });
+      await mintReauthGrant({
+        tenantId: f.tenantId,
+        userLinkId: deciderId,
+        action: 'identity.support.approve',
+        resourceType: 'support_access_request',
+        resourceId: requestId,
+      });
+      // The grant is spent in ONE transaction, the approval decided in ANOTHER
+      // — the staged-attachment shape. The pair can only be equal on the atomic
+      // path, so the mismatch is what makes the bypass unrepresentable.
+      await fixtureAuthorizationStateWrite(
+        'adversarial-bypass-attempt',
+        `UPDATE reauthentication_grants gr SET consumed_at = NOW() - INTERVAL '3 minutes'
+          WHERE gr.grant_id = (
+            SELECT g.grant_id FROM reauthentication_grants g
+             WHERE g.user_link_id = $1 ORDER BY g.created_at DESC LIMIT 1)`,
+        [deciderId],
+      );
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.user_link_id = $2 ORDER BY g.created_at DESC LIMIT 1)
+            WHERE request_id = $1`,
+          [requestId, deciderId],
+        ),
+        { state: RAISED, message: 'staged attachment outside the atomic approval path' },
+        'an approval whose grant was consumed at a different instant',
+      );
+    });
+
+    // ══ FBL-020-R7-C2 §5 — decided statuses are ABSORBING ════════════════════
+
+    test('a decided request cannot be redecided — approved to denied refuses', async () => {
+      const { requestId, deciderId } = await supportRequest({});
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests SET status = 'denied' WHERE request_id = $1`,
+          [requestId],
+        ),
+        { state: RAISED, message: 'a decided status is absorbing' },
+        'an approved request silently redecided as denied',
+      );
+      // …and a DENIED request is terminal absolutely: no exit is modelled.
+      const denied = await supportRequest({ approve: false });
+      await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `UPDATE support_access_requests
+            SET status = 'denied', decided_at = NOW(), decided_by_user_link_id = $2
+          WHERE request_id = $1`,
+        [denied.requestId, deciderId],
+      );
+      // The identity is deliberately KEPT here, so the refusal is attributable
+      // to the absorption rule itself; an identity-CLEARING variant is refused
+      // one trigger earlier by the immutability rule (proven in the malformed-
+      // supersession test), and either way the terminal state absorbs.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests SET status = 'cancelled' WHERE request_id = $1`,
+          [denied.requestId],
+        ),
+        { state: RAISED, message: 'a decided status is absorbing' },
+        'a denied request moved to another terminal state',
+      );
+    });
+
+    test('the 057-era supersession shape cannot be re-staged at runtime', async () => {
+      // FBL-020-R7-C2 §3 models NO supersession workflow: completed states are
+      // absorbing without exception, and 057's supersession rows are retained
+      // HISTORY, written once by that migration. Both lanes of a would-be
+      // runtime re-staging refuse:
+      const { requestId } = await supportRequest({});
+      // (a) the identity-CLEARING lane — even the full 057 shape, superseded_*
+      // preserved and a reason named — dies at 059's (immutable) identity rule.
+      // 059's message text names "the documented path" because 057 documented
+      // one; that path is migration-time history, not a runtime transition.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests
+              SET superseded_decided_by_user_link_id = decided_by_user_link_id,
+                  superseded_decided_at = decided_at,
+                  superseded_reason = 'runtime restage attempt',
+                  status = 'expired', decided_at = NULL, decided_by_user_link_id = NULL,
+                  approval_grant_id = NULL
+            WHERE request_id = $1`,
+          [requestId],
+        ),
+        { state: RAISED, message: 'is written once by the decision and is immutable' },
+        'the full 057 supersession shape attempted as a runtime transition',
+      );
+      // (b) status moved with the identity KEPT: the absorption rule refuses
+      // before the 055 status/decided CHECK could even be consulted.
+      await assertRefusedBy(
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `UPDATE support_access_requests SET status = 'expired' WHERE request_id = $1`,
+          [requestId],
+        ),
+        { state: RAISED, message: 'a decided status is absorbing' },
+        'a terminal move that keeps the approval identity',
+      );
+      // …and the request still stands exactly as decided.
+      const kept = await query(
+        `SELECT status, decided_at FROM support_access_requests WHERE request_id = $1`,
+        [requestId],
+      );
+      assert.equal((kept.rows[0] as Record<string, unknown>).status, 'approved');
+      assert.notEqual((kept.rows[0] as Record<string, unknown>).decided_at, null);
+    });
+
+    // ══ FBL-020-R7-C2 §4 — the ordinary runtime login and the system lane ════
+
+    test('the ordinary runtime login cannot write a system ALLOW', async () => {
+      // The REAL dealership_app login (not a superuser impersonating it), on
+      // the same pure-system shape the structural positive control proves the
+      // OWNER may write. The privilege carve is the point: the identity that
+      // serves requests does not get to shed actor and credential attribution.
+      const { Client } = await import('pg');
+      const OWNER_URL = process.env.TEST_DATABASE_URL as string;
+      const owner = new Client({ connectionString: OWNER_URL });
+      await owner.connect();
+      try {
+        await owner.query(`ALTER ROLE dealership_app PASSWORD 'runtime_posture_test_pw'`);
+      } finally {
+        await owner.end();
+      }
+      const u = new URL(OWNER_URL);
+      u.username = 'dealership_app';
+      u.password = 'runtime_posture_test_pw';
+      const app = new Client({ connectionString: u.toString() });
+      await app.connect();
+      try {
+        const systemAllow = `INSERT INTO policy_decisions
+           (tenant_id, actor_type, action, decision, reason_code, policy_version,
+            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+         VALUES ($1, 'system', 'system.retention.sweep', $2, $3,
+                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`;
+        let refused: { code?: string; message?: string } | undefined;
+        try {
+          await app.query(systemAllow, [f.tenantId, 'allow', 'ALLOW_SYSTEM_POLICY']);
+        } catch (err) {
+          refused = err as { code?: string; message?: string };
+        }
+        assert.equal(refused?.code, RAISED, 'the system ALLOW is refused for the app login');
+        assert.ok(
+          (refused?.message ?? '').includes('a system ALLOW may be written only by'),
+          'and refused by the §4 writer rule by name',
+        );
+        assert.equal(await countEvidence(), 0);
+        // A system DENY carries no authority and stays writable — the parent
+        // INSERT privilege the application legitimately needs.
+        await app.query(systemAllow, [f.tenantId, 'deny', 'DENY_SYSTEM_POLICY']);
+        assert.equal(await countEvidence(), 1);
+      } finally {
+        await app.end();
+      }
+      // THE POSITIVE CONTROL for the retained lane: the OWNER (an identity
+      // that can assume the evidence owner) writes the same system ALLOW.
+      await insertAllow({
+        actor_type: 'system',
+        actor_user_link_id: null,
+        session_id: null,
+        connection_id: null,
+        actor_provider_subject: null,
+        scope_level: 'tenant',
+        scope_id: f.tenantId,
+        action: 'system.retention.sweep',
+        reason_code: 'ALLOW_SYSTEM_POLICY',
+        matched_role_binding_ids: null,
+      });
+      assert.equal(await countEvidence(), 2, 'the owner lane remains');
+    });
+  },
+);

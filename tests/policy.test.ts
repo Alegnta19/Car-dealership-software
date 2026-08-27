@@ -14,7 +14,7 @@ import {
   seedRooftop,
   seedTenantViaService,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, withTransaction } from '@dealer/database';
 import {
   POLICY_VERSION,
   RoleScopeMismatchError,
@@ -680,7 +680,10 @@ describe(
       );
 
       // one catalog, two actions, the SAME allowed role — the only difference
-      // between them is the `platform.` prefix.
+      // between them is the STRUCTURAL plane (FBL-020-R7-C1 §3). The control-plane
+      // action DECLARES its plane; the tenant action does not. The `platform.`
+      // NAME buys nothing — a `platform.`-named action without the declared plane
+      // is a tenant action, so the plane is what the engine reads, not the prefix.
       const twoActions = withPresentedSession(
         createPolicyEngine({
           catalog: createActionCatalog([
@@ -689,6 +692,7 @@ describe(
               description: 'provision a tenant (control plane)',
               resourceType: null,
               allowedRoles: ['platform_admin'],
+              plane: 'control_plane',
             },
             {
               action: 'org.unit.create',
@@ -788,7 +792,20 @@ describe(
       approver: string,
     ): Promise<{ requestId: string; sessionId: string }> {
       // R2: an approved support request must name the high-assurance grant that
-      // backed the approval, so the fixture creates one first.
+      // backed the approval — and R7 §3.2 requires the grant to name the REQUEST,
+      // so the request is filed first, the grant is minted against it, and the
+      // approval then cites the grant: the same order the production path takes.
+      const request = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO support_access_requests
+         (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
+          requested_duration_minutes)
+       VALUES ($1, $2, ARRAY['service.ro.view','service.ro.transition'], 'rooftop', $3,
+              'ticket 9: verify stuck RO', 30)
+       RETURNING request_id`,
+        [world.tenantId, supportActor, world.rooftopA],
+      );
+      const requestId = String((request.rows[0] as { request_id: unknown }).request_id);
       const txn = await query(
         // R3: a grant belongs to a COMPLETED transaction. `rat_started_is_bound`
         // governs the `started` state — it demands the local session and the OIDC
@@ -807,30 +824,40 @@ describe(
       );
       await query(
         `INSERT INTO reauthentication_grants
-         (reauth_txn_id, tenant_id, user_link_id, action, grant_hash, expires_at,
-          assurance_level, mfa_policy_certified_at_issue, consumed_at)
-       VALUES ($1, $2, $3, 'identity.support.approve', $4,
-               NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())`,
+         (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
+          grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue)
+       VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $5,
+               $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE)`,
         [
           String((txn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
           world.tenantId,
           approver,
           'c'.repeat(64),
+          requestId,
         ],
       );
 
-      const request = await fixtureAuthorizationStateWrite(
-        'seed-authorization-state',
-        `INSERT INTO support_access_requests
-         (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
-          requested_duration_minutes, status, decided_by_user_link_id, decided_at, approval_grant_id)
-       SELECT $1, $2, ARRAY['service.ro.view','service.ro.transition'], 'rooftop', $3,
-              'ticket 9: verify stuck RO', 30, 'approved', $4, NOW(), g.grant_id
-         FROM reauthentication_grants g WHERE g.tenant_id = $1 LIMIT 1
-       RETURNING request_id`,
-        [world.tenantId, supportActor, world.rooftopA, approver],
-      );
-      const requestId = String((request.rows[0] as { request_id: unknown }).request_id);
+      // FBL-020-R7-C2 §5: the grant is consumed AT the approval instant, under
+      // one transaction clock — the atomic path's own shape.
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `UPDATE reauthentication_grants SET consumed_at = NOW()
+            WHERE resource_id = $1 AND action = 'identity.support.approve'
+              AND consumed_at IS NULL`,
+          [requestId],
+        );
+        await fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.resource_id = $1 AND g.action = 'identity.support.approve')
+            WHERE request_id = $1`,
+          [requestId, approver],
+          { executor },
+        );
+      });
       const session = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)

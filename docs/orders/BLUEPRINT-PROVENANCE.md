@@ -107,9 +107,10 @@ REFUSES it: its first half is contradicted by the committed document, and its se
 always a claim about a workspace nothing here can observe.
 <!--/final-state-->
 
-**FBL-020-R6 IS NOT SUBMITTABLE AS COMPLETE WHILE §3.1 IS OPEN** — that is the
-`submission.status` of `docs/evidence/FBL-020-FINAL-STATE.json`, and
-`scripts/check-final-state.ts` refuses any other status while this clause is `OPEN`.
+**FBL-020-R7 IS SUBMITTED FOR REVIEW — NOT ACCEPTED, AND ARCHITECT ACCEPTANCE REMAINS THE
+RELEASE GATE** — `submission.status` of `docs/evidence/FBL-020-FINAL-STATE.json` is
+`SUBMITTED FOR REVIEW — NOT ACCEPTED`, and while this clause is `OPEN`
+`scripts/check-final-state.ts` refuses any status that claims completeness.
 
 **WHO MUST ACT: the reviewer**, by replacing BOTH designated project copies with the
 Version 2.0 file. **WHAT THEY MUST VERIFY ON ARRIVAL**, on the copy that lands in the project

@@ -47,6 +47,7 @@ import { createIdentityActionCatalog } from './actions';
 import {
   ACTIVE_EFFECTIVE_TENANT_SQL,
   EFFECTIVE_ROLE_BINDING_SQL,
+  actionPlane,
   coversTenantWide,
   type ActionDefinition,
 } from './policy';
@@ -1162,7 +1163,7 @@ export interface RoleBindingMutation extends MutationResult {
  */
 const PLATFORM_ROLES: ReadonlySet<string> = new Set(
   IDENTITY_CATALOG.list()
-    .filter((d) => d.action.startsWith('platform.'))
+    .filter((d) => actionPlane(d) === 'control_plane')
     .flatMap((d) => [...d.allowedRoles]),
 );
 
@@ -1175,7 +1176,7 @@ const PLATFORM_ROLES: ReadonlySet<string> = new Set(
 {
   const dealershipRoles = new Set(
     IDENTITY_CATALOG.list()
-      .filter((d) => !d.action.startsWith('platform.'))
+      .filter((d) => actionPlane(d) !== 'control_plane')
       .flatMap((d) => [...d.allowedRoles]),
   );
   for (const role of PLATFORM_ROLES) {

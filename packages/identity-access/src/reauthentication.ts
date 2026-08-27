@@ -110,6 +110,14 @@ export type ReauthenticationTerminalReason =
    */
   | 'callback_purpose_mismatch'
   /**
+   * FBL-020-R7 §2.3 — the step-up leg's own names for two failures R6 folded into
+   * `callback_state_mismatch`. A refusal log that calls a PKCE failure a state
+   * failure sends an operator to the wrong binding; the reason vocabulary is only
+   * closed, it is not allowed to be WRONG.
+   */
+  | 'callback_pkce_mismatch'
+  | 'callback_redirect_mismatch'
+  /**
    * FBL-020-R6 §2.4 — the completion named a DIFFERENT person from the one this
    * step-up was started for. R5 put `user_link_id` in the lookup predicate, so a
    * wrong-subject callback found no row, returned `null`, terminalized nothing and
@@ -555,8 +563,12 @@ export async function claimReauthentication(input: {
    */
   state: string | null;
   codeVerifier: string | null;
-  /** The purpose the sealed cookie carried. Omitted, it is taken to have said `reauth`. */
-  presentedPurpose?: string | null;
+  /**
+   * The purpose the sealed cookie ACTUALLY carried — FBL-020-R7 §2.2 removed the
+   * default that read omission as `reauth`. `null` means the callback presented no
+   * purpose, and that is a `callback_purpose_mismatch`, never a satisfied check.
+   */
+  presentedPurpose: string | null;
   callbackUri: string;
 }): Promise<{ reauthTxnId: string; tenantId: string } | null> {
   return withTransaction(async (executor) => {
@@ -590,16 +602,20 @@ export async function claimReauthentication(input: {
     // the same statement that locked the row, never this process's `Date.now()`
     // compared against a timestamp that travelled through JavaScript.
     if (row.is_expired === true) return terminate('expired');
-    // FBL-020-R6 §2.1 — the purpose the sealed cookie presented must be this leg's.
-    // Omitted means "the cookie agreed"; a disagreement is terminal here rather than
-    // a route-level refusal that left the row claimable.
-    if ((input.presentedPurpose ?? 'reauth') !== 'reauth') {
+    // FBL-020-R7 §2.2 — the purpose the sealed cookie ACTUALLY presented must be
+    // this leg's. Missing, non-string and wrong are one terminal fact: a comparison
+    // whose absent side is filled in with the expected answer is not a comparison.
+    // Terminal here rather than a route-level refusal that left the row claimable.
+    if (input.presentedPurpose !== 'reauth') {
       return terminate('callback_purpose_mismatch');
     }
-    // Handle, state, PKCE and the exact callback: every one required, every one
-    // compared against what the START stored. A missing stored digest cannot be
-    // satisfied by a missing presented value — the schema forbids the NULL, and
-    // the comparison below would fail anyway.
+    // State, PKCE and the exact callback: every one required, every one compared
+    // against what the START stored, and each failure named for the binding that
+    // actually failed — FBL-020-R7 §2.3. R6 collapsed all three into
+    // `callback_state_mismatch`, which recorded a true refusal under a false name.
+    // A missing presented value is a mismatch of ITS OWN binding, never a skipped
+    // comparison, and a stored digest that is not a string fails the same way —
+    // the schema forbids the NULL, and fail-closed does not lean on the schema.
     //
     // The PERSON is deliberately NOT part of this predicate: the callback leg is
     // unauthenticated (the browser is arriving from the provider), so the actor is
@@ -609,15 +625,20 @@ export async function claimReauthentication(input: {
     // standing in for the other.
     if (
       input.state === null ||
-      input.codeVerifier === null ||
       typeof row.state_hash !== 'string' ||
-      typeof row.code_verifier_hash !== 'string' ||
-      typeof row.callback_uri !== 'string' ||
-      row.state_hash !== sha256hex(input.state) ||
-      row.code_verifier_hash !== sha256hex(input.codeVerifier) ||
-      row.callback_uri !== input.callbackUri
+      row.state_hash !== sha256hex(input.state)
     ) {
       return terminate('callback_state_mismatch');
+    }
+    if (
+      input.codeVerifier === null ||
+      typeof row.code_verifier_hash !== 'string' ||
+      row.code_verifier_hash !== sha256hex(input.codeVerifier)
+    ) {
+      return terminate('callback_pkce_mismatch');
+    }
+    if (typeof row.callback_uri !== 'string' || row.callback_uri !== input.callbackUri) {
+      return terminate('callback_redirect_mismatch');
     }
     const claimed = await executor.query(
       `UPDATE reauthentication_transactions

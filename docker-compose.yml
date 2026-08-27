@@ -40,10 +40,42 @@ services:
     build: .
     command: ['node', 'scripts/dist/migrate.js']
     environment:
+      # The migration runner uses the OWNER credential — migrations create roles
+      # and tables, which is owner work. The API and worker do NOT (see below).
       DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
     depends_on:
       postgres:
         condition: service_healthy
+    restart: 'no'
+
+  # FBL-020-R7-C1 §2 — provision the non-owner application login's password out
+  # of band, as the OWNER, after the migration created the dealership_app role.
+  # The password is the operator's own secret (compose reads it from .env); it is
+  # applied via a parameterized statement, never interpolated into a shell arg.
+  provision-app-login:
+    build: .
+    command:
+      - node
+      - -e
+      - |
+        const { Client } = require('pg');
+        (async () => {
+          // ALTER ROLE ... PASSWORD is DDL and does not accept a bind parameter,
+          // so the password is escaped (single quotes doubled) and wrapped as a
+          // string literal — never shell-interpolated, never logged.
+          const pw = String(process.env.DEALERSHIP_APP_PASSWORD).replace(/'/g, "''");
+          const c = new Client({ connectionString: process.env.OWNER_DATABASE_URL });
+          await c.connect();
+          await c.query("ALTER ROLE dealership_app LOGIN PASSWORD '" + pw + "'");
+          await c.end();
+          console.log('dealership_app login password provisioned');
+        })().catch((e) => { console.error(e); process.exit(1); });
+    environment:
+      OWNER_DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+      DEALERSHIP_APP_PASSWORD: ${DEALERSHIP_APP_PASSWORD:?DEALERSHIP_APP_PASSWORD is required}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     restart: 'no'
 
   api:
@@ -53,7 +85,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+      # FBL-020-R7-C1 §2: the API authenticates as the NON-OWNER dealership_app
+      # login. In production the server asserts its runtime posture at startup and
+      # fails closed on an owner/superuser credential.
+      DATABASE_URL: postgres://dealership_app:${DEALERSHIP_APP_PASSWORD:?DEALERSHIP_APP_PASSWORD is required}@postgres:5432/cockpit
       # Identity is OPTIONAL here: unset means the /auth surface does not serve and
       # the stack still boots for schema/API work. Set IDENTITY_PROVIDER=workos and
       # the rest to exercise real logins; loadConfig then requires every one of them.
@@ -73,6 +108,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      provision-app-login:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # FBL-020-R4 section 4 — the background process, and the reason it is deployed.
@@ -91,13 +128,17 @@ services:
     command: ['node', 'apps/worker/dist/main.js']
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgres://cockpit:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/cockpit
+      # FBL-020-R7-C1 §2: the worker authenticates as the NON-OWNER dealership_app
+      # login and asserts its runtime posture before running a sweep.
+      DATABASE_URL: postgres://dealership_app:${DEALERSHIP_APP_PASSWORD:?DEALERSHIP_APP_PASSWORD is required}@postgres:5432/cockpit
       SUPPORT_ACCESS_EXPIRY_INTERVAL_MS: ${SUPPORT_ACCESS_EXPIRY_INTERVAL_MS:-60000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      provision-app-login:
         condition: service_completed_successfully
     restart: unless-stopped
 

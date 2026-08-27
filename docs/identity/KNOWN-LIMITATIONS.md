@@ -413,23 +413,28 @@ revocation) is pinned by tests proven to fail when the control is reverted.
 
 ### The CI state, stated once and exactly (FBL-020-R6 §4.4)
 
-**THE FINAL CODE-BEARING COMMIT IS `f113fad7c0487aada4773612322208714661a52c` AND ITS
-EXACT-SHA `.github/workflows/ci.yml` RUN 32474578625 COMPLETED WITH 4 OF 4 JOBS
-SUCCESSFUL.** Per-job conclusions and the property table are in §1 of the delivery report;
+**THE LAST CI-MEASURED COMMIT IS `ee5eb6b00ef91542f3129fa9957fc22d3ce51f0f` AND ITS
+EXACT-SHA `.github/workflows/ci.yml` RUN 32493409959 COMPLETED WITH 4 OF 4 JOBS
+SUCCESSFUL.** That is the R6 final head — the FBL-020-R7 baseline — not the R7 commits,
+whose own run is bound to them by the external return packet (FBL-020-R7-A1 §7). Per-job
+conclusions and the property table are in §1 of the delivery report;
 the single committed record both documents read is
 `docs/evidence/FBL-020-FINAL-STATE.json`.
 
-**THE FBL-020-R6 WORK IS COMMITTED AND THE EXACT-SHA RUN NAMED ABOVE MEASURED IT, AND NO
-UNCOMMITTED WORK SITS ON TOP OF IT.** R6 §1–§4 were committed after the operator authorised a
-transfer path that required it. It did not land on the first attempt: `0fe4ae7` and `242e24a` **both FAILED
+**THE FBL-020-R7 WORK IS COMMITTED, AND THE EXACT-SHA RUN NAMED ABOVE MEASURED AN EARLIER
+COMMIT AND NOT IT.** The R7 commits are listed in the final-state record with `run: null`
+until their own exact-SHA runs exist. Beneath them the R6 history stands as recorded: R6
+§1–§4 were committed after the operator authorised a transfer path that required it. It did not land on the first attempt: `0fe4ae7` and `242e24a` **both FAILED
 their exact-SHA runs** (32450787623 and 32452596992). The commit the run above measured is the
 evidence commit named in the same sentence, and delivery report §1.1 lists every commit in the
 range with its own run and conclusion. A green third attempt does not un-fail the first two, and both stay in the record.
 The delivery report's "Verification evidence" section records the local runs as well, and a
 local run is not a CI run.
 
-**THE ONE-COMMIT BUDGET WAS VIOLATED: 9 CODE-BEARING COMMITS EXIST WHERE THE ORDER ALLOWED
-1, 4 OF THEM FAILED CI, AND DISCLOSURE DOES NOT CURE THE VIOLATION.** Under FBL-020-R5 the
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 19 CODE-BEARING COMMITS
+EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
+DISCLOSED IN THE FINAL-STATE RECORD.** The R5/R6 one-commit budgets were ruled VIOLATED and
+disclosure does not cure those violations; the rulings stand unedited. Under FBL-020-R5 the
 failures were `52e1567` (run 32162114699) and `0e99ecd` (run 32168154239), 2 of 4 jobs red
 each time, with `174c789` the green one for that order. Under FBL-020-R6 they are `0fe4ae7`
 and `242e24a`, 1 of 4 jobs red each time; the code-bearing commits after them were green.
@@ -539,6 +544,29 @@ Twice now the same defect class has been found in this file: an environment that
 inspected and an environment that IS NOT THERE were scored alike. Both are fixed (the port
 branch and the vanished-directory branch, each with a test driving both directions). This
 entry is the residue of the same shape and is stated rather than implied.
+
+## The runtime identity is a real login, and startup role switching is refused (FBL-020-R7-C2 §1)
+
+Migration `059` separates `dealership_runtime` (no direct DML on
+`policy_decision_matched_bindings`, not a member of the evidence owner) from
+`dealership_evidence_owner` (owns the `SECURITY DEFINER` normalizer), and migration `060`
+gives the application its CONNECTION IDENTITY: `dealership_app`, a genuine non-owner LOGIN
+role that is a member of `dealership_runtime` and of nothing else. The API and worker
+authenticate as it directly in `DATABASE_URL`. The R7-era `-c role=` startup switch is
+REMOVED: `DATABASE_RUNTIME_ROLE` now refuses at configuration load (an owner URL plus that
+variable fails startup rather than dressing the owner in the runtime role), and the boot
+posture gate reads **both** `session_user` and `current_user` — superuser, membership in
+any enumerated actual owner, every ledger write verb, and direct child-evidence INSERT are
+each judged about both identities, so a switched role cannot conceal the login behind it.
+A deployment that connects as a superuser still bypasses the separation in non-production
+modes (the posture gate is production fail-closed; local smoke legitimately connects as
+the owner to build fixtures), and the migration runner keeps owner authority by design:
+applying migrations creates roles and grants. What the schema guarantees regardless of
+deployment: the GUC writer guard is gone, so there is no caller-settable marker left to
+forge, and the composite keys, triggers and CHECKs of `059`/`060` bind every writer,
+superuser included, except where PostgreSQL itself exempts superusers from privilege
+checks — which is the standing "the database owner can do anything" boundary already
+recorded under accepted operational consequences.
 
 ## Deliberately out of scope (named owners)
 

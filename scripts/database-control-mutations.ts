@@ -1,5 +1,5 @@
 /**
- * FBL-020-R6 §4.1 — MUTATION-KILL FOR THE SECTION 3 DATABASE CONTROLS.
+ * FBL-020-R6 §4.1 + FBL-020-R7 §5 — MUTATION-KILL FOR THE DATABASE CONTROLS.
  *
  *   TEST_DATABASE_URL=… npx tsx scripts/database-control-mutations.ts \
  *     --out artifacts/database-control-mutations.json \
@@ -45,10 +45,13 @@ import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { Client } from 'pg';
 
+const MIGRATION_058 = '058_policy_evidence_reconstructable.sql';
+const MIGRATION_059 = '059_policy_evidence_integrity_closure.sql';
+
 export interface DatabaseControl {
   /** Stable id; also the copy database's suffix. */
   id: string;
-  /** The section of migration 058 the control belongs to. */
+  /** The section of migration 058 or 059 the control belongs to. */
   section: string;
   /** What is lost if the control is dropped, in one sentence. */
   intent: string;
@@ -129,16 +132,22 @@ export const CONTROLS: DatabaseControl[] = [
     testName: 'a normalized row cannot repeat an ordinality the decision already used',
   },
   {
+    /*
+     * FBL-020-R7 §3.7 REPLACED the R6-era GUC guard this control used to drop:
+     * migration 059 removes `trg_pdmb_authorized_writer` (any session could set
+     * the GUC it compared against and walk through) and makes the privilege
+     * system itself the writer rule — the runtime role simply cannot INSERT the
+     * child table. So the control weakens THAT rule now: granting the runtime
+     * role direct DML is exactly the hole the GUC guard pretended to close.
+     */
     id: 'child_rows_have_no_authorized_writer',
-    section: '058 §3 — R6 §3.2',
+    section: '059 §7 — R7 §3.7',
     intent:
-      'normalized authority evidence is DERIVED from the decision’s array. Dropped, any ' +
-      'writer may add one by hand.',
-    drop: 'DROP TRIGGER trg_pdmb_authorized_writer ON policy_decision_matched_bindings',
+      'normalized authority evidence is DERIVED from the decision’s array. With direct ' +
+      'DML granted to the runtime role, any application-path writer may add one by hand.',
+    drop: 'GRANT INSERT, UPDATE, DELETE ON policy_decision_matched_bindings TO dealership_runtime',
     restore:
-      'CREATE TRIGGER trg_pdmb_authorized_writer BEFORE INSERT ON ' +
-      'policy_decision_matched_bindings FOR EACH ROW EXECUTE FUNCTION ' +
-      'policy_decision_matched_bindings_have_one_writer()',
+      'REVOKE INSERT, UPDATE, DELETE ON policy_decision_matched_bindings FROM dealership_runtime',
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'a child row written with no normalizer behind it is refused',
   },
@@ -172,6 +181,373 @@ export const CONTROLS: DatabaseControl[] = [
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'a support ALLOW cannot be recorded against a REVOKED delegation',
   },
+
+  // ── FBL-020-R7 §3.1/§3.2 — the support tuple and its approval bounds ──────
+  //
+  // `uq_sar_request_tenant_requester` carries no entry of its own on purpose:
+  // `request_id` is the table's primary key, so the three-column unique can
+  // never be violated by data — it exists solely as the composite target the
+  // FK below rides on, and PostgreSQL refuses to drop it while that FK stands.
+  // Dropping the FK is the one honest mutation of the pair.
+  {
+    id: 'support_session_actor_substitutable',
+    section: '059 §1 — R7 §3.1',
+    intent:
+      'a session’s actor IS the approved requester of its own request, as one referential ' +
+      'fact. Dropped, any real platform person may hold a delegation approved for another.',
+    drop: 'ALTER TABLE support_access_sessions DROP CONSTRAINT sas_actor_is_the_approved_requester',
+    restore:
+      'ALTER TABLE support_access_sessions ADD CONSTRAINT sas_actor_is_the_approved_requester ' +
+      'FOREIGN KEY (request_id, tenant_id, actor_user_link_id) ' +
+      'REFERENCES support_access_requests (request_id, tenant_id, requester_user_link_id) ' +
+      'NOT VALID',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a support session cannot substitute another REAL platform actor for the approved requester',
+  },
+  {
+    id: 'support_requester_scope_unchecked',
+    section: '059 §1 — R7 §3.1',
+    intent:
+      'support access is a PLATFORM delegation; the requester must really be one. Dropped, ' +
+      'a dealership link may file (and so eventually hold) a support delegation.',
+    drop: 'DROP TRIGGER trg_sar_requester_is_platform ON support_access_requests',
+    restore:
+      'CREATE TRIGGER trg_sar_requester_is_platform BEFORE INSERT OR UPDATE ON ' +
+      'support_access_requests FOR EACH ROW EXECUTE FUNCTION support_request_requester_is_platform()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a dealership link can neither file nor hold a support delegation',
+  },
+  {
+    id: 'support_session_actor_scope_unchecked',
+    section: '059 §1 — R7 §3.1',
+    intent:
+      'the session actor must be a real platform link INDEPENDENTLY of the tuple FK — the ' +
+      'named test pins this rule’s own refusal, which the FK’s different SQLSTATE cannot fake.',
+    drop: 'DROP TRIGGER trg_sas_actor_is_platform ON support_access_sessions',
+    restore:
+      'CREATE TRIGGER trg_sas_actor_is_platform BEFORE INSERT OR UPDATE ON ' +
+      'support_access_sessions FOR EACH ROW EXECUTE FUNCTION support_session_actor_is_platform()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a dealership link can neither file nor hold a support delegation',
+  },
+  {
+    id: 'support_request_authority_rewritable',
+    section: '059 §2 — R7 §3.2',
+    intent:
+      'what a delegation is FOR is fixed at filing. Dropped, an approved request can be ' +
+      'widened after the fact and the approval silently covers what nobody approved.',
+    drop: 'DROP TRIGGER trg_sar_authority_immutable ON support_access_requests',
+    restore:
+      'CREATE TRIGGER trg_sar_authority_immutable BEFORE UPDATE ON support_access_requests ' +
+      'FOR EACH ROW EXECUTE FUNCTION support_request_authority_is_immutable()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'request and session authority fields are immutable once written',
+  },
+  {
+    id: 'support_session_window_rewritable',
+    section: '059 §2 — R7 §3.2',
+    intent:
+      'which delegation, which actor, and the exact window are a session’s authority. ' +
+      'Dropped, a live session’s window can be extended after the fact.',
+    drop: 'DROP TRIGGER trg_sas_authority_immutable ON support_access_sessions',
+    restore:
+      'CREATE TRIGGER trg_sas_authority_immutable BEFORE UPDATE ON support_access_sessions ' +
+      'FOR EACH ROW EXECUTE FUNCTION support_session_authority_is_immutable()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'request and session authority fields are immutable once written',
+  },
+  {
+    id: 'support_session_unbounded_by_approval',
+    section: '059 §2 — R7 §3.2',
+    intent:
+      'a session exists only under a decided approval, starts no earlier and lasts no ' +
+      'longer than it. Dropped, an approval of one minute can produce an afternoon.',
+    drop: 'DROP TRIGGER trg_sas_bounded_by_approval ON support_access_sessions',
+    restore:
+      'CREATE TRIGGER trg_sas_bounded_by_approval BEFORE INSERT ON support_access_sessions ' +
+      'FOR EACH ROW EXECUTE FUNCTION support_session_is_bounded_by_its_approval()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a one-minute approval cannot produce a longer session',
+  },
+  {
+    id: 'support_approval_grant_unjudged',
+    section: '059 §2 — R7 §3.2',
+    intent:
+      'the approval grant IS the approval — right action, this exact request, required ' +
+      'assurance, certified MFA, an effective approved scope. Dropped, any consumed grant ' +
+      'of the decider’s approves anything.',
+    drop: 'DROP TRIGGER trg_sar_grant_is_the_approval ON support_access_requests',
+    restore:
+      'CREATE TRIGGER trg_sar_grant_is_the_approval BEFORE INSERT OR UPDATE ON ' +
+      'support_access_requests FOR EACH ROW EXECUTE FUNCTION support_approval_grant_is_the_approval()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a wrong-action or wrong-resource REAL grant cannot approve a support request',
+  },
+
+  // ── FBL-020-R7 §3.3/§3.4 — the version-4 structural rules ─────────────────
+  {
+    id: 'resource_snapshot_escapes_the_tenant',
+    section: '059 §4 — R7 §3.4',
+    intent:
+      'the persisted resource-rooftop snapshot is a rooftop OF THE DECISION’S OWN TENANT, ' +
+      'referentially. Dropped, evidence may carry another tenant’s rooftop as its leaf.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_resource_rooftop_in_tenant',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_resource_rooftop_in_tenant ' +
+      'FOREIGN KEY (tenant_id, resource_rooftop_id) REFERENCES rooftops (tenant_id, rooftop_id) ' +
+      'NOT VALID',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a resource-rooftop snapshot cannot name another tenant’s rooftop',
+  },
+  {
+    id: 'support_tenant_allow_v4_needs_no_delegation',
+    section: '059 §5 — R7 §3.3',
+    intent:
+      'the v2 delegation rule exempted rows by ACTION NAME (`platform.*`); the v4 rule is ' +
+      'structural. Dropped, a platform-named allow reaches into a tenant undelegated again.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_v4_support_tenant_allow_is_delegated',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_v4_support_tenant_allow_is_delegated ' +
+      "CHECK (evidence_version < 4 OR decision = 'deny' OR actor_type <> 'platform_support' " +
+      'OR tenant_id IS NULL OR support_session_id IS NOT NULL)',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a platform-prefixed action cannot carry customer resource evidence without delegation',
+  },
+  {
+    id: 'control_plane_carries_customer_payload',
+    section: '059 §5 — R7 §3.3',
+    intent:
+      'a control-plane decision is structurally platform-scoped: no authorization tenant, ' +
+      'no customer-resource payload. Dropped, platform rows may smuggle customer evidence.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_v4_control_plane_is_structural',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_v4_control_plane_is_structural ' +
+      "CHECK (evidence_version < 4 OR scope_level IS DISTINCT FROM 'platform' " +
+      'OR (tenant_id IS NULL AND resource_type IS NULL AND resource_id IS NULL)) NOT VALID',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a control-plane decision cannot smuggle a customer-resource payload',
+  },
+  {
+    id: 'target_tenant_rides_authorization_rows',
+    section: '059 §5 — R7 §3.3',
+    intent:
+      'the operational target of a control-plane action is METADATA, present only on ' +
+      'platform-scoped rows. Dropped, it doubles as a second tenant column on any row.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_v4_target_tenant_is_metadata',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_v4_target_tenant_is_metadata ' +
+      "CHECK (control_plane_target_tenant_id IS NULL OR scope_level = 'platform') NOT VALID",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'the control-plane target tenant cannot ride on a tenant-scoped decision',
+  },
+  {
+    id: 'identified_actor_tenantless_by_name',
+    section: '059 §5 — R7 §3.3',
+    intent:
+      'an identified actor’s allow names a tenant unless the decision is structurally ' +
+      'platform-scoped — the v2 rule’s `platform.*` NAME bypass is what this replaces.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_v4_identified_actor_names_a_tenant',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_v4_identified_actor_names_a_tenant ' +
+      "CHECK (evidence_version < 4 OR actor_type = 'system' OR decision = 'deny' " +
+      "OR tenant_id IS NOT NULL OR scope_level = 'platform')",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a platform-NAMED action cannot free an identified actor from naming a tenant',
+  },
+  /*
+   * `resource_allow_snapshotless` — 059's `pd_v4_resource_allow_names_its_rooftop`
+   * CHECK — is RETIRED here for the same reason binding_tenant_ignored is: §6 makes
+   * it unkillable, not uncovered.
+   *
+   * That CHECK requires a version-4 resource ALLOW to carry a resource_rooftop_id.
+   * Whenever a resource ALLOW names a TENANT, 059's structural trigger
+   * (policy_decisions_v4_structural_validity) resolves the leaf from the database and
+   * ASSIGNS `NEW.resource_rooftop_id := resolved_leaf` before the CHECK is evaluated —
+   * so the column is never null when the trigger runs, and the CHECK is inert. The
+   * CHECK could therefore only ever be the operative refusal on the ONE lane the
+   * trigger skips: a null-tenant row (the trigger is guarded by tenant IS NOT NULL).
+   * FBL-020-R7-C1 §6 (`pd_resource_allow_names_a_tenant`) now forbids exactly that
+   * null-tenant resource ALLOW, so dropping 059's CHECK changes no observable
+   * outcome and a mutation over it is an un-killable survivor.
+   *
+   * The PROTECTION — a resource ALLOW carries a database-validated leaf — is unchanged
+   * and STILL mutation-covered: leaf resolution/validation is covered by
+   * `v4_structural_judge_absent` below (the whole trigger), and the null-tenant lane
+   * by `system_resource_allow_needs_no_tenant`. 059's CHECK stays in the migration as
+   * immutable defense in depth. See docs/FBL-020-R7-C1-REQUIREMENT-MAP.json §6.
+   */
+  {
+    id: 'v4_structural_judge_absent',
+    section: '059 §5 — R7 §3.1/§3.4/§3.5/§3.6',
+    intent:
+      'the BEFORE INSERT judge for version-4 rows: real actor scope behind the label, the ' +
+      'resolved and validated resource leaf, effective chains at the actual write instant, ' +
+      'a consistent occurred_at. Dropped, the label forgery every earlier support ' +
+      'adversary was built on is representable again.',
+    drop: 'DROP TRIGGER trg_policy_decisions_v4_structure ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_v4_structure BEFORE INSERT ON policy_decisions ' +
+      'FOR EACH ROW EXECUTE FUNCTION policy_decisions_v4_structural_validity()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a dealership link cannot be recorded as a platform-support actor',
+  },
+  {
+    id: 'binding_liveness_stops_at_transaction_start',
+    section: '059 §5 — R7 §3.6',
+    intent:
+      'a matched binding must be live at the ACTUAL WRITE INSTANT; 058’s (era-correct) ' +
+      'checks read the transaction-start clock. Dropped, a custody transaction that ' +
+      'outlives its authority records evidence anyway.',
+    drop: 'DROP TRIGGER trg_pdmb_live_and_reaches_the_resource ON policy_decision_matched_bindings',
+    restore:
+      'CREATE TRIGGER trg_pdmb_live_and_reaches_the_resource BEFORE INSERT ON ' +
+      'policy_decision_matched_bindings FOR EACH ROW EXECUTE FUNCTION ' +
+      'policy_decision_binding_is_live_and_reaches_the_resource()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a transaction started before a binding expired and completed after it is refused',
+  },
+  {
+    id: 'support_expiry_stops_at_occurred_at',
+    section: '059 §5 — R7 §3.6',
+    intent:
+      'the delegated window is judged against the wall clock at the write, not against ' +
+      'the row’s own occurred_at claim. Dropped, a backdated occurrence revives an ' +
+      'expired delegation.',
+    drop: 'DROP TRIGGER trg_policy_decisions_support_live ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_support_live BEFORE INSERT ON policy_decisions ' +
+      'FOR EACH ROW EXECUTE FUNCTION policy_decisions_support_session_is_live()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an expired support session combined with a backdated occurred_at is refused',
+  },
+
+  // ── FBL-020-R7 §3.7 — the privilege model around normalization ────────────
+  {
+    id: 'normalizer_stripped_of_its_own_authority',
+    section: '059 §7 — R7 §3.7',
+    intent:
+      'the SECURITY DEFINER normalizer is the ONE writer of the child table because its ' +
+      'owner is the one role granted INSERT. Revoked, the production write path itself ' +
+      'stops producing evidence — which the positive leg of the named test refuses.',
+    drop: 'REVOKE INSERT ON policy_decision_matched_bindings FROM dealership_evidence_owner',
+    restore: 'GRANT INSERT ON policy_decision_matched_bindings TO dealership_evidence_owner',
+    testFile: 'tests/identity-evidence-reconstruction.test.ts',
+    testName: 'a child row written with no normalizer behind it is refused',
+  },
+  {
+    id: 'normalization_runs_with_caller_rights',
+    section: '059 §7 — R7 §3.7',
+    intent:
+      'normalization is DATABASE-OWNED: it runs with the evidence owner’s rights, not the ' +
+      'caller’s. As SECURITY INVOKER the runtime role could never normalize its own ' +
+      'parent inserts — and anything that could would also write children directly.',
+    drop: 'ALTER FUNCTION policy_decisions_normalize_matched_bindings() SECURITY INVOKER',
+    restore: 'ALTER FUNCTION policy_decisions_normalize_matched_bindings() SECURITY DEFINER',
+    testFile: 'tests/identity-evidence-reconstruction.test.ts',
+    testName: 'a child row written with no normalizer behind it is refused',
+  },
+  {
+    id: 'owner_role_assumable_by_the_runtime',
+    section: '059 §7 — R7 §3.7',
+    intent:
+      'the runtime role must NOT be a member of the evidence owner — membership would let ' +
+      'it inherit the child-table INSERT and the whole separation collapses. This grant is ' +
+      'CLUSTER-VISIBLE, which is why the runner always restores after a successful drop.',
+    drop: 'GRANT dealership_evidence_owner TO dealership_runtime',
+    restore: 'REVOKE dealership_evidence_owner FROM dealership_runtime',
+    testFile: 'tests/identity-evidence-reconstruction.test.ts',
+    testName: 'a child row written with no normalizer behind it is refused',
+  },
+
+  // ── FBL-020-R7-C1 (migration 060) — THE ACCEPTANCE-CORRECTION CONTROLS ────
+  {
+    id: 'runtime_can_write_the_ledger',
+    section: '060 §1 — R7-C1 §2',
+    intent:
+      'the runtime role must not be able to rewrite the migration ledger. Granted INSERT ' +
+      'on schema_migrations, the app login (which inherits the runtime role) can, and the ' +
+      'posture gate stops refusing it.',
+    drop: 'GRANT INSERT ON schema_migrations TO dealership_runtime',
+    restore: 'REVOKE INSERT ON schema_migrations FROM dealership_runtime',
+    testFile: 'tests/runtime-posture.test.ts',
+    testName: 'the app login is non-owner, non-superuser, and least-privilege',
+  },
+  {
+    id: 'support_authority_not_live_at_write',
+    section: '060 §2 — R7-C1 §4',
+    intent:
+      'a support ALLOW must be refused when the actor’s platform authority is revoked or ' +
+      'aged out at the write instant. Dropped, the evaluation-to-write race reopens.',
+    drop: 'DROP TRIGGER trg_policy_decisions_zz_support_authority_live ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_zz_support_authority_live BEFORE INSERT ON ' +
+      'policy_decisions FOR EACH ROW EXECUTE FUNCTION policy_decisions_support_authority_is_live()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a support ALLOW is refused when the actor’s platform binding is revoked before the write',
+  },
+  {
+    id: 'support_scope_ignores_the_resource',
+    section: '060 §3 — R7-C1 §5',
+    intent:
+      'a support ALLOW’s approved scope must cover the resource it names. Dropped, a ' +
+      'rooftop-A approval authorizes a rooftop-B resource.',
+    drop: 'DROP TRIGGER trg_policy_decisions_zz_support_scope_reaches_resource ON policy_decisions',
+    restore:
+      'CREATE TRIGGER trg_policy_decisions_zz_support_scope_reaches_resource BEFORE INSERT ON ' +
+      'policy_decisions FOR EACH ROW EXECUTE FUNCTION ' +
+      'policy_decisions_support_scope_reaches_resource()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a rooftop-A support approval cannot authorize a rooftop-B resource',
+  },
+  {
+    id: 'system_resource_allow_needs_no_tenant',
+    section: '060 §4 — R7-C1 §6',
+    intent:
+      'a resource ALLOW must name a tenant so 059’s resolution validates its snapshot. ' +
+      'Dropped, a system row with a null tenant and a fabricated snapshot bypasses ' +
+      'resolution.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_resource_allow_names_a_tenant',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_resource_allow_names_a_tenant ' +
+      "CHECK (decision = 'deny' OR resource_type IS NULL OR tenant_id IS NOT NULL " +
+      "OR scope_level IS NOT DISTINCT FROM 'platform') NOT VALID",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'a system resource ALLOW cannot carry a null tenant and a fabricated rooftop snapshot',
+  },
+  {
+    id: 'system_row_carries_human_evidence',
+    section: '060 §4 — R7-C1 §6',
+    intent:
+      'a system row is not a costume an ordinary decision wears to shed validation. ' +
+      'Dropped, a system row may carry a real human actor.',
+    drop: 'ALTER TABLE policy_decisions DROP CONSTRAINT pd_system_row_carries_no_human_evidence',
+    restore:
+      'ALTER TABLE policy_decisions ADD CONSTRAINT pd_system_row_carries_no_human_evidence ' +
+      "CHECK (actor_type <> 'system' OR (actor_user_link_id IS NULL AND session_id IS NULL " +
+      'AND connection_id IS NULL AND actor_provider_subject IS NULL ' +
+      'AND support_session_id IS NULL AND support_request_id IS NULL)) NOT VALID',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a system row cannot carry human, credential or support evidence',
+  },
+  {
+    id: 'staged_approval_skips_validation',
+    section: '060 §5 — R7-C1 §7',
+    intent:
+      'the complete approval invariant must be re-validated whenever a request is approved, ' +
+      'not only when the grant id changes. Dropped, a staged pending-then-approved ' +
+      'transition bypasses scope/grant validation.',
+    drop: 'DROP TRIGGER trg_sar_zz_approval_is_complete ON support_access_requests',
+    restore:
+      'CREATE TRIGGER trg_sar_zz_approval_is_complete BEFORE INSERT OR UPDATE ON ' +
+      'support_access_requests FOR EACH ROW EXECUTE FUNCTION ' +
+      'support_request_approval_is_complete()',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a staged pending-then-approved transition cannot bypass scope validation',
+  },
 ];
 
 /**
@@ -184,7 +560,8 @@ export const CONTROLS: DatabaseControl[] = [
  * mandatory predicate, so each clause is also removed ON ITS OWN, and its own named test
  * must die.
  *
- * THE BODIES ARE READ OUT OF MIGRATION 058, NOT COPIED HERE. An anchored excerpt locates
+ * THE BODIES ARE READ OUT OF THE DECLARING MIGRATION (058, or 059 for the R7
+ * §3 functions), NOT COPIED HERE. An anchored excerpt locates
  * the clause; the runner asserts it resolves EXACTLY ONCE, deletes it, and re-declares the
  * function. Restoring re-declares the function from the migration's own text, so the
  * "restored" state is 058's state by construction and this registry cannot drift away from
@@ -197,6 +574,8 @@ export interface PredicateMutation {
   intent: string;
   /** The function whose body carries the clause. */
   functionName: string;
+  /** The migration file whose text declares that function; 058 when omitted. */
+  migration?: string;
   /** Exact text that BEGINS the clause; must occur exactly once in the function. */
   from: string;
   /** Exact text that ENDS it, matched after `from`. */
@@ -208,30 +587,48 @@ export interface PredicateMutation {
 export const PREDICATES: PredicateMutation[] = [
   // ── 058 §1 — the evidence version, and the floor that stops self-certification ──
   {
+    /*
+     * 059 §6 REPLACES this function (the floor moves to 4 exactly as 058 moved
+     * it to 3), so the clause is read out of — and restored from — 059's text:
+     * a restore from 058 would resurrect the superseded floor.
+     */
     id: 'evidence_version_floor_never_moved',
-    section: '058 §1 — R6-R6 §D1',
+    section: '059 §6 — R6-R6 §D1, R7 §4',
     intent:
-      'the §3.1 exemption is keyed on evidence_version, so it is only safe while nothing ' +
-      'NEW can be written below version 3. Removed, a writer claims version 2 and inherits ' +
-      'the historic exemption — a fresh way to record an authentication that never happened',
+      'the version exemptions are keyed on evidence_version, so they are only safe while ' +
+      'nothing NEW can be written below version 4. Removed, a writer claims an older ' +
+      'version and inherits its exemptions — a fresh way to record an authentication ' +
+      'that never happened',
     functionName: 'policy_decisions_require_current_evidence',
-    from: '  IF NEW.evidence_version < 3 THEN',
+    migration: MIGRATION_059,
+    from: '  IF NEW.evidence_version < 4 THEN',
     to: '      NEW.evidence_version;\n  END IF;',
     testFile: 'tests/identity-evidence.test.ts',
     testName: 'a new decision cannot opt back into ANY weaker historic version',
   },
   // ── 058 §2 — the matched binding must be exact, in force and applicable ───
   {
+    /*
+     * FBL-020-R7 §3.5 moved the load: the PARENT trigger now resolves the
+     * decision's scope through the ONE ancestry authority before any child row
+     * is judged, so 058's child-side existence check — kept byte-for-byte in
+     * its frozen migration — is no longer the predicate that answers, and
+     * removing it kills nothing. What is removed instead is the authority's own
+     * existence question: with it gone the parent waves the row through and
+     * 058's child-side wording (a DIFFERENT message) is what the pinned test
+     * meets — so the named test still dies, for the right reason.
+     */
     id: 'decision_scope_node_need_not_exist',
-    section: '058 §2 — R6-R6 §D4',
+    section: '059 §3 — R6-R6 §D4, R7 §3.5',
     intent:
       'the organization node a decision records must EXIST, in the decision’s own tenant. ' +
-      'Removed, a version-3 ALLOW whose matched binding is tenant-scope may name a rooftop ' +
-      'that is a rooftop nowhere, and the trail an operator follows after an incident ends ' +
-      'at an identifier that resolves to nothing',
-    functionName: 'policy_decision_binding_is_applicable',
-    from: "    IF d.scope_level IN ('dealer_group', 'legal_entity', 'rooftop', 'department') THEN",
-    to: "        COALESCE(d.scope_id::text, '<none>'), COALESCE(d.tenant_id::text, '<none>');\n    END IF;",
+      'Removed from the one ancestry authority, an ALLOW may name a rooftop that is a ' +
+      'rooftop nowhere, and the trail an operator follows after an incident ends at an ' +
+      'identifier that resolves to nothing',
+    functionName: 'org_chain_defect',
+    migration: MIGRATION_059,
+    from: '  IF chain_len < expected THEN',
+    to: "                  p_level, COALESCE(p_id::text, '<none>'), p_tenant);\n  END IF;",
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'an ALLOW cannot record an organization node that exists NOWHERE',
   },
@@ -275,16 +672,28 @@ export const PREDICATES: PredicateMutation[] = [
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'a tenant ALLOW cannot claim authority from a PLATFORM-scope binding',
   },
-  {
-    id: 'binding_tenant_ignored',
-    section: '058 §2 — R6 §3.3',
-    intent: 'a binding from another tenant may be recorded as authority here',
-    functionName: 'policy_decision_binding_is_applicable',
-    from: '    IF rb.tenant_id IS DISTINCT FROM d.tenant_id THEN',
-    to: "        COALESCE(d.tenant_id::text, '<none>');\n    END IF;",
-    testFile: 'tests/identity-evidence-reconstruction.test.ts',
-    testName: 'an ALLOW cannot claim a role binding that lives in another tenant',
-  },
+  /*
+   * `binding_tenant_ignored` — 058's `IF rb.tenant_id IS DISTINCT FROM d.tenant_id`
+   * clause — is RETIRED here, and the retirement is deliberate, not a coverage loss.
+   *
+   * That clause was reachable by exactly ONE lane: a system decision recorded in
+   * tenant A naming a cross-tenant actor via `actor_user_link_id` and citing that
+   * actor's binding (a user decision is pinned into its own tenant by the
+   * actor-tenancy key, so its binding is same-tenant by construction). FBL-020-R7-C1
+   * §6 closes the system evidence bypass by forbidding a system row from carrying
+   * ANY human-actor / credential / support evidence
+   * (`pd_system_row_carries_no_human_evidence`), which makes that one lane's very
+   * row unconstructable — so dropping 058's clause now changes no observable
+   * outcome, and a mutation over it would be an un-killable survivor.
+   *
+   * The PROTECTION it verified — a cross-tenant binding cannot be recorded as
+   * authority — is unchanged and STILL mutation-covered: its coverage moves to
+   * `system_row_carries_human_evidence` below, which the same reconstruction test
+   * ('an ALLOW cannot claim a role binding that lives in another tenant', now
+   * asserting the §6 CHECK) kills alongside the integrity suite. 058's clause stays
+   * in the migration as defense in depth (migrations ≤059 are byte-immutable and
+   * cannot be edited regardless). See docs/FBL-020-R7-C1-REQUIREMENT-MAP.json §6.
+   */
   {
     id: 'scope_hierarchy_ignored',
     section: '058 §2 — R6 §3.3, gate finding C7',
@@ -427,37 +836,305 @@ export const PREDICATES: PredicateMutation[] = [
     testFile: 'tests/identity-evidence-reconstruction.test.ts',
     testName: 'an EXTRA normalized row cannot be attached to a decision, marker or no marker',
   },
+  // ── 059 §2 — a session may not exceed or precede its approval (R7 §3.2) ───
+  {
+    id: 'request_authority_fields_rewritable',
+    section: '059 §2 — R7 §3.2',
+    intent: 'what an approved delegation is FOR may be rewritten after the approval',
+    functionName: 'support_request_authority_is_immutable',
+    migration: MIGRATION_059,
+    from: '  IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id',
+    to: "file a new request instead',\n      OLD.request_id;\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'request and session authority fields are immutable once written',
+  },
+  {
+    id: 'approval_identity_repointable',
+    section: '059 §2 — R7 §3.2',
+    intent: 'the decider, the instant and the grant of an approval may be moved after the decision',
+    functionName: 'support_request_authority_is_immutable',
+    migration: MIGRATION_059,
+    from: '  IF (OLD.decided_at IS NOT NULL AND NEW.decided_at IS DISTINCT FROM OLD.decided_at)',
+    to: "documented path instead',\n      OLD.request_id;\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'request and session authority fields are immutable once written',
+  },
+  {
+    id: 'session_under_an_undecided_request',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a session may be created under a request nobody approved',
+    functionName: 'support_session_is_bounded_by_its_approval',
+    migration: MIGRATION_059,
+    from: "  IF r.status <> 'approved' OR r.decided_at IS NULL THEN",
+    to: '      NEW.request_id, r.status;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a session cannot exist under a request nobody approved',
+  },
+  {
+    id: 'session_precedes_its_approval',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a session may be granted before the decision that authorizes it',
+    functionName: 'support_session_is_bounded_by_its_approval',
+    migration: MIGRATION_059,
+    from: '  IF NEW.granted_at < r.decided_at THEN',
+    to: '      NEW.granted_at, r.decided_at;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a session cannot begin before its approval was decided',
+  },
+  {
+    id: 'session_outlives_the_approved_duration',
+    section: '059 §2 — R7 §3.2',
+    intent: 'an approval of N minutes may produce a session longer than N minutes',
+    functionName: 'support_session_is_bounded_by_its_approval',
+    migration: MIGRATION_059,
+    from: '  IF NEW.expires_at > NEW.granted_at + make_interval(mins => r.requested_duration_minutes) THEN',
+    to: '      NEW.expires_at, r.requested_duration_minutes, NEW.granted_at;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a one-minute approval cannot produce a longer session',
+  },
+  {
+    id: 'approval_grant_action_unchecked',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a grant minted for any action at all may approve a support request',
+    functionName: 'support_approval_grant_is_the_approval',
+    migration: MIGRATION_059,
+    from: "  IF g.action <> 'identity.support.approve' THEN",
+    to: '      NEW.approval_grant_id, g.action;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a wrong-action or wrong-resource REAL grant cannot approve a support request',
+  },
+  {
+    id: 'approval_grant_names_another_request',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a grant approving one request may be recorded as the approval of another',
+    functionName: 'support_approval_grant_is_the_approval',
+    migration: MIGRATION_059,
+    from: "  IF g.resource_type IS DISTINCT FROM 'support_access_request'",
+    to: "      COALESCE(g.resource_id::text, '<none>'), NEW.request_id;\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a wrong-action or wrong-resource REAL grant cannot approve a support request',
+  },
+  {
+    id: 'approval_grant_assurance_unchecked',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a lower-assurance grant may approve a support request',
+    functionName: 'support_approval_grant_is_the_approval',
+    migration: MIGRATION_059,
+    from: "  IF g.assurance_level <> 'fresh_and_mfa_policy' THEN",
+    to: '      NEW.approval_grant_id, g.assurance_level;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an approval cannot cite a grant at the wrong assurance or without MFA certification',
+  },
+  {
+    id: 'approval_grant_mfa_certification_unchecked',
+    section: '059 §2 — R7 §3.2',
+    intent: 'a grant issued without MFA-policy certification may approve a support request',
+    functionName: 'support_approval_grant_is_the_approval',
+    migration: MIGRATION_059,
+    from: '  IF g.mfa_policy_certified_at_issue IS DISTINCT FROM true THEN',
+    to: '      NEW.approval_grant_id;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an approval cannot cite a grant at the wrong assurance or without MFA certification',
+  },
+  {
+    id: 'approved_scope_need_not_be_effective',
+    section: '059 §2 — R7 §3.2',
+    intent:
+      'an approval may delegate a scope that is not an effective node of the request’s ' +
+      'tenant — foreign, archived, or under an aged-out ancestor',
+    functionName: 'support_approval_grant_is_the_approval',
+    migration: MIGRATION_059,
+    from: "  IF NEW.status = 'approved' AND NEW.scope_level <> 'tenant' THEN",
+    to: '      END IF;\n    END;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an approved scope must be a real, effective node of the request tenant',
+  },
+  // ── 059 §3 — the one ancestry authority (R7 §3.5) ─────────────────────────
+  {
+    id: 'chain_defects_invisible_to_the_authority',
+    section: '059 §3 — R7 §3.5',
+    intent:
+      'the ONE ancestry authority stops seeing inactive and out-of-window nodes, so every ' +
+      'caller — evidence validators and runtime alike — accepts a dead chain',
+    functionName: 'org_chain_defect',
+    migration: MIGRATION_059,
+    from: '  SELECT a.level, a.node_id, a.status, a.effective_from, a.effective_to INTO bad',
+    to: "COALESCE(bad.effective_to::text, 'open'), p_at);\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an approved scope must be a real, effective node of the request tenant',
+  },
+  // ── 059 §5 — the version-4 structural judge, clause by clause ─────────────
+  {
+    id: 'occurred_at_may_lead_the_write_instant',
+    section: '059 §5 — R7 §3.6',
+    intent: 'evidence may be dated in the future of the instant it was actually written',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: "  IF NEW.occurred_at > write_instant + INTERVAL '5 seconds' THEN",
+    to: "cannot predate itself',\n      NEW.occurred_at, write_instant;\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'occurred_at is checked for consistency and can never BE the authority clock',
+  },
+  {
+    id: 'occurred_at_may_trail_by_hours',
+    section: '059 §5 — R7 §3.6',
+    intent: 'evidence may be backdated arbitrarily, standing in for authority long dead',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: "  IF NEW.occurred_at < write_instant - INTERVAL '1 hour' THEN",
+    to: "must be live at insertion',\n      NEW.occurred_at, write_instant;\n  END IF;",
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'occurred_at is checked for consistency and can never BE the authority clock',
+  },
+  {
+    id: 'platform_support_label_unbound',
+    section: '059 §5 — R7 §3.1',
+    intent:
+      'a dealership link may wear the platform-support label — the forgery every R6-era ' +
+      'support adversary was built on',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: "      IF NEW.actor_type = 'platform_support' AND actor_scope <> 'platform' THEN",
+    to:
+      "as a platform-support actor — the label is bound to the real scope',\n" +
+      '          NEW.actor_user_link_id, actor_scope;\n      END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a dealership link cannot be recorded as a platform-support actor',
+  },
+  {
+    id: 'user_label_unbound',
+    section: '059 §5 — R7 §3.1',
+    intent: 'a platform link may be recorded as an ordinary dealership user',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: "      IF NEW.actor_type = 'user' AND actor_scope <> 'dealership' THEN",
+    to:
+      "as a dealership user — the label is bound to the real scope',\n" +
+      '          NEW.actor_user_link_id, actor_scope;\n      END IF;',
+    testFile: 'tests/identity-evidence.test.ts',
+    testName: 'support-access evidence is all three facts or none',
+  },
+  {
+    id: 'nonexistent_resource_authorizes',
+    section: '059 §5 — R7 §3.4',
+    intent: 'a nonexistent or foreign resource may be recorded as what an allow authorized',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: '    IF resolved_leaf IS NULL THEN',
+    to: '        NEW.resource_type, NEW.resource_id, NEW.tenant_id;\n    END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'nonexistent and foreign-tenant resources are rejected, and a supplied snapshot is validated',
+  },
+  {
+    id: 'caller_snapshot_trusted',
+    section: '059 §5 — R7 §3.4',
+    intent:
+      'a caller-supplied resource-rooftop column is believed (silently corrected, here) ' +
+      'rather than validated against the database’s own resolution',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: '    IF NEW.resource_rooftop_id IS NOT NULL AND NEW.resource_rooftop_id <> resolved_leaf THEN',
+    to: '        NEW.resource_rooftop_id, resolved_leaf, NEW.resource_type, NEW.resource_id;\n    END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName:
+      'nonexistent and foreign-tenant resources are rejected, and a supplied snapshot is validated',
+  },
+  {
+    id: 'resource_chain_effectiveness_unchecked',
+    section: '059 §5 — R7 §3.4',
+    intent: 'a resource allow may stand on a dead organization chain above its own resource',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from: "    chain_defect := org_chain_defect(NEW.tenant_id, 'rooftop', resolved_leaf, write_instant);",
+    to: '        NEW.resource_type, NEW.resource_id, chain_defect;\n    END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a resource ALLOW cannot stand on a dead chain above its own resource',
+  },
+  {
+    id: 'decision_scope_chain_unjudged',
+    section: '059 §5 — R7 §3.5',
+    intent:
+      'an ALLOW recorded at an organization scope need not stand on an active, in-window ' +
+      'chain — tenant included — at the actual write instant',
+    functionName: 'policy_decisions_v4_structural_validity',
+    migration: MIGRATION_059,
+    from:
+      "  IF NEW.decision = 'allow' AND NEW.tenant_id IS NOT NULL\n" +
+      "     AND NEW.scope_level IN ('tenant', 'dealer_group', 'legal_entity', 'rooftop', 'department') THEN",
+    to:
+      "        NEW.scope_level, COALESCE(NEW.scope_id::text, '<tenant>'), chain_defect;\n" +
+      '    END IF;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'an ALLOW cannot stand on an inactive or out-of-window chain — six ways',
+  },
+  // ── 059 §5 — the child-side write-instant and reach rules ─────────────────
+  {
+    id: 'binding_dead_at_the_write_instant',
+    section: '059 §5 — R7 §3.6',
+    intent:
+      'a binding whose window closed while the transaction was open may still be recorded ' +
+      'as the authority — the transaction-start clock says it is alive',
+    functionName: 'policy_decision_binding_is_live_and_reaches_the_resource',
+    migration: MIGRATION_059,
+    from:
+      '  IF rb.effective_from > write_instant\n' +
+      '     OR (rb.effective_to IS NOT NULL AND rb.effective_to <= write_instant) THEN',
+    to: '      NEW.role_binding_id, write_instant;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a transaction started before a binding expired and completed after it is refused',
+  },
+  {
+    id: 'binding_reaches_a_sibling_resource',
+    section: '059 §5 — R7 §3.4',
+    intent:
+      'an organization-scope binding off the resource’s own ancestor chain may be recorded ' +
+      'as the authority for that resource — rooftop A authorizing rooftop B’s repair order',
+    functionName: 'policy_decision_binding_is_live_and_reaches_the_resource',
+    migration: MIGRATION_059,
+    from: '  IF d.resource_type IS NOT NULL AND d.resource_rooftop_id IS NOT NULL',
+    to: '        d.resource_type, d.resource_id, d.resource_rooftop_id;\n    END IF;\n  END IF;',
+    testFile: 'tests/identity-evidence-integrity.test.ts',
+    testName: 'a rooftop-A binding cannot authorize a real rooftop-B resource',
+  },
 ];
 
-const MIGRATION_058 = '058_policy_evidence_reconstructable.sql';
-
-/** The migration body, canonical LF, so anchors match on Windows and on CI alike. */
-function canonical058(): string {
-  return readFileSync(join(__dirname, '..', 'migrations', MIGRATION_058), 'utf8').replace(
+/** A migration body, canonical LF, so anchors match on Windows and on CI alike. */
+const migrationBodies = new Map<string, string>();
+function canonicalMigration(filename: string): string {
+  const cached = migrationBodies.get(filename);
+  if (cached !== undefined) return cached;
+  const body = readFileSync(join(__dirname, '..', 'migrations', filename), 'utf8').replace(
     /\r\n/g,
     '\n',
   );
+  migrationBodies.set(filename, body);
+  return body;
 }
 
 /**
- * The `CREATE OR REPLACE FUNCTION <name>() … $$ LANGUAGE plpgsql;` statement, verbatim.
+ * The `CREATE OR REPLACE FUNCTION <name>(…) … $$ LANGUAGE plpgsql…;` statement, verbatim.
  *
- * Located by its header and terminated at the first `$$ LANGUAGE plpgsql;` after it, which
- * is unambiguous because every function in 058 is dollar-quoted with `$$` and closes the
- * same way. A name that does not resolve, or resolves twice, throws: a predicate mutation
- * that silently found nothing would report itself killed.
+ * Located by its header and terminated at the first `$$ LANGUAGE plpgsql` after it plus
+ * the statement's own semicolon — which admits both 058's trigger functions and 059's
+ * parameterized STABLE authorities (`org_chain_defect` and friends), because every
+ * function in both migrations is dollar-quoted with `$$` and closes the same way. A name
+ * that does not resolve, or resolves twice, throws: a predicate mutation that silently
+ * found nothing would report itself killed.
  */
 export function functionStatement(sql: string, name: string): string {
-  const header = `CREATE OR REPLACE FUNCTION ${name}() RETURNS TRIGGER AS $$`;
+  const header = `CREATE OR REPLACE FUNCTION ${name}(`;
   const first = sql.indexOf(header);
-  if (first < 0) throw new Error(`migration ${MIGRATION_058} declares no function ${name}`);
+  if (first < 0) throw new Error(`the migration declares no function ${name}`);
   if (sql.indexOf(header, first + 1) >= 0) {
-    throw new Error(`migration ${MIGRATION_058} declares ${name} more than once`);
+    throw new Error(`the migration declares ${name} more than once`);
   }
-  const terminator = '$$ LANGUAGE plpgsql;';
+  const terminator = '$$ LANGUAGE plpgsql';
   const end = sql.indexOf(terminator, first + header.length);
-  if (end < 0) throw new Error(`function ${name} in ${MIGRATION_058} is not terminated`);
-  return sql.slice(first, end + terminator.length);
+  if (end < 0) throw new Error(`function ${name} is not terminated`);
+  const semicolon = sql.indexOf(';', end + terminator.length);
+  if (semicolon < 0) throw new Error(`function ${name} is not terminated`);
+  return sql.slice(first, semicolon + 1);
 }
 
 /** The same statement with ONE anchored clause removed. */
@@ -573,21 +1250,22 @@ async function main(): Promise<void> {
   }
   const { admin, database: template } = maintenanceUrl(databaseUrl);
 
-  // THE TEMPLATE MUST CARRY 058, checked rather than assumed: on a database without it
-  // every DROP fails and every control reports a false result.
+  // THE TEMPLATE MUST CARRY 058 AND 059, checked rather than assumed: on a database
+  // without them every DROP fails and every control reports a false result.
   {
     const probe = new Client({ connectionString: databaseUrl });
     await probe.connect();
     try {
       const applied = (
         await probe.query<{ filename: string }>(
-          `SELECT filename FROM schema_migrations WHERE filename LIKE '058%'`,
+          `SELECT filename FROM schema_migrations
+            WHERE filename LIKE '058%' OR filename LIKE '059%'`,
         )
       ).rows;
-      if (applied.length === 0) {
+      if (applied.length < 2) {
         console.error(
-          `The template database '${template}' has not applied migration 058, so the ` +
-            'controls this runner drops are not there to drop. Migrate it first.',
+          `The template database '${template}' has not applied migrations 058 and 059, ` +
+            'so the controls this runner drops are not there to drop. Migrate it first.',
         );
         process.exitCode = 2;
         return;
@@ -630,19 +1308,30 @@ async function main(): Promise<void> {
           } finally {
             await mutant.end();
           }
-          const killed = runNamedTest(control.testFile, control.testName, copied);
-          if (!killed.ranTheNamedTest) {
-            problems.push('the declared test did not run in the mutated database');
-          } else if (killed.passed) {
-            problems.push('SURVIVED: the declared test still passes with the control dropped');
-          }
-
-          const restorer = new Client({ connectionString: copied });
-          await restorer.connect();
+          // The R7 §3.7 controls mutate CLUSTER-VISIBLE state (role privileges
+          // and membership), which dropping the copy database cannot undo — so
+          // once the drop has run, the restore ALWAYS runs, kill run or no.
           try {
-            await restorer.query(control.restore);
+            const killed = runNamedTest(control.testFile, control.testName, copied);
+            if (!killed.ranTheNamedTest) {
+              problems.push('the declared test did not run in the mutated database');
+            } else if (killed.passed) {
+              problems.push('SURVIVED: the declared test still passes with the control dropped');
+            }
           } finally {
-            await restorer.end();
+            const restorer = new Client({ connectionString: copied });
+            await restorer.connect();
+            try {
+              await restorer.query(control.restore);
+            } catch (err) {
+              // A restore that refuses (for example, an ADD CONSTRAINT meeting
+              // rows the killed run committed) breaks attributability for THIS
+              // control; it must be reported as this control's failure, not
+              // crash the runner and discard every other result.
+              problems.push(`the restore statement failed: ${String((err as Error).message)}`);
+            } finally {
+              await restorer.end();
+            }
           }
           const restored = runNamedTest(control.testFile, control.testName, copied);
           if (!restored.passed) {
@@ -672,11 +1361,13 @@ async function main(): Promise<void> {
       });
     }
 
-    // ── one clause at a time, inside the trigger functions ─────────────────
-    const migration = canonical058();
+    // ── one clause at a time, inside the migration-declared functions ──────
     for (const [index, predicate] of PREDICATES.entries()) {
       if (only !== undefined && predicate.id !== only) continue;
-      const original = functionStatement(migration, predicate.functionName);
+      const original = functionStatement(
+        canonicalMigration(predicate.migration ?? MIGRATION_058),
+        predicate.functionName,
+      );
       const mutated = removeClause(original, predicate);
       const copy = `${template}_dp${index}`.slice(0, 63);
       lines.push(`── ${predicate.id} (${predicate.section})`);
@@ -756,7 +1447,7 @@ async function main(): Promise<void> {
 
   const summary = {
     tool: 'scripts/database-control-mutations.ts',
-    order: 'FBL-020-R6 §4.1',
+    order: 'FBL-020-R6 §4.1 + FBL-020-R7 §5',
     taken_at: new Date().toISOString(),
     controls_declared: CONTROLS.length + PREDICATES.length,
     whole_controls_declared: CONTROLS.length,
