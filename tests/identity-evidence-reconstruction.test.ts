@@ -1353,6 +1353,10 @@ describe(
       const app = new Client({ connectionString: u.toString() });
       await app.connect();
       try {
+        // RT1: the v4 evidence triggers walk the row-secured organization
+        // tables, so the runtime login's write carries the tenant context —
+        // session-scoped here because this client autocommits per statement.
+        await app.query(`SELECT set_config('app.tenant_id', $1, false)`, [f.tenantId]);
         await insertAllow({ request_id: 'req_' + randomUUID() }, app);
       } finally {
         await app.end();

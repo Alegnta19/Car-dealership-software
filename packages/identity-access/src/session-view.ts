@@ -25,7 +25,7 @@
  * request. None of them is an authorization input, so publishing them buys a
  * client nothing and costs the tenant a disclosure.
  */
-import { query } from '@dealer/database';
+import { query, withTenantTransaction } from '@dealer/database';
 import { EFFECTIVE_ROLE_BINDING_SQL, classifyActorAssurance } from './policy';
 import {
   listActiveSupportGrantsForActor,
@@ -159,8 +159,11 @@ export async function describeAuthenticatedSession(input: {
   // only whether the organization NODE is live), while the policy engine denied
   // every action that binding named. The page now cannot claim authority the
   // engine refuses, because both read the same three conditions.
-  const scopeResult = await query(
-    `WITH bindings AS (
+  // RT1: SCOPE_EFFECTIVE_SQL walks the row-secured organization tables, so for
+  // a dealership actor the read carries the server-controlled tenant context —
+  // the authenticated actor's own tenant, transactionally. A platform actor's
+  // scopes are platform-level and touch no row-secured table.
+  const scopeSql = `WITH bindings AS (
        SELECT DISTINCT rb.role, rb.scope_level, rb.scope_id
          FROM role_bindings rb
         WHERE rb.user_link_id = $1
@@ -168,9 +171,11 @@ export async function describeAuthenticatedSession(input: {
      )
      SELECT b.role, b.scope_level, b.scope_id, ${SCOPE_EFFECTIVE_SQL} AS scope_effective
        FROM bindings b
-      ORDER BY b.scope_level, b.scope_id NULLS FIRST, b.role`,
-    [input.userLinkId],
-  );
+      ORDER BY b.scope_level, b.scope_id NULLS FIRST, b.role`;
+  const scopeResult =
+    input.tenantId === null
+      ? await query(scopeSql, [input.userLinkId])
+      : await withTenantTransaction(input.tenantId, (tx) => tx.query(scopeSql, [input.userLinkId]));
 
   const roles = new Set<string>();
   const scopes = new Map<string, EffectiveScope>();

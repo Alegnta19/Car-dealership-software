@@ -129,6 +129,14 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'copy is dropped, and the drill database itself is never touched',
   },
   {
+    file: 'packages/identity-access/src/admin-settings.ts',
+    because:
+      'RELEASE TRAIN 1’s administration services: every write takes an existing acting ' +
+      'user link, runs under the server-controlled tenant context, advances ' +
+      'authorization_version, and writes one audit row in the same transaction — the ' +
+      'same contract mutations.ts carries, over the migration-061 administration tables',
+  },
+  {
     file: 'scripts/upgrade-precheck-refusals-057.ts',
     because:
       'FBL-020-R7-C2 §4’s fifth probe injector: it plants ONE retained cross-tenant ' +
@@ -228,6 +236,13 @@ const EXPECTED_OWNED_TABLES = [
   'support_access_sessions',
   'tenants',
   'user_links',
+  // RELEASE TRAIN 1 — migration 061's administration domain. Each carries
+  // authorization_version and is written only by the attributed services in
+  // packages/identity-access/src/admin-settings.ts (declared in OWNERS below).
+  'dealership_business_hours',
+  'dealership_policies',
+  'dealership_settings',
+  'staff_invitations',
 ] as const;
 
 /**

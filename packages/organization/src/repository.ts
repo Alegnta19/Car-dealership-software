@@ -5,7 +5,7 @@
  * database error, not a code-review hope. There is no delete anywhere —
  * retirement is a status transition.
  */
-import { query } from '@dealer/database';
+import { query, withTenantTransaction } from '@dealer/database';
 import { ORGANIZATION_LEVELS } from './model';
 import type {
   DealerGroup,
@@ -138,9 +138,15 @@ export async function getTenant(tenantId: string): Promise<Tenant | null> {
 }
 
 export async function listRooftops(tenantId: string): Promise<Rooftop[]> {
-  const result = await query(
-    `SELECT * FROM rooftops WHERE tenant_id = $1 ORDER BY created_at, rooftop_id`,
-    [tenantId],
+  // RT1: the organization tables sit under migration 061's row security for
+  // the runtime login, so reads run inside a transaction carrying the
+  // server-controlled tenant context — the SAME tenant this read is already
+  // scoped to by argument. Owner-run tests bypass row security by identity;
+  // in production this is what makes a defective predicate harmless.
+  const result = await withTenantTransaction(tenantId, (tx) =>
+    tx.query(`SELECT * FROM rooftops WHERE tenant_id = $1 ORDER BY created_at, rooftop_id`, [
+      tenantId,
+    ]),
   );
   return (result.rows as Row[]).map(mapRooftop);
 }
@@ -158,36 +164,40 @@ export async function getUnit(
   tenantId: string,
   id: string,
 ): Promise<DealerGroup | LegalEntity | Rooftop | Department | null> {
-  switch (level) {
-    case 'dealer_group': {
-      const r = await query(
-        `SELECT * FROM dealer_groups WHERE tenant_id = $1 AND dealer_group_id = $2`,
-        [tenantId, id],
-      );
-      return r.rows.length > 0 ? mapDealerGroup(r.rows[0] as Row) : null;
+  // RT1: row-secured tables — the read carries the tenant context (see
+  // listRooftops above for why).
+  return withTenantTransaction(tenantId, async (tx) => {
+    switch (level) {
+      case 'dealer_group': {
+        const r = await tx.query(
+          `SELECT * FROM dealer_groups WHERE tenant_id = $1 AND dealer_group_id = $2`,
+          [tenantId, id],
+        );
+        return r.rows.length > 0 ? mapDealerGroup(r.rows[0] as Row) : null;
+      }
+      case 'legal_entity': {
+        const r = await tx.query(
+          `SELECT * FROM legal_entities WHERE tenant_id = $1 AND legal_entity_id = $2`,
+          [tenantId, id],
+        );
+        return r.rows.length > 0 ? mapLegalEntity(r.rows[0] as Row) : null;
+      }
+      case 'rooftop': {
+        const r = await tx.query(
+          `SELECT * FROM rooftops WHERE tenant_id = $1 AND rooftop_id = $2`,
+          [tenantId, id],
+        );
+        return r.rows.length > 0 ? mapRooftop(r.rows[0] as Row) : null;
+      }
+      case 'department': {
+        const r = await tx.query(
+          `SELECT * FROM departments WHERE tenant_id = $1 AND department_id = $2`,
+          [tenantId, id],
+        );
+        return r.rows.length > 0 ? mapDepartment(r.rows[0] as Row) : null;
+      }
     }
-    case 'legal_entity': {
-      const r = await query(
-        `SELECT * FROM legal_entities WHERE tenant_id = $1 AND legal_entity_id = $2`,
-        [tenantId, id],
-      );
-      return r.rows.length > 0 ? mapLegalEntity(r.rows[0] as Row) : null;
-    }
-    case 'rooftop': {
-      const r = await query(`SELECT * FROM rooftops WHERE tenant_id = $1 AND rooftop_id = $2`, [
-        tenantId,
-        id,
-      ]);
-      return r.rows.length > 0 ? mapRooftop(r.rows[0] as Row) : null;
-    }
-    case 'department': {
-      const r = await query(
-        `SELECT * FROM departments WHERE tenant_id = $1 AND department_id = $2`,
-        [tenantId, id],
-      );
-      return r.rows.length > 0 ? mapDepartment(r.rows[0] as Row) : null;
-    }
-  }
+  });
 }
 
 /**
@@ -235,11 +245,17 @@ export async function resolveAncestry(
    */
   if (!(ORGANIZATION_LEVELS as readonly string[]).includes(ref.level)) return null;
   if (ref.level === 'tenant' && ref.id !== tenantId) return null;
-  const r = await query(`SELECT level, node_id FROM org_ancestry_effective($1, $2, $3)`, [
-    tenantId,
-    ref.level,
-    ref.id,
-  ]);
+  // RT1: `org_ancestry_effective` is SECURITY INVOKER SQL over the row-secured
+  // organization tables, so under the runtime login the walk sees rows only
+  // through the tenant context — set here, transactionally, from the SAME
+  // server-derived tenant this resolution is for.
+  const r = await withTenantTransaction(tenantId, (tx) =>
+    tx.query(`SELECT level, node_id FROM org_ancestry_effective($1, $2, $3)`, [
+      tenantId,
+      ref.level,
+      ref.id,
+    ]),
+  );
   if (r.rows.length === 0) return null;
   return (r.rows as Row[]).map((row) => ({
     level: String(row.level) as OrganizationLevel,

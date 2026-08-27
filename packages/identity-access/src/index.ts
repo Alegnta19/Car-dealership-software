@@ -25,3 +25,6 @@ export * from './login-transaction';
 export * from './login-admission';
 export * from './audit-inventory';
 export * from './bootstrap';
+export * from './admin-settings';
+export * from './admin-outbox';
+export * from './admin-reads';

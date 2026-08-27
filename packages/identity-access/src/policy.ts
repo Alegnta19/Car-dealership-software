@@ -29,7 +29,7 @@
  * this package never queries a fixed-ops table.
  */
 import { randomUUID } from 'node:crypto';
-import { query, withTransaction } from '@dealer/database';
+import { query, setTenantContext, withTransaction } from '@dealer/database';
 import { getRequestContext, type SupportAccessFacts } from '@dealer/platform';
 import { resolveAncestry, type OrganizationNodeRef } from '@dealer/organization';
 // Role NAMES only, from the package's dependency-free contract module — the
@@ -722,6 +722,13 @@ export function createPolicyEngine(options: {
       ? `$${namesTargetTenant ? 24 : 23},$${namesTargetTenant ? 25 : 24},`
       : '';
     return withTransaction(async (executor) => {
+      // RT1: the evidence triggers (059/060) walk the row-secured organization
+      // tables through SECURITY INVOKER functions, so a tenant-scoped decision's
+      // transaction carries the server-controlled tenant context — the engine's
+      // own authorization-bound tenant, never a caller value.
+      if (input.tenantId !== null) {
+        await setTenantContext(executor, input.tenantId);
+      }
       const result = await executor.query(
         `INSERT INTO policy_decisions
          (tenant_id, actor_user_link_id, actor_type, action, resource_type, resource_id,

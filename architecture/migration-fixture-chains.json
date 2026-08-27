@@ -622,6 +622,15 @@
               "note": "the committed migrations/060_identity_boundary_acceptance_closure.sql"
             }
           ]
+        },
+        "061_dealership_administration.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "5bd48b9be29c7819e6d7cbe9adc9aba53e2ac4fe49afcaefb45682f7798d9816",
+              "note": "the committed RELEASE TRAIN 1 dealership-administration migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

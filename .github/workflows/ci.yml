@@ -114,6 +114,7 @@ jobs:
           grep -q 'identity.support_access.expiry' artifacts/worker-smoke.txt
           grep -q 'identity.login_transaction.expiry' artifacts/worker-smoke.txt
           grep -q 'identity.reauthentication_transaction.expiry' artifacts/worker-smoke.txt
+          grep -q 'admin.outbox.dispatch' artifacts/worker-smoke.txt
 
       - name: Migrations apply from an empty database
         run: npm run migrate

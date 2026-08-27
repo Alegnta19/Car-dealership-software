@@ -7,11 +7,13 @@
  * a test that reached a copy of it would prove nothing about the copy that ships).
  */
 export {
+  ADMIN_OUTBOX_DISPATCH_JOB,
   LOGIN_TRANSACTION_EXPIRY_JOB,
   REAUTHENTICATION_EXPIRY_JOB,
   SUPPORT_ACCESS_EXPIRY_JOB,
   WORKER_JOBS,
   main,
+  runAdminOutboxDispatchOnce,
   runAllJobsOnce,
   runLoginTransactionExpiryOnce,
   runReauthenticationExpiryOnce,

@@ -36,6 +36,7 @@
  */
 import { assertRuntimePosture, closePool } from '@dealer/database';
 import {
+  dispatchDueAdminOutboxEvents,
   expireDueSupportSessions,
   expireStaleLoginTransactions,
   expireStaleReauthenticationTransactions,
@@ -65,6 +66,15 @@ export const LOGIN_TRANSACTION_EXPIRY_JOB = 'identity.login_transaction.expiry';
 export const REAUTHENTICATION_EXPIRY_JOB = 'identity.reauthentication_transaction.expiry';
 
 /**
+ * RELEASE TRAIN 1 — the administration outbox dispatcher. Events written in the
+ * same transaction as the administrative state they describe (today: the
+ * staff-invitation email) leave the service through this pass: at-least-once
+ * delivery, exactly-once business effect via the `admin_outbox_deliveries`
+ * dedupe ledger, failures retried with backoff on the event row.
+ */
+export const ADMIN_OUTBOX_DISPATCH_JOB = 'admin.outbox.dispatch';
+
+/**
  * THE ONE REGISTRY. A name and the pass that runs it are the SAME entry, so the list
  * `--list-jobs` advertises and the work `--once` performs cannot drift apart: there is
  * no second array to keep in step, and a job cannot be announced without being run or
@@ -80,6 +90,7 @@ const REGISTRY: readonly RegisteredJob[] = [
   { name: SUPPORT_ACCESS_EXPIRY_JOB, run: () => runSupportAccessExpiryOnce() },
   { name: LOGIN_TRANSACTION_EXPIRY_JOB, run: () => runLoginTransactionExpiryOnce() },
   { name: REAUTHENTICATION_EXPIRY_JOB, run: () => runReauthenticationExpiryOnce() },
+  { name: ADMIN_OUTBOX_DISPATCH_JOB, run: () => runAdminOutboxDispatchOnce() },
 ];
 
 /** The registered job names, derived from the registry above — never restated. */
@@ -164,6 +175,34 @@ export async function runReauthenticationExpiryOnce(): Promise<number> {
     'reauthentication expiry pass complete',
   );
   return expired;
+}
+
+/**
+ * ONE pass of the administration outbox dispatcher.
+ *
+ * `dispatchDueAdminOutboxEvents` claims due events one small transaction at a
+ * time (FOR UPDATE SKIP LOCKED), delivers through the default logging port,
+ * and records failures on the event row with backoff — a failing event never
+ * aborts the batch, so this pass only THROWS on an infrastructure fault before
+ * any claim. Counts only in the log; payloads carry ids, never an address.
+ */
+export async function runAdminOutboxDispatchOnce(): Promise<number> {
+  const result = await dispatchDueAdminOutboxEvents();
+  const processed = result.delivered + result.deduplicated + result.failed;
+  if (processed === 0) {
+    logger.debug({ job: ADMIN_OUTBOX_DISPATCH_JOB, processed: 0 }, 'no outbox events due');
+    return 0;
+  }
+  logger.info(
+    {
+      job: ADMIN_OUTBOX_DISPATCH_JOB,
+      delivered: result.delivered,
+      deduplicated: result.deduplicated,
+      failed: result.failed,
+    },
+    'administration outbox dispatch pass complete',
+  );
+  return processed;
 }
 
 /**

@@ -1172,6 +1172,7 @@ sed 's/\r$//' migrations/<file>.sql | git hash-object --stdin    # canonical blo
 | `058_policy_evidence_reconstructable.sql`      | `3ecfb55f2eec01dfa99395cba1fea728510ee595` | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 | `059_policy_evidence_integrity_closure.sql`    | `53d63892971367056aae68be55ad88e392ea990b` | `ff66a2a327bb9ce9eb80c8ac68a4b1cc23549e327ccecfe42160f93e564d86c2` |
 | `060_identity_boundary_acceptance_closure.sql` | `346bef00f442c9f030fcc05e4efb48fe4e616b44` | `70c59d6b2684bb26ffe5df649038b1161e83f7c3865cd7e00840fc66af7ebff0` |
+| `061_dealership_administration.sql`            | `bc41f9cab17784d8f1e99db2a547cf9ed75da9bd` | `5bd48b9be29c7819e6d7cbe9adc9aba53e2ac4fe49afcaefb45682f7798d9816` |
 
 **`058_policy_evidence_reconstructable.sql` is NEW IN FBL-020-R6 and is now COMMITTED**, so
 its two digests are of a blob in `HEAD` as well as of the body on disk, and the two agree. It is the file §4.0's frozen-`057` position requires:
@@ -1229,6 +1230,16 @@ row, after which the 059 tuple key is VALIDATED rather than left NOT VALID (§8)
 structural authority-plane correction (§3) is in `packages/identity-access` (the engine
 reads a declared `plane`, never the action-name prefix), and the mutation-provenance gate
 (§1) is in `.github/workflows/ci.yml`. Migrations `000` and `049`–`059` are byte-immutable.
+
+**`061_dealership_administration.sql` is POST-FBL-020 work — Release Train 1 (Dealership
+Administration), not part of this delivery.** It is listed here because this table is the
+one census of the migration chain on disk. Over the immutable `000`–`060` it adds the
+dealership-administration domain (settings, business hours, bounded policies, staff
+invitations, idempotency keys, the administration outbox with its delivery ledger), the
+server-controlled tenant context (`app_tenant_ctx()`), and deny-by-default row security on
+the organization and administration tables bound to the `dealership_runtime` role. Its
+batteries are `tests/tenant-isolation.test.ts` and `tests/dealership-admin.test.ts`, and the
+fixture-chain declaration (`negative-control-057`) pins its digest.
 
 **`057_identity_boundary_completion.sql` was deliberately NOT pinned in this table until
 FBL-020-R6.** While it was being **edited in place** any digest quoted for it went stale the
@@ -1372,7 +1383,7 @@ noted. They are:
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | FBL-020-R5 §4                   | <!--fig:order_text_floor_tests-->459<!--/fig--> / <!--fig:order_text_floor_suites-->47<!--/fig--> | the order's FLOOR clause — "the existing 459-test/47-suite floor may not shrink"        |
 | FBL-020-R5 Appendix A item 9    | <!--fig:order_appendix_tests-->525<!--/fig--> / <!--fig:order_appendix_suites-->57<!--/fig-->     | a quality condition on a count the implementer had already reported, not a second floor |
-| `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->725<!--/fig--> / <!--fig:floor_suites-->69<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
+| `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->739<!--/fig--> / <!--fig:floor_suites-->71<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
 
 **HOW THE FLOOR GOT TO THE MEASUREMENT, IN THREE STEPS, EACH OF WHICH LEFT IT BELOW FOR A WHILE.** `MINIMUM_TESTS` stood at 646 while the battery
 measured 652, inside a constant whose own docstring says a floor is raised to what a measured
@@ -1639,13 +1650,13 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 
 | Figure                       | Value                                                                                                     | Read from                                                                           |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `suite_tests`                | <!--fig:suite_tests-->725<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
-| `suite_suites`               | <!--fig:suite_suites-->69<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
-| `suite_passed`               | <!--fig:suite_passed-->725<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
-| `observed_ok`                | <!--fig:observed_ok-->794<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
+| `suite_tests`                | <!--fig:suite_tests-->739<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
+| `suite_suites`               | <!--fig:suite_suites-->71<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
+| `suite_passed`               | <!--fig:suite_passed-->739<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
+| `observed_ok`                | <!--fig:observed_ok-->810<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
 | `observed_not_ok`            | <!--fig:observed_not_ok-->0<!--/fig-->                                                                    | `artifacts/test-summary.json` `observed_not_ok_lines`                               |
-| `floor_tests`                | <!--fig:floor_tests-->725<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
-| `floor_suites`               | <!--fig:floor_suites-->69<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
+| `floor_tests`                | <!--fig:floor_tests-->739<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
+| `floor_suites`               | <!--fig:floor_suites-->71<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
 | `order_floor_tests`          | <!--fig:order_floor_tests-->459<!--/fig-->                                                                | `scripts/parse-test-summary.ts` `ORDER_MINIMUM_TESTS`                               |
 | `order_floor_suites`         | <!--fig:order_floor_suites-->47<!--/fig-->                                                                | `scripts/parse-test-summary.ts` `ORDER_MINIMUM_SUITES`                              |
 | `order_text_floor_tests`     | <!--fig:order_text_floor_tests-->459<!--/fig-->                                                           | `docs/orders/FBL-020-R5.md` §4, the floor clause itself                             |
@@ -2347,7 +2358,7 @@ absolute ships here without a fixture proving it.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | §4.0 census provenance, and the migration preflight   | the census was taken from a tree with "none of them under `migrations/`" / "`migrations/` matches: yes" | the artifact records `migrations_match_head: false` and "`migrations/` carries 1 of them". §4.0 now states the artifact's number and what the one change means  |
 | §4.0, the migration preflight, and `058`'s own header | the artifact "says nothing of the kind" / "records no such thing" about a stale `postmaster.pid`        | the artifact records the disagreement in four evidence rows, `postmaster.pid and the running server agree on the data directory` = `false`. All three corrected |
-| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->725<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
+| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->739<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
 | §4.2 and `docs/identity/DATA-DICTIONARY.md`           | `058`'s digests published as `33c851a0…` / `bcf39d9a…`                                                  | the body had been edited since; both documents carry the re-derived values, and `architecture/migration-fixture-chains.json` declares the same one              |
 
 **NINE FORMATTING REPAIRS BELONG WITH THEM, AND ONE MECHANISM EXPLAINS ALL OF THEM.** §4.1's

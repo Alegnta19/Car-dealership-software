@@ -722,6 +722,12 @@ export const AUDIT_EVENT_WRITERS: readonly IdentityAuditWriter[] = [
     enumerable: true,
     because: 'the owned mutation services, plus the support-expiry processor',
   },
+  // RELEASE TRAIN 1's administration services (admin-settings.ts) audit under
+  // the `admin.` namespace THROUGH mutations.ts's recordMutation envelope —
+  // they hold no INSERT INTO audit_events of their own, so they are not
+  // writers here: the writer rule is about files with the literal insert.
+  // Their event names live outside the identity. namespace this inventory
+  // pins, exactly like the Phase-248 `service.${action}` cockpit audit.
   {
     file: 'packages/identity-access/src/login-transaction.ts',
     namespace: 'identity.login.',
