@@ -304,21 +304,25 @@ function clientHasTakenConnectionError(client: PoolClient): boolean {
  *     does — every `withTransaction` body here runs statements back to back;
  *   * both are configurable, and 0 removes the bound entirely.
  */
+// FBL-020-R7-C2 §1 — there is deliberately NO `-c role=` startup option here
+// any more. R7 §3.7 had the pool assume the runtime role at connection startup
+// when DATABASE_RUNTIME_ROLE was set; that made an OWNER login acceptable by
+// dressing it in the runtime role, reversibly (`RESET ROLE` lands back on the
+// owner), and only when the option happened to be present. The application now
+// authenticates DIRECTLY as the non-owner runtime login (migration 060's
+// dealership_app) in its DATABASE_URL, the configuration loader refuses
+// DATABASE_RUNTIME_ROLE outright, and the posture gate asserts both
+// session_user and current_user — so there is no switched identity left to
+// conceal anything behind.
 function serverSideTimeouts(
   statementTimeoutMs: number,
   idleInTransactionTimeoutMs: number,
-  runtimeRole: string | null,
 ): { options?: string } {
   const settings: string[] = [];
   if (statementTimeoutMs > 0) settings.push(`-c statement_timeout=${statementTimeoutMs}`);
   if (idleInTransactionTimeoutMs > 0) {
     settings.push(`-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`);
   }
-  // FBL-020-R7 §3.7 — the runtime role is a STARTUP parameter, not a
-  // post-connect statement: the backend assumes it before the first query, so
-  // no code path can run ahead of the switch and there is nothing to race. The
-  // value is config-validated as a strict identifier before it gets here.
-  if (runtimeRole !== null) settings.push(`-c role=${runtimeRole}`);
   return settings.length === 0 ? {} : { options: settings.join(' ') };
 }
 
@@ -333,11 +337,7 @@ export function getPool(): Pool {
     max: config.pgPoolMax,
     idleTimeoutMillis: config.pgPoolIdleMs,
     connectionTimeoutMillis: config.pgPoolConnectMs,
-    ...serverSideTimeouts(
-      config.pgStatementTimeoutMs,
-      config.pgIdleInTransactionTimeoutMs,
-      config.databaseRuntimeRole,
-    ),
+    ...serverSideTimeouts(config.pgStatementTimeoutMs, config.pgIdleInTransactionTimeoutMs),
     ...(config.pgSslRequire ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 

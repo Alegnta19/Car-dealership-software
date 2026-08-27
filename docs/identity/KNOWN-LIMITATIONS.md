@@ -545,22 +545,28 @@ inspected and an environment that IS NOT THERE were scored alike. Both are fixed
 branch and the vanished-directory branch, each with a test driving both directions). This
 entry is the residue of the same shape and is stated rather than implied.
 
-## The runtime role is assumed at connection startup, and deployment must say so (FBL-020-R7 §3.7)
+## The runtime identity is a real login, and startup role switching is refused (FBL-020-R7-C2 §1)
 
 Migration `059` separates `dealership_runtime` (no direct DML on
 `policy_decision_matched_bindings`, not a member of the evidence owner) from
-`dealership_evidence_owner` (owns the `SECURITY DEFINER` normalizer). The pool assumes the
-runtime role through the `-c role=` startup option **only when `DATABASE_RUNTIME_ROLE` is
-set** — the upgrade drill proves that path end to end (`--stage=after-059` refuses to run as
-anyone else) — and a deployment that connects as a superuser without setting it is not
-protected by the role separation, exactly as a deployment that connects as the database
-owner never was. The migration itself must NOT run under the runtime role: applying `059`
-creates roles and grants, which is migration-owner authority by design. What the schema
-guarantees regardless of deployment: the GUC writer guard is gone, so there is no
-caller-settable marker left to forge, and the composite keys, triggers and CHECKs of `059`
-bind every writer, superuser included, except where PostgreSQL itself exempts superusers
-from privilege checks — which is the standing "the database owner can do anything" boundary
-already recorded under accepted operational consequences.
+`dealership_evidence_owner` (owns the `SECURITY DEFINER` normalizer), and migration `060`
+gives the application its CONNECTION IDENTITY: `dealership_app`, a genuine non-owner LOGIN
+role that is a member of `dealership_runtime` and of nothing else. The API and worker
+authenticate as it directly in `DATABASE_URL`. The R7-era `-c role=` startup switch is
+REMOVED: `DATABASE_RUNTIME_ROLE` now refuses at configuration load (an owner URL plus that
+variable fails startup rather than dressing the owner in the runtime role), and the boot
+posture gate reads **both** `session_user` and `current_user` — superuser, membership in
+any enumerated actual owner, every ledger write verb, and direct child-evidence INSERT are
+each judged about both identities, so a switched role cannot conceal the login behind it.
+A deployment that connects as a superuser still bypasses the separation in non-production
+modes (the posture gate is production fail-closed; local smoke legitimately connects as
+the owner to build fixtures), and the migration runner keeps owner authority by design:
+applying migrations creates roles and grants. What the schema guarantees regardless of
+deployment: the GUC writer guard is gone, so there is no caller-settable marker left to
+forge, and the composite keys, triggers and CHECKs of `059`/`060` bind every writer,
+superuser included, except where PostgreSQL itself exempts superusers from privilege
+checks — which is the standing "the database owner can do anything" boundary already
+recorded under accepted operational consequences.
 
 ## Deliberately out of scope (named owners)
 

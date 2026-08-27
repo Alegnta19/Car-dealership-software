@@ -649,6 +649,17 @@ export function createPolicyEngine(options: {
      */
     support?: SupportAccessFacts | null | undefined;
     /**
+     * FBL-020-R7-C2 §3 — the EXACT platform role binding the support branch
+     * relied upon, and the authorization version it observed. Present on
+     * exactly the delegated ALLOWs; migration 060's write-instant trigger
+     * revalidates THIS binding (the actor's own, platform-scope, active,
+     * in-window, still in a support role, at this version), so an unrelated
+     * surviving platform binding can no longer mask the loss of the one the
+     * evaluation actually used.
+     */
+    supportAuthorityBindingId?: string | null | undefined;
+    supportAuthorityBindingVersion?: number | null | undefined;
+    /**
      * The presented credential, or null when none was presented. It arrives as
      * ONE object precisely so that no caller can supply three of its four
      * facts: the database's `pd_credential_group_is_atomic` refuses that shape,
@@ -697,6 +708,19 @@ export function createPolicyEngine(options: {
     const namesTargetTenant = (input.controlPlaneTargetTenantId ?? null) !== null;
     const targetColumn = namesTargetTenant ? ' control_plane_target_tenant_id,' : '';
     const targetPlaceholder = namesTargetTenant ? '$23,' : '';
+    // FBL-020-R7-C2 §3 — the support-authority columns are named ONLY when a
+    // supporting binding was identified, for the same upgrade-window reason as
+    // the target-tenant column above: only a delegated support ALLOW carries
+    // them, so the member/deny writer stays operable across the 059→060
+    // window, while a delegated ALLOW written by the new engine against a
+    // pre-060 schema fails CLOSED — the safe direction for delegated access.
+    const namesSupportAuthority = (input.supportAuthorityBindingId ?? null) !== null;
+    const authorityColumns = namesSupportAuthority
+      ? ' support_authority_binding_id, support_authority_binding_version,'
+      : '';
+    const authorityPlaceholders = namesSupportAuthority
+      ? `$${namesTargetTenant ? 24 : 23},$${namesTargetTenant ? 25 : 24},`
+      : '';
     return withTransaction(async (executor) => {
       const result = await executor.query(
         `INSERT INTO policy_decisions
@@ -705,9 +729,11 @@ export function createPolicyEngine(options: {
           support_session_id, matched_role_binding_ids, matched_authorization_versions,
           freshness_classification, mfa_assurance_classification, correlation_id,
           support_request_id, connection_id, session_id, actor_provider_subject,${targetColumn}
+          ${authorityColumns}
           auth_time, support_session_expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
                ${targetPlaceholder}
+               ${authorityPlaceholders}
                (SELECT s.auth_time FROM identity_sessions s WHERE s.session_id = $21),
                (SELECT s.expires_at FROM support_access_sessions s
                  WHERE s.support_session_id = $13))
@@ -736,6 +762,9 @@ export function createPolicyEngine(options: {
           input.credential?.sessionId ?? null,
           input.credential?.providerSubject ?? null,
           ...(namesTargetTenant ? [input.controlPlaneTargetTenantId] : []),
+          ...(namesSupportAuthority
+            ? [input.supportAuthorityBindingId, input.supportAuthorityBindingVersion ?? null]
+            : []),
         ],
       );
       const decisionId = String((result.rows[0] as Row).decision_id);
@@ -858,6 +887,22 @@ export function createPolicyEngine(options: {
       // the action name to decide a plane, so `platform.`-NAMING an action buys
       // no control-plane behavior and renaming a control-plane action keeps it.
       const isControlPlane = actionPlane(def) === 'control_plane';
+
+      // FBL-020-R7-C2 §2 — A CONTROL-PLANE INVOCATION CARRIES NO CUSTOMER
+      // PAYLOAD, AND A SUPPLIED ONE IS REFUSED, NOT DISCARDED. The catalog
+      // already forbids a control-plane action from DECLARING a resourceType;
+      // this refuses the CALL that smuggles one anyway — a customer `resource`
+      // or an organization `scopeHint` on a control-plane invocation is a
+      // caller asking for platform authority over tenant-shaped work, and
+      // silently dropping the payload while returning ALLOW would record a
+      // decision that says nothing about what the caller actually tried.
+      if (
+        isControlPlane &&
+        ((input.resource !== undefined && input.resource !== null) ||
+          (input.scopeHint !== undefined && input.scopeHint !== null))
+      ) {
+        return deny('CONTROL_PLANE_CUSTOMER_PAYLOAD', { sensitive });
+      }
 
       // 2. cross-tenant is never reachable: a dealership actor's target is
       //    always their own tenant
@@ -1112,12 +1157,22 @@ export function createPolicyEngine(options: {
       // that silently rested on a CHECK in another file is how the drift this
       // revision keeps finding gets in. It is the same function the
       // control-plane branch calls, so the two cannot diverge.
-      const holdsSupportAuthority = bindings.some(
-        (b) =>
-          coversPlatformAction(b) &&
-          (PLATFORM_SUPPORT_AUTHORITY_ROLES as readonly string[]).includes(b.role),
-      );
-      if (!holdsSupportAuthority) {
+      // FBL-020-R7-C2 §3 — THE EXACT BINDING IS IDENTIFIED, NOT MERELY COUNTED.
+      // The evaluation names WHICH platform-support binding it relies upon (the
+      // deterministic first by role_binding_id, so the answer is the same on
+      // every run), and the decision row records that id with the version
+      // observed here. Migration 060's write-instant trigger then revalidates
+      // THAT binding — so a binding revoked, re-scoped, stripped of its support
+      // role or deactivated between this read and the write refuses the
+      // evidence, and an UNRELATED surviving platform binding cannot mask it.
+      const supportAuthority = bindings
+        .filter(
+          (b) =>
+            coversPlatformAction(b) &&
+            (PLATFORM_SUPPORT_AUTHORITY_ROLES as readonly string[]).includes(b.role),
+        )
+        .sort((a, b) => (a.role_binding_id < b.role_binding_id ? -1 : 1))[0];
+      if (supportAuthority === undefined) {
         // A resource denial still hides behind the not-found envelope: losing
         // authority must not turn into an existence oracle.
         return deny('SUPPORT_ACTOR_UNAUTHORIZED', {
@@ -1195,6 +1250,10 @@ export function createPolicyEngine(options: {
           freshness: assurance.freshness,
           mfaAssurance: assurance.mfaAssurance,
           supportRequestId: support.supportRequestId,
+          // C2 §3: the exact supporting authority, revalidated by the database
+          // at the write instant.
+          supportAuthorityBindingId: supportAuthority.role_binding_id,
+          supportAuthorityBindingVersion: Number(supportAuthority.authorization_version),
           // R4 §2.2: the WINDOW the support allow fell inside, recorded on the
           // decision itself so a stored allow can be re-judged against it later.
           supportSessionExpiresAt: support.expiresAt,

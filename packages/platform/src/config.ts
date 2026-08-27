@@ -80,8 +80,6 @@ export interface AppConfig {
   readonly pgStatementTimeoutMs: number;
   readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
-  /** See `DatabaseConfig.databaseRuntimeRole` — the app IS a database consumer. */
-  readonly databaseRuntimeRole: string | null;
   readonly identity: IdentityConfig;
   /**
    * True when NODE_ENV=production. The one place the environment's
@@ -278,6 +276,7 @@ function loadIdentityConfig(env: Record<string, string | undefined>): IdentityCo
 }
 
 export function loadConfig(env: Record<string, string | undefined>): AppConfig {
+  refuseStartupRoleSwitching(env);
   const logLevelRaw = env.LOG_LEVEL ?? 'info';
   if (!LOG_LEVELS.includes(logLevelRaw as LogLevel)) {
     throw new ConfigError(`LOG_LEVEL must be one of: ${LOG_LEVELS.join(', ')}`);
@@ -311,7 +310,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       max: 600_000,
     }),
     pgSslRequire: env.PGSSL === 'require',
-    databaseRuntimeRole: databaseRuntimeRole(env),
     identity,
     isProduction: env.NODE_ENV === 'production',
     isLocalDevelopment: isLocalDevelopment(env),
@@ -347,24 +345,10 @@ export interface DatabaseConfig {
   readonly pgStatementTimeoutMs: number;
   readonly pgIdleInTransactionTimeoutMs: number;
   readonly pgSslRequire: boolean;
-  /**
-   * FBL-020-R7 §3.7 — the database ROLE every pooled connection assumes, applied
-   * as a `-c role=…` startup parameter so the backend switches before the first
-   * statement runs (no post-connect race). Migration 059 creates
-   * `dealership_runtime` for exactly this: the API and worker run with it set,
-   * which is what makes them the NON-OWNER runtime role — no direct DML on
-   * `policy_decision_matched_bindings`, normalization only through the
-   * database-owned SECURITY DEFINER path.
-   *
-   * NEVER set for the migration runner or the test harness: migrations create
-   * roles and tables (owner work), and the test harness TRUNCATEs between cases
-   * (owner work) — both run as the login user. `null` means "connect as the
-   * login user", which is exactly what those two need.
-   */
-  readonly databaseRuntimeRole: string | null;
 }
 
 export function loadDatabaseConfig(env: Record<string, string | undefined>): DatabaseConfig {
+  refuseStartupRoleSwitching(env);
   return Object.freeze({
     databaseUrl: requireVar(env, 'DATABASE_URL'),
     pgPoolMax: integer(env, 'PGPOOL_MAX', 10, { min: 1, max: 100 }),
@@ -376,25 +360,39 @@ export function loadDatabaseConfig(env: Record<string, string | undefined>): Dat
       max: 600_000,
     }),
     pgSslRequire: env.PGSSL === 'require',
-    databaseRuntimeRole: databaseRuntimeRole(env),
   });
 }
 
 /**
- * A role name travels into a `-c role=…` startup option, so it is validated as a
- * strict lower-case identifier rather than trusted — anything else refuses
- * loudly at boot instead of producing a connection string with something
- * unexpected spliced into it.
+ * FBL-020-R7-C2 §1 — STARTUP ROLE SWITCHING IS REMOVED, AND ITS VARIABLE
+ * REFUSES RATHER THAN BEING IGNORED.
+ *
+ * R7 §3.7 had every pooled connection assume `DATABASE_RUNTIME_ROLE` through a
+ * `-c role=…` startup option. That made an OWNER login acceptable by dressing
+ * it in the runtime role — reversibly (`RESET ROLE` landed back on the owner)
+ * and only when the option happened to be present. The application now
+ * authenticates DIRECTLY as the non-owner runtime login (migration 060's
+ * `dealership_app`) in its DATABASE_URL, and there is no switched identity
+ * left.
+ *
+ * The variable is REFUSED, not silently dropped: a deployment still setting it
+ * is a deployment whose operator believes an owner URL plus this variable is a
+ * protected posture, and letting that process boot — with the variable doing
+ * nothing — would preserve exactly the false belief this correction removes.
+ * An owner URL with `DATABASE_RUNTIME_ROLE=dealership_runtime` therefore FAILS
+ * STARTUP here, before a pool exists; and a deployment that clears the
+ * variable but keeps the owner URL is caught by the posture gate, which now
+ * reads `session_user` as well as `current_user`.
  */
-function databaseRuntimeRole(env: Record<string, string | undefined>): string | null {
+function refuseStartupRoleSwitching(env: Record<string, string | undefined>): void {
   const raw = env.DATABASE_RUNTIME_ROLE;
-  if (raw === undefined || raw === '') return null;
-  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(raw)) {
-    throw new ConfigError(
-      'DATABASE_RUNTIME_ROLE must be a lower-case identifier (letters, digits, underscores)',
-    );
-  }
-  return raw;
+  if (raw === undefined || raw === '') return;
+  throw new ConfigError(
+    'DATABASE_RUNTIME_ROLE is no longer supported (FBL-020-R7-C2 §1): startup role ' +
+      'switching cannot make an owner login acceptable. Authenticate directly as the ' +
+      'non-owner runtime login (migration 060 creates dealership_app) in DATABASE_URL, ' +
+      'and remove this variable',
+  );
 }
 
 let current: AppConfig | undefined;

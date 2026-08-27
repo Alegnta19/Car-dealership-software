@@ -618,7 +618,7 @@
           "required": true,
           "variants": [
             {
-              "sha256": "e65925298632516f6406b7264dd440896386c51eb65d943bb139ea8c1d3c4eeb",
+              "sha256": "f0c661c53cdd01aab34a32e33267716d25d92babbb6ebcf0731e43aaf1f76b06",
               "note": "the committed migrations/060_identity_boundary_acceptance_closure.sql"
             }
           ]

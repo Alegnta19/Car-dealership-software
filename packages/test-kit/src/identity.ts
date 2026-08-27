@@ -712,6 +712,48 @@ export async function sessionBindingFor(
  * a 30-minute approval stays a 30-minute approval — just one that ended half an
  * hour ago.
  */
+/**
+ * FBL-020-R7-C2 §5 — approves a support request DIRECTLY, coherently.
+ *
+ * Migration 060 §5 requires the cited grant to have been CONSUMED, unexpired,
+ * AT the approval instant — the atomic path's own shape. A fixture that stages
+ * an approved request outside `decideSupportAccess` (a state that path never
+ * leaves behind, e.g. "approved but session not started") must therefore spend
+ * the decider's `identity.support.approve` grant under the SAME transaction
+ * clock it decides with, or the staging is a shape no real history has and the
+ * schema rightly refuses it. Two statements, one transaction: NOW() is
+ * transaction-stable, and a data-modifying CTE's effect would be invisible to
+ * the triggers firing in the same statement.
+ */
+export async function approveSupportRequestDirectly(input: {
+  requestId: string;
+  deciderUserLinkId: string;
+}): Promise<void> {
+  await withTransaction(async (executor) => {
+    await fixtureAuthorizationStateWrite(
+      'seed-authorization-state',
+      `UPDATE reauthentication_grants g SET consumed_at = NOW()
+        WHERE g.user_link_id = $2 AND g.action = 'identity.support.approve'
+          AND g.resource_id = $1 AND g.consumed_at IS NULL`,
+      [input.requestId, input.deciderUserLinkId],
+      { executor },
+    );
+    await fixtureAuthorizationStateWrite(
+      'seed-authorization-state',
+      `UPDATE support_access_requests
+          SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
+              approval_grant_id = (
+                SELECT g.grant_id FROM reauthentication_grants g
+                 WHERE g.user_link_id = $2
+                   AND g.action = 'identity.support.approve'
+                   AND g.resource_id = $1)
+        WHERE request_id = $1`,
+      [input.requestId, input.deciderUserLinkId],
+      { executor },
+    );
+  });
+}
+
 export async function shiftSupportWindowIntoThePast(supportSessionId: string): Promise<void> {
   await withTransaction(async (executor) => {
     await executor.query(
@@ -738,6 +780,19 @@ export async function shiftSupportWindowIntoThePast(supportSessionId: string): P
       { executor },
     );
     await executor.query(`UPDATE _shift_request SET decided_at = NOW() - INTERVAL '61 minutes'`);
+    // FBL-020-R7-C2 §5 — the approval's grant is consumed AT the approval
+    // instant, and the re-insert below re-fires the complete-approval check;
+    // a shifted decision therefore shifts its grant's consumption with it, or
+    // the shifted history would be incoherent in a way no real history is.
+    await fixtureAuthorizationStateWrite(
+      'simulate-authorization-drift',
+      `UPDATE reauthentication_grants gr
+          SET consumed_at = NOW() - INTERVAL '61 minutes'
+        WHERE gr.grant_id IN (SELECT approval_grant_id FROM _shift_request
+                               WHERE approval_grant_id IS NOT NULL)`,
+      [],
+      { executor },
+    );
     await executor.query(
       `UPDATE _shift_session
           SET granted_at = NOW() - INTERVAL '61 minutes',

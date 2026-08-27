@@ -232,6 +232,54 @@ describe('the authority plane is structural (FBL-020-R7-C1 §3)', () => {
         assert.equal(outcome.reasonCode, 'ALLOW_PLATFORM_ROLE');
       });
 
+      test('a control-plane invocation carrying a customer resource is REFUSED, not laundered', async () => {
+        // FBL-020-R7-C2 §2 — the engine used to ignore `resource` on the
+        // control-plane branch entirely: the payload was silently discarded
+        // and the caller got ALLOW. A genuine control-plane action invoked
+        // WITH a customer resource now denies, with its own reason code, and
+        // the evidence row records the denial.
+        const outcome = await engine().decide({
+          actor: { userLinkId: platformLinkId, actorScope: 'platform', tenantId: null },
+          action: 'platform.real.inspect',
+          sessionId: platformSessionId,
+          targetTenantId: tenantId,
+          resource: { type: 'repair_order', id: randomUUID() },
+        });
+        assert.equal(outcome.decision, 'deny');
+        assert.equal(outcome.reasonCode, 'CONTROL_PLANE_CUSTOMER_PAYLOAD');
+        const rows = await query(
+          `SELECT decision, reason_code FROM policy_decisions
+            WHERE action = 'platform.real.inspect'`,
+        );
+        assert.equal(rows.rows.length, 1, 'exactly the denial was recorded');
+        assert.deepEqual(rows.rows[0], {
+          decision: 'deny',
+          reason_code: 'CONTROL_PLANE_CUSTOMER_PAYLOAD',
+        });
+      });
+
+      test('a control-plane invocation carrying an organization scopeHint is REFUSED too', async () => {
+        const outcome = await engine().decide({
+          actor: { userLinkId: platformLinkId, actorScope: 'platform', tenantId: null },
+          action: 'platform.real.inspect',
+          sessionId: platformSessionId,
+          targetTenantId: tenantId,
+          scopeHint: { level: 'rooftop', id: randomUUID() },
+        });
+        assert.equal(outcome.decision, 'deny');
+        assert.equal(outcome.reasonCode, 'CONTROL_PLANE_CUSTOMER_PAYLOAD');
+        // …and the SAME invocation with the payload removed still succeeds —
+        // the refusal is about the payload, never about the actor's authority.
+        const clean = await engine().decide({
+          actor: { userLinkId: platformLinkId, actorScope: 'platform', tenantId: null },
+          action: 'platform.real.inspect',
+          sessionId: platformSessionId,
+          targetTenantId: tenantId,
+        });
+        assert.equal(clean.decision, 'allow');
+        assert.equal(clean.reasonCode, 'ALLOW_PLATFORM_ROLE');
+      });
+
       test('a platform-NAMED tenant action does NOT reach the control plane', async () => {
         // Same actor, same binding, an action whose NAME also starts with
         // platform. — but its plane is tenant, so the engine routes it to the

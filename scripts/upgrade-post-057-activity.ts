@@ -740,13 +740,18 @@ async function afterMigration058(outPath: string | undefined, logPath: string | 
  * probe. This stage therefore drives `createPolicyEngine().decide()` on a REAL
  * Fixed Ops resource, with THE REAL resolver (`resolveServiceResourceScope`, which
  * now reads migration 059's `resource_org_leaf` registry), and it does so AS THE
- * RUNTIME ROLE: the process must be started with
- * `DATABASE_RUNTIME_ROLE=dealership_runtime`, so every statement in it runs under
- * the role production runs under — the one that CANNOT write the normalized child
- * table itself (§3.7). It asserts:
+ * RUNTIME ROLE'S PRIVILEGES: FBL-020-R7-C2 §1 removed startup role switching, so
+ * the process is started with DATABASE_URL pointing at an EPHEMERAL NON-OWNER
+ * LOGIN the CI stage provisions `IN ROLE dealership_runtime` (migration 060's
+ * dealership_app does not exist yet at 059 — that login takes over at
+ * after-060). Every statement here runs with exactly the runtime role's
+ * privileges — the ones that CANNOT write the normalized child table (§3.7).
+ * It asserts:
  *
- *   1. the connection really is the runtime role (`current_user`), so the stage
- *      cannot silently prove superuser behavior;
+ *   1. the connection GENUINELY carries the runtime posture: a member of
+ *      dealership_runtime, session_user = current_user, no superuser, no
+ *      membership in the evidence owner, no INSERT on the normalized child —
+ *      so the stage cannot silently prove superuser behavior;
  *   2. the decision is an ALLOW at `evidence_version` 4 — the DEFAULT the schema
  *      now owns, on an INSERT that deliberately omits the column;
  *   3. the persisted `resource_rooftop_id` equals the database's OWN resolution of
@@ -775,16 +780,34 @@ async function afterMigration059(outPath: string | undefined, logPath: string | 
     );
   }
 
-  const connectedAs = ((await query(`SELECT current_user AS u`)).rows[0] as { u: unknown }).u;
-  if (String(connectedAs) !== 'dealership_runtime') {
+  const who = (
+    await query(
+      `SELECT session_user AS s, current_user AS c,
+              pg_has_role(current_user, 'dealership_runtime', 'MEMBER') AS runtime_member,
+              (SELECT rolsuper FROM pg_roles WHERE rolname = session_user) AS is_super,
+              pg_has_role(session_user, 'dealership_evidence_owner', 'MEMBER') AS owner_member,
+              has_table_privilege(current_user, 'policy_decision_matched_bindings',
+                                  'INSERT') AS child_insert`,
+    )
+  ).rows[0] as Record<string, unknown>;
+  if (
+    String(who.s) !== String(who.c) ||
+    who.runtime_member !== true ||
+    who.is_super === true ||
+    who.owner_member === true ||
+    who.child_insert === true
+  ) {
     throw new Error(
-      `after-059 activity refused: connected as ${String(connectedAs)} — this stage exists to ` +
-        'prove the PRODUCTION role writes v4 evidence, so it must run with ' +
-        'DATABASE_RUNTIME_ROLE=dealership_runtime (the pool then assumes the runtime role at ' +
-        'connection startup, exactly as production does)',
+      `after-059 activity refused: connected as session_user=${String(who.s)} ` +
+        `current_user=${String(who.c)} (runtime_member=${String(who.runtime_member)}, ` +
+        `superuser=${String(who.is_super)}, evidence_owner_member=${String(who.owner_member)}, ` +
+        `child_insert=${String(who.child_insert)}) — this stage exists to prove the ` +
+        'PRODUCTION privileges write v4 evidence, so it must run as a genuine non-owner ' +
+        'login that is a member of dealership_runtime and of nothing more (FBL-020-R7-C2 §1 ' +
+        'removed startup role switching; the CI stage provisions an ephemeral login for this)',
     );
   }
-  say('after-059 activity: connected as dealership_runtime');
+  say(`after-059 activity: connected as ${String(who.s)} (member of dealership_runtime)`);
 
   const actor = (
     await query(
@@ -996,10 +1019,13 @@ async function afterMigration059(outPath: string | undefined, logPath: string | 
  * decision. It asserts:
  *
  *   1. current_user IS dealership_app (the stage really ran as the app login);
- *   2. runtimePostureViolations is empty — non-super, cannot assume the evidence
- *      owner, cannot write the ledger, cannot INSERT the normalized child;
- *   3. it CAN insert an authorized (system, tenant-scoped) policy decision — the
- *      application can record its own authorization outcomes;
+ *   2. runtimePostureViolations is empty — session_user equals current_user,
+ *      non-super, cannot assume ANY actual owner, cannot write the ledger in
+ *      any verb, cannot INSERT the normalized child;
+ *   3. it CAN insert a decision row (a system DENY — the parent INSERT
+ *      privilege the application needs), and (FBL-020-R7-C2 §4) the SAME row
+ *      as a system ALLOW is REFUSED — the ordinary runtime login cannot select
+ *      the system lane;
  *   4. a DIRECT child-table INSERT is refused with SQLSTATE 42501, by the
  *      privilege system rather than a forgeable marker.
  */
@@ -1021,9 +1047,10 @@ async function afterMigration060(outPath: string | undefined, logPath: string | 
   for (const v of runtimePostureViolations(posture)) failures.push(v);
   say(`after-060 activity: connected as ${posture.currentUser}`);
 
-  // (3) the app role records an authorized decision (a pure system tenant row —
-  // no matched bindings, so no normalization is expected; it proves the parent
-  // INSERT privilege the application needs).
+  // (3) the app role records a decision row (a system DENY — denies carry no
+  // authority and no attribution anyone relies on, so they prove the parent
+  // INSERT privilege the application needs without touching the system-ALLOW
+  // lane FBL-020-R7-C2 §4 closes below).
   // An ACTIVE tenant with an effective chain (the between-stage's), not the
   // legacy pending_configuration tenant — 059's v4 scope check refuses a
   // decision recorded at a scope that is not effective at the write instant.
@@ -1043,15 +1070,50 @@ async function afterMigration060(outPath: string | undefined, logPath: string | 
         `INSERT INTO policy_decisions
            (tenant_id, actor_type, action, decision, reason_code, policy_version,
             scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
-         VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
+         VALUES ($1, 'system', 'system.retention.sweep', 'deny', 'DENY_SYSTEM_POLICY',
                  'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
         [tid],
       );
-      say('after-060 activity: the app login recorded an authorized system decision');
+      say('after-060 activity: the app login recorded a decision row (system deny)');
     } catch (err) {
       failures.push(
         `after-060: the app login could not record a decision: ${(err as Error).message}`,
       );
+    }
+
+    // (3b) FBL-020-R7-C2 §4 — the SAME row as an ALLOW must refuse: the
+    // ordinary runtime login does not get to select actor_type='system' and
+    // shed actor and credential attribution. This is the C2 §4 proof on the
+    // GENUINE app login, against the upgraded database.
+    let systemAllowRefusal: { code?: string; message?: string } | null = null;
+    try {
+      await query(
+        `INSERT INTO policy_decisions
+           (tenant_id, actor_type, action, decision, reason_code, policy_version,
+            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+         VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
+                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+        [tid],
+      );
+      failures.push(
+        'after-060: the app login WROTE a system ALLOW — the ordinary runtime login must ' +
+          'not be able to select the system lane (FBL-020-R7-C2 §4)',
+      );
+    } catch (err) {
+      systemAllowRefusal = err as { code?: string; message?: string };
+    }
+    if (systemAllowRefusal !== null) {
+      if (
+        systemAllowRefusal.code === 'P0001' &&
+        (systemAllowRefusal.message ?? '').includes('a system ALLOW may be written only by')
+      ) {
+        say('after-060 activity: a system ALLOW as the app login is refused (P0001)');
+      } else {
+        failures.push(
+          'after-060: the system ALLOW was refused, but not by the §4 writer rule: ' +
+            `code=${String(systemAllowRefusal.code)} message=${String(systemAllowRefusal.message)}`,
+        );
+      }
     }
   }
 

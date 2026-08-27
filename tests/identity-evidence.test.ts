@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, beforeEach, describe, test } from 'node:test';
 import {
+  approveSupportRequestDirectly,
   bootstrapAdministrator,
   certifyMfaPolicy,
   mintReauthGrant,
@@ -92,11 +93,20 @@ describe(
       platformSubject: string;
       platformConnectionId: string;
       platformSessionId: string;
+      /**
+       * FBL-020-R7-C2 §2 — each platform person's own platform-scope binding,
+       * at the version the fixture granted it: the exact supporting authority
+       * a delegated ALLOW must name and the write instant revalidates.
+       */
+      platformBindingId: string;
+      platformBindingVersion: number;
       /** …and a SECOND real platform person, for cross-attribution adversaries. */
       platformTwoLinkId: string;
       platformTwoSubject: string;
       platformTwoConnectionId: string;
       platformTwoSessionId: string;
+      platformTwoBindingId: string;
+      platformTwoBindingVersion: number;
     }
 
     /** An activated, fully bound link in the named tenant. */
@@ -200,8 +210,9 @@ describe(
       // write-instant authority trigger refuses their support decisions before
       // the completeness rules these tests exercise are reached.
       const platformAdmin = await bootstrapAdministrator(null);
+      const platformBindings: Record<string, { id: string; version: number }> = {};
       for (const link of [platform.linkId, platformTwo.linkId]) {
-        await grantRole({
+        const granted = await grantRole({
           actingUserLinkId: platformAdmin,
           tenantId: null,
           userLinkId: link,
@@ -211,6 +222,14 @@ describe(
           resourceType: null,
           resourceId: null,
         });
+        const v = await query(
+          `SELECT authorization_version FROM role_bindings WHERE role_binding_id = $1`,
+          [granted.roleBindingId],
+        );
+        platformBindings[link] = {
+          id: granted.roleBindingId,
+          version: Number((v.rows[0] as Record<string, unknown>).authorization_version),
+        };
       }
 
       return {
@@ -226,10 +245,14 @@ describe(
         platformSubject: platform.subject,
         platformConnectionId: platform.connectionId,
         platformSessionId: platformSession.sessionId,
+        platformBindingId: platformBindings[platform.linkId]!.id,
+        platformBindingVersion: platformBindings[platform.linkId]!.version,
         platformTwoLinkId: platformTwo.linkId,
         platformTwoSubject: platformTwo.subject,
         platformTwoConnectionId: platformTwo.connectionId,
         platformTwoSessionId: platformTwoSession.sessionId,
+        platformTwoBindingId: platformBindings[platformTwo.linkId]!.id,
+        platformTwoBindingVersion: platformBindings[platformTwo.linkId]!.version,
         roleBindingId,
         roleBindingVersion: version,
         otherConnectionId: String(otherBound.connection_id),
@@ -538,18 +561,7 @@ describe(
           resourceType: 'support_access_request',
           resourceId: requestId,
         });
-        await fixtureAuthorizationStateWrite(
-          'seed-authorization-state',
-          `UPDATE support_access_requests
-              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
-                  approval_grant_id = (
-                    SELECT g.grant_id FROM reauthentication_grants g
-                     WHERE g.user_link_id = $2
-                       AND g.action = 'identity.support.approve'
-                       AND g.resource_id = $1)
-            WHERE request_id = $1`,
-          [requestId, decider],
-        );
+        await approveSupportRequestDirectly({ requestId, deciderUserLinkId: decider });
       }
       await assertSqlState(
         fixtureAuthorizationStateWrite(
@@ -641,15 +653,28 @@ describe(
         ).rows[0]?.grant_id,
       );
 
+      // The foreign grant is consumed AT the decision instant (FBL-020-R7-C2
+      // §5's coherence), so the refusal stays attributable to the CROSS-TENANT
+      // key — the fact under test — rather than to the consumption rule that
+      // would otherwise speak first.
       await assertSqlState(
-        fixtureAuthorizationStateWrite(
-          'simulate-authorization-drift',
-          `UPDATE support_access_requests
-              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $3,
-                  approval_grant_id = $2
-            WHERE request_id = $1`,
-          [pendingRequestId, foreignGrantId, foreignPerson.linkId],
-        ),
+        withTransaction(async (executor) => {
+          await fixtureAuthorizationStateWrite(
+            'simulate-authorization-drift',
+            `UPDATE reauthentication_grants SET consumed_at = NOW() WHERE grant_id = $1`,
+            [foreignGrantId],
+            { executor },
+          );
+          await fixtureAuthorizationStateWrite(
+            'simulate-authorization-drift',
+            `UPDATE support_access_requests
+                SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $3,
+                    approval_grant_id = $2
+              WHERE request_id = $1`,
+            [pendingRequestId, foreignGrantId, foreignPerson.linkId],
+            { executor },
+          );
+        }),
         FK_VIOLATION,
         'an approving grant from another tenant',
       );
@@ -1077,6 +1102,11 @@ describe(
         actor_provider_subject: f.platformSubject,
         support_session_id: delegated.sessionId,
         support_request_id: delegated.requestId,
+        // FBL-020-R7-C2 §2 — the exact supporting authority the evaluation
+        // relied upon, so the write-instant revalidation passes and each leg
+        // below still dies at the completeness fact it pins.
+        support_authority_binding_id: f.platformBindingId,
+        support_authority_binding_version: f.platformBindingVersion,
       };
 
       await assertSqlState(
@@ -1179,18 +1209,7 @@ describe(
         resourceType: 'support_access_request',
         resourceId: requestId,
       });
-      await fixtureAuthorizationStateWrite(
-        'seed-authorization-state',
-        `UPDATE support_access_requests
-            SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
-                approval_grant_id = (
-                  SELECT g.grant_id FROM reauthentication_grants g
-                   WHERE g.user_link_id = $2
-                     AND g.action = 'identity.support.approve'
-                     AND g.resource_id = $1)
-          WHERE request_id = $1`,
-        [requestId, decider],
-      );
+      await approveSupportRequestDirectly({ requestId, deciderUserLinkId: decider });
       const sessionId = String(
         (
           await fixtureAuthorizationStateWrite(
@@ -1565,6 +1584,8 @@ describe(
         session_id: f.platformSessionId,
         connection_id: f.platformConnectionId,
         actor_provider_subject: f.platformSubject,
+        support_authority_binding_id: f.platformBindingId,
+        support_authority_binding_version: f.platformBindingVersion,
       };
 
       await assertRefusedBy(
@@ -1589,11 +1610,14 @@ describe(
         insertAllow({
           ...supportAllow,
           // The SECOND platform person: real, platform-scope, could hold a
-          // delegation — and does not hold THIS one.
+          // delegation — and does not hold THIS one. Their OWN binding rides
+          // as the supporting authority so the tuple key stays the refusal.
           actor_user_link_id: f.platformTwoLinkId,
           session_id: f.platformTwoSessionId,
           connection_id: f.platformTwoConnectionId,
           actor_provider_subject: f.platformTwoSubject,
+          support_authority_binding_id: f.platformTwoBindingId,
+          support_authority_binding_version: f.platformTwoBindingVersion,
           support_session_id: mine.sessionId,
           support_request_id: mine.requestId,
         }),
@@ -1624,6 +1648,8 @@ describe(
         actor_provider_subject: f.platformSubject,
         support_session_id: mine.sessionId,
         support_request_id: mine.requestId,
+        support_authority_binding_id: f.platformBindingId,
+        support_authority_binding_version: f.platformBindingVersion,
       };
 
       // A REAL instant, taken from a REAL support session — the other one. The

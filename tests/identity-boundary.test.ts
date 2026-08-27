@@ -23,6 +23,7 @@ import {
   testOrganizationId,
   TEST_REAUTH_CALLBACK_URI,
   type IdentityTestEnv,
+  approveSupportRequestDirectly,
   fixtureAuthorizationStateWrite,
 } from '@dealer/test-kit';
 import {
@@ -1994,18 +1995,10 @@ describe(
           resourceType: 'support_access_request',
           resourceId: revRequestId,
         });
-        await fixtureAuthorizationStateWrite(
-          'seed-authorization-state',
-          `UPDATE support_access_requests
-              SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = $2,
-                  approval_grant_id = (
-                    SELECT g.grant_id FROM reauthentication_grants g
-                     WHERE g.user_link_id = $2
-                       AND g.action = 'identity.support.approve'
-                       AND g.resource_id = $1)
-            WHERE request_id = $1`,
-          [revRequestId, decider],
-        );
+        await approveSupportRequestDirectly({
+          requestId: revRequestId,
+          deciderUserLinkId: decider,
+        });
       }
       const session = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
@@ -2287,21 +2280,10 @@ describe(
         requestedDurationMinutes: 30,
       });
       await mintApprovalGrant(tenantAdmin, sessionless.requestId);
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_requests
-            SET status = 'approved',
-                decided_by_user_link_id = $2,
-                decided_at = NOW(),
-                approval_grant_id = (
-                  SELECT g.grant_id FROM reauthentication_grants g
-                   WHERE g.user_link_id = $2
-                     AND g.action = 'identity.support.approve'
-                     AND g.resource_id = $1
-                )
-          WHERE request_id = $1`,
-        [sessionless.requestId, tenantAdmin],
-      );
+      await approveSupportRequestDirectly({
+        requestId: sessionless.requestId,
+        deciderUserLinkId: tenantAdmin,
+      });
       assert.equal(
         await startSupportSession({
           requestId: sessionless.requestId,
@@ -2759,21 +2741,10 @@ describe(
       // `decideSupportAccess` never leaves behind, so it is built directly —
       // naming a real grant, because the schema demands one.
       await mintApprovalGrant(approver, filed.requestId);
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_requests
-            SET status = 'approved',
-                decided_by_user_link_id = $2,
-                decided_at = NOW(),
-                approval_grant_id = (
-                  SELECT g.grant_id FROM reauthentication_grants g
-                   WHERE g.user_link_id = $2
-                     AND g.action = 'identity.support.approve'
-                     AND g.resource_id = $1
-                )
-          WHERE request_id = $1`,
-        [filed.requestId, approver],
-      );
+      await approveSupportRequestDirectly({
+        requestId: filed.requestId,
+        deciderUserLinkId: approver,
+      });
       assert.equal(await requestStatus(filed.requestId), 'approved');
 
       await offboard(requester);

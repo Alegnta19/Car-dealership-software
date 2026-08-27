@@ -57,6 +57,7 @@ describe(
     });
 
     const CHECK_VIOLATION = '23514';
+    const FK_VIOLATION = '23503';
     const UNIQUE_VIOLATION = '23505';
     const RAISED = 'P0001';
 
@@ -617,22 +618,40 @@ describe(
           resourceType: 'support_access_request',
           resourceId: requestId,
         });
-        await fixtureAuthorizationStateWrite(
-          'seed-authorization-state',
-          // The decision instant tracks the (possibly backdated) grant instant:
-          // §3.2's schema rule is `granted_at >= decided_at`, and this fixture
-          // stages windows, never premature sessions.
-          `UPDATE support_access_requests
-              SET status = 'approved', decided_at = ${options.grantedAt ?? 'NOW()'},
-                  decided_by_user_link_id = $2,
-                  approval_grant_id = (
-                    SELECT g.grant_id FROM reauthentication_grants g
-                     WHERE g.user_link_id = $2
-                       AND g.action = 'identity.support.approve'
-                       AND g.resource_id = $1)
-            WHERE request_id = $1`,
-          [requestId, decider],
-        );
+        // The decision instant tracks the (possibly backdated) grant instant:
+        // §3.2's schema rule is `granted_at >= decided_at`, and this fixture
+        // stages windows, never premature sessions. FBL-020-R7-C2 §5: the
+        // grant is CONSUMED at that same instant, under the same transaction
+        // clock, because an approval exists only where its grant was
+        // atomically spent — a backdated approval therefore carries an
+        // equally backdated consumption, exactly as a real one would have.
+        await withTransaction(async (executor) => {
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE reauthentication_grants g
+                SET consumed_at = ${options.grantedAt ?? 'NOW()'}
+              WHERE g.user_link_id = $2
+                AND g.action = 'identity.support.approve'
+                AND g.resource_id = $1
+                AND g.consumed_at IS NULL`,
+            [requestId, decider],
+            { executor },
+          );
+          await fixtureAuthorizationStateWrite(
+            'seed-authorization-state',
+            `UPDATE support_access_requests
+                SET status = 'approved', decided_at = ${options.grantedAt ?? 'NOW()'},
+                    decided_by_user_link_id = $2,
+                    approval_grant_id = (
+                      SELECT g.grant_id FROM reauthentication_grants g
+                       WHERE g.user_link_id = $2
+                         AND g.action = 'identity.support.approve'
+                         AND g.resource_id = $1)
+              WHERE request_id = $1`,
+            [requestId, decider],
+            { executor },
+          );
+        });
       }
       const sessionId = String(
         (
@@ -657,22 +676,57 @@ describe(
        * decision citing it must still be refused.
        */
       if (options.supersededAfterGrant === true) {
-        // `support_access_requests_check2` ties a non-null decided_at to a DECIDED
-        // terminal state, and R7's immutability trigger (correctly) refuses to move
-        // the decision instant — so the one reachable "approval no longer stands"
-        // staging is the decided terminal state that is not an approval.
-        await fixtureAuthorizationStateWrite(
-          'simulate-authorization-drift',
-          `UPDATE support_access_requests
-              SET status = 'denied', superseded_reason = 'r7-fixture-supersession'
-            WHERE request_id = $1`,
-          [requestId],
-        );
+        // FBL-020-R7-C2 §3 made completed states ABSORBING with no runtime
+        // supersession workflow, so a superseded approval is a RETAINED
+        // HISTORICAL state (057 §5 wrote such rows once) that no runtime
+        // transition can produce any more — which is the correction. This
+        // fixture therefore stages the retained shape the way a fixture stages
+        // any state production refuses to write: the guards are lifted for the
+        // one staging statement and restored with it, atomically, exactly as
+        // the upgrade-precheck probes stage their legacy rows.
+        await withTransaction(async (executor) => {
+          await executor.query(
+            `ALTER TABLE support_access_requests
+               DISABLE TRIGGER trg_sar_authority_immutable`,
+          );
+          await executor.query(
+            `ALTER TABLE support_access_requests
+               DISABLE TRIGGER trg_sar_zz_approval_is_complete`,
+          );
+          await fixtureAuthorizationStateWrite(
+            'simulate-authorization-drift',
+            `UPDATE support_access_requests
+                SET superseded_decided_by_user_link_id = decided_by_user_link_id,
+                    superseded_decided_at = decided_at,
+                    superseded_reason = 'r7-fixture-supersession',
+                    status = 'expired',
+                    decided_by_user_link_id = NULL,
+                    decided_at = NULL,
+                    approval_grant_id = NULL
+              WHERE request_id = $1`,
+            [requestId],
+            { executor },
+          );
+          await executor.query(
+            `ALTER TABLE support_access_requests
+               ENABLE TRIGGER trg_sar_authority_immutable`,
+          );
+          await executor.query(
+            `ALTER TABLE support_access_requests
+               ENABLE TRIGGER trg_sar_zz_approval_is_complete`,
+          );
+        });
       }
       return { sessionId, requestId };
     }
 
-    /** The evidence shape a platform person's support allow has to take. */
+    /**
+     * The evidence shape a platform person's support allow has to take. Since
+     * FBL-020-R7-C2 §3 it names the exact supporting authority (the fixture
+     * platform binding at its version) — the 058-era refusal legs in this
+     * battery die at 058's own trigger, which fires earlier, so the columns
+     * change nothing about what those tests pin.
+     */
     function supportAllowBy(
       actor: { linkId: string; sessionId: string; connectionId: string; subject: string },
       delegated: { sessionId: string; requestId: string },
@@ -688,6 +742,8 @@ describe(
         actor_provider_subject: actor.subject,
         support_session_id: delegated.sessionId,
         support_request_id: delegated.requestId,
+        support_authority_binding_id: f.platformRoleBindingId,
+        support_authority_binding_version: f.platformRoleBindingVersion,
         scope_level: 'tenant',
         scope_id: null,
         ...overrides,
@@ -891,32 +947,39 @@ describe(
 
     test('an ALLOW cannot claim a role binding that lives in another tenant', async () => {
       /*
-       * The protection here — a decision recorded in one tenant cannot cite a role
-       * binding that belongs to another — is unchanged, but under FBL-020-R7-C1 §6
-       * it is now enforced ONE GATE EARLIER, and that is worth stating precisely.
+       * The protection — a decision recorded in one tenant cannot cite a role
+       * binding that belongs to another — is enforced by the PRODUCTION control
+       * stack in two lanes, and this test drives both (FBL-020-R7-C2 §6).
        *
-       * The R6 staging of this scenario was already gone (R7 §3.1): dressing a
-       * dealership person of the other tenant as a platform-support actor is a
-       * caller-supplied label, refused at three earlier gates. What KEPT 058's
-       * binding-tenant clause reachable at all was the SYSTEM lane: a system
-       * decision is exempt from the actor-tenancy key by construction (its
-       * `allowed_actor_tenant_id` is NULL), so a system row recorded in THIS
-       * tenant could still name the other-tenant actor via `actor_user_link_id`
-       * and cite that actor's own real binding — both composite keys resolved and
-       * the only objection left was the binding's tenant.
+       * THE HUMAN LANE: the claimed binding must be the decision actor's OWN
+       * (`pdmb_binding_belongs_to_the_actor`), the actor is pinned into the
+       * decision's tenant by the actor-tenancy key, and a binding is pinned into
+       * its holder's tenant by role_bindings' own composite key — three
+       * referential facts whose conjunction is "no cross-tenant authority". The
+       * row below is everything BUT that: the decision's own real actor, and a
+       * REAL, active, in-window, exact-version binding — belonging to another
+       * tenant's person. The belongs-to key is the operative refusal, and the
+       * one-for-one replacement mutation `binding_belongs_to_actor_unenforced`
+       * drops exactly it — re-opening the lane in which 058's (immutable,
+       * unreachable) binding-tenant clause was once the guard — so this test is
+       * what kills that mutation.
        *
-       * FBL-020-R7-C1 §6 closes the system evidence bypass by forbidding a system
-       * row from carrying human-actor, credential or support evidence at all
-       * (`pd_system_row_carries_no_human_evidence`). That CHECK is on
-       * policy_decisions and fires BEFORE the normalizer expands the matched
-       * bindings, so the very construction this test needs — a system row carrying
-       * `actor_user_link_id` — is now refused at insert, before 058's clause is
-       * reached. The cross-tenant binding is therefore STILL unrepresentable; the
-       * refusal is simply stronger and earlier. 058's binding-tenant clause remains
-       * in place as defense in depth (and cannot be edited — migrations ≤059 are
-       * byte-immutable), but for the only lane that ever reached it the §6 CHECK is
-       * now the operative gate.
+       * THE SYSTEM LANE: a system row carries no human-actor evidence at all
+       * (FBL-020-R7-C1 §6, `pd_system_row_carries_no_human_evidence`), so the
+       * old staging — a system row naming the other tenant's actor and citing
+       * that actor's own binding — is refused before the normalizer expands
+       * anything. 058's clause remains in its immutable file as defense in
+       * depth; the lanes above are the production gates.
        */
+      await assertRefusedBy(
+        insertAllow({
+          matched_role_binding_ids: [f.otherRoleBindingId],
+          matched_authorization_versions: [f.otherRoleBindingVersion],
+        }),
+        { state: FK_VIOLATION, constraint: 'pdmb_binding_belongs_to_the_actor' },
+        'a real cross-tenant binding cited as the authority for this tenant’s decision',
+      );
+      assert.equal(await countEvidence(), 0);
       await assertRefusedBy(
         insertAllow({
           actor_type: 'system',
@@ -1262,6 +1325,46 @@ describe(
         normalized.rows.length,
         2,
         'the parent insert as the runtime role still normalizes, through the database-owned path',
+      );
+    });
+
+    test('the real dealership_app login normalizes an authorized parent through the database-owned path', async () => {
+      /*
+       * FBL-020-R7-C2 §1's last bullet, through the GENUINE runtime login (not
+       * a superuser SET ROLEd down): an authorized parent decision carrying a
+       * real matched binding, INSERTed as dealership_app, produces the
+       * database-owned normalized child row — the SECURITY DEFINER path writes
+       * what the login's own privileges never could. (The 42501 refusals of the
+       * direct child write, forged GUC included, are proven on this same login
+       * in tests/runtime-posture.test.ts.)
+       */
+      const { Client } = await import('pg');
+      const OWNER_URL = process.env.TEST_DATABASE_URL as string;
+      const owner = new Client({ connectionString: OWNER_URL });
+      await owner.connect();
+      try {
+        await owner.query(`ALTER ROLE dealership_app PASSWORD 'runtime_posture_test_pw'`);
+      } finally {
+        await owner.end();
+      }
+      const u = new URL(OWNER_URL);
+      u.username = 'dealership_app';
+      u.password = 'runtime_posture_test_pw';
+      const app = new Client({ connectionString: u.toString() });
+      await app.connect();
+      try {
+        await insertAllow({ request_id: 'req_' + randomUUID() }, app);
+      } finally {
+        await app.end();
+      }
+      const normalized = await query(
+        `SELECT role_binding_id FROM policy_decision_matched_bindings`,
+      );
+      assert.equal(normalized.rows.length, 1, 'the app login’s parent insert normalized');
+      assert.equal(
+        String((normalized.rows[0] as Record<string, unknown>).role_binding_id),
+        f.roleBindingId,
+        'and the child row is the parent array’s own claim',
       );
     });
 

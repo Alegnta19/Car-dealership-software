@@ -14,7 +14,7 @@ import {
   seedRooftop,
   seedTenantViaService,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, withTransaction } from '@dealer/database';
 import {
   POLICY_VERSION,
   RoleScopeMismatchError,
@@ -825,9 +825,9 @@ describe(
       await query(
         `INSERT INTO reauthentication_grants
          (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
-          grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue, consumed_at)
+          grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue)
        VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $5,
-               $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())`,
+               $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE)`,
         [
           String((txn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
           world.tenantId,
@@ -837,16 +837,27 @@ describe(
         ],
       );
 
-      await fixtureAuthorizationStateWrite(
-        'seed-authorization-state',
-        `UPDATE support_access_requests
-            SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
-                approval_grant_id = (
-                  SELECT g.grant_id FROM reauthentication_grants g
-                   WHERE g.resource_id = $1 AND g.action = 'identity.support.approve')
-          WHERE request_id = $1`,
-        [requestId, approver],
-      );
+      // FBL-020-R7-C2 §5: the grant is consumed AT the approval instant, under
+      // one transaction clock — the atomic path's own shape.
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `UPDATE reauthentication_grants SET consumed_at = NOW()
+            WHERE resource_id = $1 AND action = 'identity.support.approve'
+              AND consumed_at IS NULL`,
+          [requestId],
+        );
+        await fixtureAuthorizationStateWrite(
+          'seed-authorization-state',
+          `UPDATE support_access_requests
+              SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
+                  approval_grant_id = (
+                    SELECT g.grant_id FROM reauthentication_grants g
+                     WHERE g.resource_id = $1 AND g.action = 'identity.support.approve')
+            WHERE request_id = $1`,
+          [requestId, approver],
+          { executor },
+        );
+      });
       const session = await fixtureAuthorizationStateWrite(
         'seed-authorization-state',
         `INSERT INTO support_access_sessions (request_id, tenant_id, actor_user_link_id, expires_at)

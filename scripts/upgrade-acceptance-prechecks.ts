@@ -143,13 +143,113 @@ ALTER TABLE support_access_sessions
     expect: [
       'migration 060 refused:',
       'retained support session(s) name an actor who is not the approved requester',
-      'REVOKE and supersede each listed',
+      'hard stop',
+      'explicitly approved historical-remediation decision',
+      'leaves the rows and the migration ledger exactly as they are',
     ],
     survivorSql: `
 SELECT COUNT(*)::int AS n FROM support_access_sessions s
   JOIN support_access_requests r ON r.request_id = s.request_id
  WHERE r.reason = 'acceptance probe: revoked actor mismatch'
    AND s.actor_user_link_id IS DISTINCT FROM r.requester_user_link_id`,
+    survivors: 1,
+  },
+  {
+    id: 'retained_nonplatform_requester',
+    precheck: '§8 — full-scope platform-scope tuple (requester arm)',
+    what: 'a retained request whose requester is a dealership link',
+    inject: `
+-- Lift 059's requester-scope trigger, plant a legacy request filed by a
+-- DEALERSHIP link (representable before 059; that is the hole), restore the
+-- trigger exactly as 059 declared it.
+DROP TRIGGER trg_sar_requester_is_platform ON support_access_requests;
+DO $$
+DECLARE t uuid; dealer uuid;
+BEGIN
+  SELECT ul.tenant_id, ul.user_link_id INTO t, dealer FROM user_links ul
+    WHERE ul.actor_scope = 'dealership' AND ul.status = 'activated' AND ul.tenant_id IS NOT NULL
+    ORDER BY ul.user_link_id LIMIT 1;
+  INSERT INTO support_access_requests
+    (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
+     requested_duration_minutes)
+    VALUES (t, dealer, ARRAY['service.ro.view'], 'tenant', NULL,
+            'acceptance probe: non-platform requester', 30);
+END $$;
+CREATE TRIGGER trg_sar_requester_is_platform
+  BEFORE INSERT OR UPDATE ON support_access_requests
+  FOR EACH ROW EXECUTE FUNCTION support_request_requester_is_platform();
+`,
+    expect: [
+      'migration 060 refused:',
+      'name a requester or actor whose user_link is not actor_scope=platform',
+      'hard stop',
+      'explicitly approved historical-remediation decision',
+      'leaves the rows and the migration ledger exactly as they are',
+    ],
+    survivorSql: `
+SELECT COUNT(*)::int AS n FROM support_access_requests r
+  JOIN user_links ul ON ul.user_link_id = r.requester_user_link_id
+ WHERE r.reason = 'acceptance probe: non-platform requester'
+   AND ul.actor_scope <> 'platform'`,
+    survivors: 1,
+  },
+  {
+    id: 'retained_nonplatform_session_actor',
+    precheck: '§8 — full-scope platform-scope tuple (session-actor arm)',
+    what: 'a retained session whose actor is a dealership link',
+    inject: `
+-- The session actor EQUALS its request's requester (so the §8 actor-tuple
+-- check, which runs first, stays satisfied and the refusal is attributable to
+-- the platform-scope judgment) — and both are a DEALERSHIP link, the legacy
+-- shape 059's scope triggers made unrepresentable going forward. Both scope
+-- triggers are lifted for the plant and restored exactly as 059 declared
+-- them; the tuple key needs no lifting because actor == requester. The
+-- approval names no decider (055 admits that) so the in-tenant grant can be
+-- held by the requester without tripping the separation CHECK.
+DROP TRIGGER trg_sar_requester_is_platform ON support_access_requests;
+DROP TRIGGER trg_sas_actor_is_platform ON support_access_sessions;
+DO $$
+DECLARE t uuid; dealer uuid; reqid uuid; g uuid;
+BEGIN
+  SELECT ul.tenant_id, ul.user_link_id INTO t, dealer FROM user_links ul
+    WHERE ul.actor_scope = 'dealership' AND ul.status = 'activated' AND ul.tenant_id IS NOT NULL
+    ORDER BY ul.user_link_id LIMIT 1;
+  INSERT INTO support_access_requests
+    (tenant_id, requester_user_link_id, requested_actions, scope_level, scope_id, reason,
+     requested_duration_minutes)
+    VALUES (t, dealer, ARRAY['service.ro.view'], 'tenant', NULL,
+            'acceptance probe: non-platform session actor', 30)
+    RETURNING request_id INTO reqid;
+  g := plant_support_grant(t, dealer, reqid);
+  UPDATE support_access_requests
+     SET status = 'approved', decided_at = NOW(), decided_by_user_link_id = NULL,
+         approval_grant_id = g
+   WHERE request_id = reqid;
+  INSERT INTO support_access_sessions
+    (request_id, tenant_id, actor_user_link_id, granted_at, expires_at,
+     revoked_at)
+    VALUES (reqid, t, dealer, NOW(), NOW() + INTERVAL '30 minutes', NOW());
+END $$;
+CREATE TRIGGER trg_sar_requester_is_platform
+  BEFORE INSERT OR UPDATE ON support_access_requests
+  FOR EACH ROW EXECUTE FUNCTION support_request_requester_is_platform();
+CREATE TRIGGER trg_sas_actor_is_platform
+  BEFORE INSERT OR UPDATE ON support_access_sessions
+  FOR EACH ROW EXECUTE FUNCTION support_session_actor_is_platform();
+`,
+    expect: [
+      'migration 060 refused:',
+      'name a requester or actor whose user_link is not actor_scope=platform',
+      'session ',
+      'hard stop',
+      'explicitly approved historical-remediation decision',
+    ],
+    survivorSql: `
+SELECT COUNT(*)::int AS n FROM support_access_sessions s
+  JOIN support_access_requests r ON r.request_id = s.request_id
+  JOIN user_links ul ON ul.user_link_id = s.actor_user_link_id
+ WHERE r.reason = 'acceptance probe: non-platform session actor'
+   AND ul.actor_scope <> 'platform'`,
     survivors: 1,
   },
   {
@@ -205,7 +305,9 @@ END $$;
     expect: [
       'migration 060 refused:',
       'standing approved support request(s) delegate a scope that',
-      'SUPERSEDE each listed approval',
+      'hard stop',
+      'explicitly approved remediation decision',
+      'leaves the rows and the migration ledger exactly as they are',
     ],
     survivorSql: `
 SELECT COUNT(*)::int AS n FROM support_access_requests
@@ -381,7 +483,7 @@ async function main(): Promise<void> {
 
   const summary = {
     tool: 'scripts/upgrade-acceptance-prechecks.ts',
-    order: 'FBL-020-R7-C1 §8',
+    order: 'FBL-020-R7-C1 §8 + FBL-020-R7-C2 §4',
     taken_at: new Date().toISOString(),
     probes_declared: PROBES.length,
     probes_run: results.length,

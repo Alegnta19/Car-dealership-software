@@ -1171,7 +1171,7 @@ sed 's/\r$//' migrations/<file>.sql | git hash-object --stdin    # canonical blo
 | `057_identity_boundary_completion.sql`         | `3105f733c0bc3c02f8f69cb320121960da822a0f` | `d2840ba0603c638963d4eb76bb820fccdef852d2f262a75601dbc9731350ea67` |
 | `058_policy_evidence_reconstructable.sql`      | `3ecfb55f2eec01dfa99395cba1fea728510ee595` | `2c606d5b1ad9cdcc090f026c7d76b6f7aec3400420fbebe01cf656ffd74a2d71` |
 | `059_policy_evidence_integrity_closure.sql`    | `53d63892971367056aae68be55ad88e392ea990b` | `ff66a2a327bb9ce9eb80c8ac68a4b1cc23549e327ccecfe42160f93e564d86c2` |
-| `060_identity_boundary_acceptance_closure.sql` | `aabbf9c5597c7f288895cdc828336ee8f329a810` | `e65925298632516f6406b7264dd440896386c51eb65d943bb139ea8c1d3c4eeb` |
+| `060_identity_boundary_acceptance_closure.sql` | `5c884896d241489225156c951a5f824cc490d2a4` | `f0c661c53cdd01aab34a32e33267716d25d92babbb6ebcf0731e43aaf1f76b06` |
 
 **`058_policy_evidence_reconstructable.sql` is NEW IN FBL-020-R6 and is now COMMITTED**, so
 its two digests are of a blob in `HEAD` as well as of the body on disk, and the two agree. It is the file §4.0's frozen-`057` position requires:

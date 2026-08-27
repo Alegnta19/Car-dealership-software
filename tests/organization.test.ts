@@ -14,7 +14,7 @@ import {
   seedTenantViaService,
   setUnitStatusViaService,
 } from '@dealer/test-kit';
-import { closePool, query } from '@dealer/database';
+import { closePool, query, withTransaction } from '@dealer/database';
 import {
   ORGANIZATION_LEVELS,
   childLevel,
@@ -655,9 +655,9 @@ describe(
       const approvalGrant = await query(
         `INSERT INTO reauthentication_grants
            (reauth_txn_id, tenant_id, user_link_id, action, resource_type, resource_id,
-            grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue, consumed_at)
+            grant_hash, expires_at, assurance_level, mfa_policy_certified_at_issue)
          VALUES ($1, $2, $3, 'identity.support.approve', 'support_access_request', $5,
-                 $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE, NOW())
+                 $4, NOW() + INTERVAL '5 minutes', 'fresh_and_mfa_policy', TRUE)
          RETURNING grant_id`,
         [
           String((approvalTxn.rows[0] as { reauth_txn_id: unknown }).reauth_txn_id),
@@ -667,14 +667,23 @@ describe(
           requestId,
         ],
       );
-      await fixtureAuthorizationStateWrite(
-        'simulate-authorization-drift',
-        `UPDATE support_access_requests
-          SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
-              approval_grant_id = $3
-        WHERE request_id = $1`,
-        [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
-      );
+      // FBL-020-R7-C2 §5: the grant is consumed AT the approval instant, under
+      // one transaction clock — the atomic path's own shape.
+      await withTransaction(async (executor) => {
+        await executor.query(
+          `UPDATE reauthentication_grants SET consumed_at = NOW() WHERE grant_id = $1`,
+          [String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
+        );
+        await fixtureAuthorizationStateWrite(
+          'simulate-authorization-drift',
+          `UPDATE support_access_requests
+            SET status = 'approved', decided_by_user_link_id = $2, decided_at = NOW(),
+                approval_grant_id = $3
+          WHERE request_id = $1`,
+          [requestId, approver, String((approvalGrant.rows[0] as { grant_id: unknown }).grant_id)],
+          { executor },
+        );
+      });
 
       // a session longer than 60 minutes cannot exist — and since FBL-020-R7 §3.2,
       // a session longer than the REQUESTED duration cannot either. The trigger

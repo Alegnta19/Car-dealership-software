@@ -89,7 +89,7 @@
         },
         {
           "file": "tests/runtime-posture.test.ts",
-          "name": "the app login cannot RESET ROLE into privilege, assume the owner, DDL, or write the ledger"
+          "name": "the app login cannot RESET ROLE into privilege, assume any actual owner, DDL, or write the ledger in any verb"
         }
       ],
       "runtime_mutations": [],

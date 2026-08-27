@@ -129,6 +129,14 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'copy is dropped, and the drill database itself is never touched',
   },
   {
+    file: 'scripts/upgrade-precheck-refusals-057.ts',
+    because:
+      'FBL-020-R7-C2 §4’s fifth probe injector: it plants ONE retained cross-tenant ' +
+      'support session — a shape the 055/056 schema really admits — into a disposable ' +
+      'copy of the pre-057 drill database, so migration 057’s tenant-mismatch precheck ' +
+      'is observed refusing; the copy is dropped, the drill database is never touched',
+  },
+  {
     file: 'scripts/verify-upgrade-state.ts',
     because:
       'the post-059 phase’s live refusal probe: one support-request row, written to BE ' +

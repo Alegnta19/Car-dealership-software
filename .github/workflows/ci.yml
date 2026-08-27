@@ -527,6 +527,20 @@ jobs:
           ! grep -qE '^0(5[89]|[6-9])' artifacts/pre-058-chain.txt
           echo "PRE058=$PRE058" >> "$GITHUB_ENV"
 
+      # FBL-020-R7-C2 §4 — THE 057 TENANT-MISMATCH PRECHECK, PROVEN TO REFUSE.
+      # The probe copies the populated pre-057 database, plants ONE retained
+      # session naming a different tenant than its request (a shape the 055/056
+      # schema really admits), runs the real runner under the SAME staged chain
+      # the next step uses, and requires 057's own refusal — transactional, the
+      # ledger clean, the planted rows untouched.
+      - name: 057 precheck refusal (isolated copy of the pre-057 database)
+        run: |
+          set -o pipefail
+          MIGRATIONS_DIR="$PRE058" MIGRATION_FIXTURE_CHAIN=pre-058 \
+            npx tsx scripts/upgrade-precheck-refusals-057.ts \
+            --out artifacts/precheck-refusals-057.json --log artifacts/precheck-refusals-057.txt
+          grep -q '"probes_failed": 0' artifacts/precheck-refusals-057.json
+
       - name: Apply 057 ONLY, on top of the populated legacy data
         run: |
           set -o pipefail
@@ -658,18 +672,28 @@ jobs:
             npm run migrate 2>&1 | tee -a artifacts/upgrade-log.txt
           grep -q '059_policy_evidence_integrity_closure.sql' artifacts/upgrade-log.txt
 
-      # FBL-020-R7 §4.4 — the SHIPPED engine again, this time AS THE RUNTIME ROLE,
-      # on a REAL Fixed Ops resource: an ALLOW at evidence_version 4 (the DEFAULT
-      # the schema now owns), the database-validated rooftop snapshot beside it, its
-      # session's own authentication instant, and §3.7's database-owned
-      # normalization performed for a role that cannot write the child table itself.
+      # FBL-020-R7 §4.4 — the SHIPPED engine again, this time WITH THE RUNTIME
+      # ROLE'S PRIVILEGES, on a REAL Fixed Ops resource: an ALLOW at
+      # evidence_version 4 (the DEFAULT the schema now owns), the
+      # database-validated rooftop snapshot beside it, its session's own
+      # authentication instant, and §3.7's database-owned normalization performed
+      # for privileges that cannot write the child table. FBL-020-R7-C2 §1
+      # removed startup role switching, so the stage provisions an EPHEMERAL
+      # NON-OWNER LOGIN `IN ROLE dealership_runtime` (dealership_app does not
+      # exist until 060) and runs with DATABASE_URL pointing at it — a genuine
+      # login, exactly as production authenticates, never a switched owner.
       - name: The shipped engine writes version-4 evidence as the runtime role
         run: |
           set -o pipefail
-          DATABASE_RUNTIME_ROLE=dealership_runtime \
+          RT_PW="$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+          node -e "const{Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query(\"DROP ROLE IF EXISTS drill_runtime_login\");await c.query(\"CREATE ROLE drill_runtime_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS IN ROLE dealership_runtime PASSWORD '\"+process.env.RT_PW+\"'\");await c.end();})().catch(e=>{console.error(e);process.exit(1);})"
+          RT_URL="$(node -e "const u=new URL(process.env.DATABASE_URL);u.username='drill_runtime_login';u.password=process.env.RT_PW;process.stdout.write(u.toString())")"
+          DATABASE_URL="$RT_URL" \
             npx tsx scripts/upgrade-post-057-activity.ts --stage=after-059 \
             --out artifacts/after-059-activity.json --log artifacts/after-059-activity.txt
           grep -q '"result": "OK"' artifacts/after-059-activity.json
+        env:
+          RT_PW: placeholder-overwritten-in-run
 
       # The 059 half: every 058 outcome still holds, the floor moved to 4, the
       # integrity-closure objects and the §3.7 privilege model are in force, the
@@ -776,6 +800,16 @@ jobs:
             exit 1
           fi
           grep -qi 'Refusing to start' artifacts/owner-boot.log
+          # FBL-020-R7-C2 §1: the owner URL plus DATABASE_RUNTIME_ROLE fails
+          # startup too — startup role switching is REMOVED, and the variable
+          # refuses loudly instead of quietly dressing the owner in the runtime
+          # role. The refusal happens at configuration load, before any pool.
+          if NODE_ENV=production DATABASE_RUNTIME_ROLE=dealership_runtime \
+              node apps/api/dist/server.js > artifacts/owner-role-boot.log 2>&1; then
+            echo 'ERROR: the server booted with DATABASE_RUNTIME_ROLE set' >&2
+            exit 1
+          fi
+          grep -q 'DATABASE_RUNTIME_ROLE is no longer supported' artifacts/owner-role-boot.log
           # FBL-020-R7-C1 §1: the pid file lives OUTSIDE the repository.
           NODE_ENV=production DATABASE_URL="$APP_URL" node apps/api/dist/server.js \
             & echo $! > "$RUNNER_TEMP/server.pid"
@@ -793,6 +827,7 @@ jobs:
           for f in fixture-checksums.json upgrade-log.txt constraint-state.txt \
                    pre-057-chain.txt upgrade-backfill.txt upgrade-backfill.json \
                    identity-pre-057.txt identity-pre-057.json identity-post-057.json \
+                   precheck-refusals-057.json precheck-refusals-057.txt owner-role-boot.log \
                    pre-058-chain.txt post-057-activity.json post-057-activity.txt \
                    after-058-activity.json after-058-activity.txt \
                    identity-post-058.json \

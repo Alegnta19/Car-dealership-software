@@ -768,15 +768,36 @@ describe('the populated upgrade drill (FBL-020-R4 §6)', () => {
       /grep -q '"probes_failed": 0' artifacts\/precheck-refusals\.json/,
       'the precheck-refusal step must gate on zero failed probes',
     );
+    // FBL-020-R7-C2 §4 — the fifth representative fixture: 057's tenant-mismatch
+    // precheck is OBSERVED refusing on a copy of the pre-057 database.
+    assert.match(
+      WORKFLOW,
+      /grep -q '"probes_failed": 0' artifacts\/precheck-refusals-057\.json/,
+      'the 057 precheck-refusal step must gate on zero failed probes',
+    );
     assert.match(
       WORKFLOW,
       /grep -q '"result": "OK"' artifacts\/identity-post-059\.json/,
       'the post-059 phase must gate on its own JSON verdict',
     );
+    // FBL-020-R7-C2 §1 — startup role switching is REMOVED: the after-059 stage
+    // provisions a genuine ephemeral login IN ROLE dealership_runtime instead of
+    // dressing the owner in a -c role= switch, and the production-start step
+    // proves an owner URL plus DATABASE_RUNTIME_ROLE fails startup.
+    assert.doesNotMatch(
+      WORKFLOW,
+      /DATABASE_RUNTIME_ROLE=dealership_runtime \\\n\s+npx tsx/,
+      'no drill stage may reintroduce startup role switching for the shipped engine',
+    );
     assert.match(
       WORKFLOW,
-      /DATABASE_RUNTIME_ROLE=dealership_runtime/,
-      'the after-059 stage must run as the runtime role, or §3.7 is proven for nobody',
+      /CREATE ROLE drill_runtime_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS IN ROLE dealership_runtime/,
+      'the after-059 stage must run as a genuine non-owner login in the runtime role',
+    );
+    assert.match(
+      WORKFLOW,
+      /grep -q 'DATABASE_RUNTIME_ROLE is no longer supported' artifacts\/owner-role-boot\.log/,
+      'the production-start step must prove owner URL + DATABASE_RUNTIME_ROLE fails startup',
     );
     // A step that merely PRINTS a failure is not a gate.
     assert.ok(WORKFLOW.includes('"controls_failed": 0'), 'a failed control must fail the job');
