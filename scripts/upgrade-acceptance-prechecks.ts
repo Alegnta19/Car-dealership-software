@@ -197,7 +197,9 @@ SELECT COUNT(*)::int AS n FROM support_access_requests r
     id: 'retained_nonplatform_session_actor',
     precheck: '§8 — full-scope platform-scope tuple (session-actor arm)',
     what: 'a retained session whose actor is a dealership link',
-    inject: `
+    inject:
+      ENSURE_TWO_PLATFORM_LINKS +
+      `
 -- The session actor EQUALS its request's requester (so the §8 actor-tuple
 -- check, which runs first, stays satisfied and the refusal is attributable to
 -- the platform-scope judgment) — and both are a DEALERSHIP link, the legacy
