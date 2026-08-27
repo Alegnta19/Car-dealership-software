@@ -357,7 +357,10 @@ describe('identity configuration (FBL-020)', () => {
       'utf8',
     );
     const literal = migration.match(/rb\.role = ANY \(ARRAY\[([^\]]+)\]\)/);
-    assert.ok(literal, 'the trigger’s support-role ANY(ARRAY[...]) literal exists exactly where §2 declares it');
+    assert.ok(
+      literal,
+      'the trigger’s support-role ANY(ARRAY[...]) literal exists exactly where §2 declares it',
+    );
     const sqlRoles = (literal as RegExpMatchArray)[1]!
       .split(',')
       .map((s) => s.trim().replace(/^'|'$/g, ''))

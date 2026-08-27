@@ -68,10 +68,7 @@ BEGIN
 END $$;
 `;
 
-const EXPECT = [
-  'FBL-020-R4 refused:',
-  'support session(s) name a different tenant than',
-] as const;
+const EXPECT = ['FBL-020-R4 refused:', 'support session(s) name a different tenant than'] as const;
 
 const SURVIVOR_SQL = `
 SELECT COUNT(*)::int AS n FROM support_access_sessions s
@@ -186,7 +183,9 @@ async function main(): Promise<void> {
         const output = `${run.stdout ?? ''}${run.stderr ?? ''}`;
         const status = run.status ?? 1;
         if (status === 0) {
-          problems.push('migration 057 APPLIED over the retained cross-tenant session — no refusal');
+          problems.push(
+            'migration 057 APPLIED over the retained cross-tenant session — no refusal',
+          );
         }
         for (const fragment of EXPECT) {
           if (!output.includes(fragment)) {

@@ -130,9 +130,7 @@ describe('runtime database posture (FBL-020-R7-C1 §2, C2 §1)', () => {
           sessionUser: String(r.session_user),
           currentUser: String(r.current_user),
           isSuperuser: r.is_superuser === true,
-          assumableOwners: Array.isArray(r.assumable_owners)
-            ? r.assumable_owners.map(String)
-            : [],
+          assumableOwners: Array.isArray(r.assumable_owners) ? r.assumable_owners.map(String) : [],
           canWriteLedger: r.can_write_ledger === true,
           canInsertChildEvidence: r.can_insert_child === true,
           canInsertParentDecision: r.can_insert_parent === true,
@@ -304,9 +302,10 @@ describe('runtime database posture (FBL-020-R7-C1 §2, C2 §1)', () => {
         const client = new Client({ connectionString: appUrl });
         await client.connect();
         try {
-          await client.query(`SELECT set_config('policy_evidence.normalizing_decision', $1, false)`, [
-            randomUUID(),
-          ]);
+          await client.query(
+            `SELECT set_config('policy_evidence.normalizing_decision', $1, false)`,
+            [randomUUID()],
+          );
           let refused: { code?: string } | undefined;
           try {
             await fixtureAuthorizationStateWrite(
