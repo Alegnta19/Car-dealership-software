@@ -520,11 +520,11 @@
     "ci_run_for_this_working_tree": null,
     "how_it_was_transferred": "FBL-020-R7-A1 §4 restored normal repository use: the R7 work is committed on the fbl-020-r7 branch in ordinary, disclosed, forward-moving commits and pushed with the already-authorized credential, which is scrubbed after each use.",
     "what_measured_it": "NOTHING YET for the C2 head, and this record does not pretend otherwise: the run recorded against evidence_commit_sha measured the R6 final head (ee5eb6b), the C1 closeout e10f500 is listed above with its own green exact-SHA run 32611508118, and the C2 commits above it are listed with run: null until their own exact-SHA runs exist. FBL-020-R7-C2 places the final commit-to-run binding in the return message (final SHA + exact-SHA CI run link + four-row checklist), because a checked-in record cannot hold a run id that did not exist when its commit was created.",
-    "how_the_r7_work_was_verified_besides": "for the C2 wave, executed locally against a real PostgreSQL 16 on 127.0.0.1:55434: the full battery (723 tests / 69 suites, zero failed, cancelled, skipped or todo; the one red during iteration was the dirty-tree documentation gate that committing resolves), the database-control mutation registry (69 controls and predicates, 69 killed, 0 survivors), the runtime mutation registry (see the return message for the run outcome), all four 060 acceptance-precheck probes and the new 057 tenant-mismatch probe proven refused-as-declared on locally staged pre-060/pre-057 copies, and the runtime-posture battery on the genuine dealership_app login. The populated upgrade drill and fresh/upgraded convergence are exercised by the exact-SHA CI run, as every revision has run them."
+    "how_the_r7_work_was_verified_besides": "for the C2 wave, executed locally against a real PostgreSQL 16 on 127.0.0.1:55434: the full battery (725 tests / 69 suites, zero failed, cancelled, skipped or todo; the one red during iteration was the dirty-tree documentation gate that committing resolves), the database-control mutation registry (69 controls and predicates, 69 killed, 0 survivors), the runtime mutation registry (see the return message for the run outcome), all four 060 acceptance-precheck probes and the new 057 tenant-mismatch probe proven refused-as-declared on locally staged pre-060/pre-057 copies, and the runtime-posture battery on the genuine dealership_app login. The populated upgrade drill and fresh/upgraded convergence are exercised by the exact-SHA CI run, as every revision has run them."
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 17,
+    "used": 18,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -555,9 +555,9 @@
       },
       "FBL-020-R7-C2": {
         "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs R7 and its corrections; FBL-020-R7-C2 supersedes the earlier C2 instruction and sets no budget either)",
-        "used": 2,
+        "used": 3,
         "failed_ci": 0,
-        "verdict": "DISCLOSED — two C2 code commits (0c54a99, f4a59e1) are listed above with run: null until their own exact-SHA runs exist; the C2 closeout commit is this_commit and is documentation-only"
+        "verdict": "DISCLOSED — three C2 code commits (0c54a99, f4a59e1, c16f200) are listed above with run: null until their own exact-SHA runs exist; the two C2 closeout commits are documentation-only (the first, 8d21259, is listed above; the second contains this record and no record can name its own SHA)"
       }
     },
     "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here."
@@ -822,6 +822,20 @@
       "sha": "f4a59e16552c42b1bf93fccdc5c05e8a36faa7a6",
       "short": "f4a59e1",
       "subject": "FBL-020-R7-C2: session-actor probe carries its grant-minting preamble; floor tracks the C2 battery",
+      "code_bearing": true,
+      "run": null
+    },
+    {
+      "sha": "8d2125927294bfc53ef41d41aa21d31ef5179f0f",
+      "short": "8d21259",
+      "subject": "FBL-020-R7-C2 §closeout: the record carries the C2 figures, commits and return shape",
+      "code_bearing": false,
+      "run": null
+    },
+    {
+      "sha": "c16f200b0023df2b6ef488d268e70c6762c0f1e9",
+      "short": "c16f200",
+      "subject": "FBL-020-R7-C2: adversarial-review corrections — superuser-membership posture arm, honest §0 listing, the role-list pin",
       "code_bearing": true,
       "run": null
     }
