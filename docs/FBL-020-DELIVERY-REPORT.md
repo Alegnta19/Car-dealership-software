@@ -236,7 +236,7 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 11 CODE-BEARING COMMITS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 12 CODE-BEARING COMMITS
 EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
@@ -1667,7 +1667,7 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 | `suite_tests`                | <!--fig:suite_tests-->763<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
 | `suite_suites`               | <!--fig:suite_suites-->74<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
 | `suite_passed`               | <!--fig:suite_passed-->763<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
-| `observed_ok`                | <!--fig:observed_ok-->810<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
+| `observed_ok`                | <!--fig:observed_ok-->837<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
 | `observed_not_ok`            | <!--fig:observed_not_ok-->0<!--/fig-->                                                                    | `artifacts/test-summary.json` `observed_not_ok_lines`                               |
 | `floor_tests`                | <!--fig:floor_tests-->763<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
 | `floor_suites`               | <!--fig:floor_suites-->74<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
