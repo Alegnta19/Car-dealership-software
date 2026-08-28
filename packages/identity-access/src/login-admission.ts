@@ -61,7 +61,7 @@
  * refresh credential. The only statement that could write one is inside the
  * transaction, after the last refusal point.
  */
-import { withTransaction, type Executor } from '@dealer/database';
+import { setTenantContext, withTransaction, type Executor } from '@dealer/database';
 import {
   IDENTITY_PROVIDER_WORKOS,
   type CodeExchangeResult,
@@ -456,6 +456,10 @@ async function admitWithin(
   if (connection.tenantId !== null) {
     const tenant = await executor.query(LOGIN_TENANT_ADMISSION_SQL, [connection.tenantId]);
     if (tenant.rows.length === 0) return null;
+    // RT1: the hierarchy admission reads the row-secured legal_entities table,
+    // so this transaction carries the tenant context — derived from the
+    // CONNECTION the token verified against, never from the caller.
+    await setTenantContext(executor, connection.tenantId);
     const hierarchy = await executor.query(LOGIN_HIERARCHY_ADMISSION_SQL, [connection.tenantId]);
     if (hierarchy.rows.length === 0) return null;
   }

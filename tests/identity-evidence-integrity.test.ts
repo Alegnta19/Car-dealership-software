@@ -2211,6 +2211,10 @@ describe(
       const app = new Client({ connectionString: u.toString() });
       await app.connect();
       try {
+        // RT1: the v4 scope-chain trigger walks the row-secured organization
+        // tables; the context keeps that check truthful so the refusal below
+        // stays attributable to the §4 writer rule, not to row security.
+        await app.query(`SELECT set_config('app.tenant_id', $1, false)`, [f.tenantId]);
         const systemAllow = `INSERT INTO policy_decisions
            (tenant_id, actor_type, action, decision, reason_code, policy_version,
             scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)

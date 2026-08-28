@@ -27,7 +27,7 @@
  * attribute anything to. Every subsequent change comes through this file.
  */
 import { randomUUID } from 'node:crypto';
-import { withTransaction, type Executor } from '@dealer/database';
+import { setTenantContext, withTransaction, type Executor } from '@dealer/database';
 // Types only. The organization package owns the hierarchy's vocabulary; this module
 // owns the WRITES to it (see the organization-unit section below), and taking the
 // level and status types from their owner keeps one definition of each.
@@ -114,7 +114,7 @@ export interface MutationResult {
  * not attributing the change to anybody, and a mutation nobody performed is
  * exactly the shape this revision exists to make impossible.
  */
-async function requireActor(executor: Executor, actingUserLinkId: unknown): Promise<string> {
+export async function requireActor(executor: Executor, actingUserLinkId: unknown): Promise<string> {
   if (typeof actingUserLinkId !== 'string' || !UUID_RE.test(actingUserLinkId)) {
     throw new UnattributableMutationError(
       'an attributable mutation requires the acting user link id',
@@ -131,7 +131,7 @@ async function requireActor(executor: Executor, actingUserLinkId: unknown): Prom
   return actingUserLinkId;
 }
 
-async function recordMutation(
+export async function recordMutation(
   executor: Executor,
   input: {
     tenantId: string | null;
@@ -365,7 +365,7 @@ const UNIT_PARENT: Record<OrganizationUnitLevel, OrganizationUnitLevel | 'tenant
  * error, and this signature makes a MISSING one a refusal rather than a NULL that
  * some column default might paper over.
  */
-export async function createOrganizationUnit(input: {
+export interface OrganizationUnitCreate {
   actingUserLinkId: string;
   tenantId: string;
   level: OrganizationUnitLevel;
@@ -375,7 +375,22 @@ export async function createOrganizationUnit(input: {
   code?: string | null;
   unitId?: string;
   status?: OrgUnitStatus;
-}): Promise<OrganizationUnitMutation> {
+}
+
+export async function createOrganizationUnit(
+  input: OrganizationUnitCreate,
+): Promise<OrganizationUnitMutation> {
+  return withTransaction(async (executor) => createOrganizationUnitWithin(executor, input));
+}
+
+/**
+ * RT1: the same creation inside a CALLER-OWNED transaction, so the admin
+ * surface can create the unit and record its idempotent outcome atomically.
+ */
+export async function createOrganizationUnitWithin(
+  executor: Executor,
+  input: OrganizationUnitCreate,
+): Promise<OrganizationUnitMutation> {
   const status: OrgUnitStatus = input.status ?? 'pending_configuration';
   if (input.level === 'department') {
     if (typeof input.code !== 'string' || input.code.length === 0) {
@@ -387,75 +402,77 @@ export async function createOrganizationUnit(input: {
   if (input.level === 'dealer_group' && input.parentId !== input.tenantId) {
     throw new Error('a dealer group hangs off its own tenant; parentId must be the tenant id');
   }
-  return withTransaction(async (executor) => {
-    const actor = await requireActor(executor, input.actingUserLinkId);
-    const unitId = input.unitId ?? randomUUID();
-    let created;
-    switch (input.level) {
-      case 'dealer_group':
-        created = await executor.query(
-          `INSERT INTO dealer_groups
+  const actor = await requireActor(executor, input.actingUserLinkId);
+  // RT1: the organization tables are row-secured; this write's transaction
+  // carries the tenant context (the input tenant is the row's own tenant,
+  // and the composite parent keys still refuse anything cross-tenant).
+  await setTenantContext(executor, input.tenantId);
+  const unitId = input.unitId ?? randomUUID();
+  let created;
+  switch (input.level) {
+    case 'dealer_group':
+      created = await executor.query(
+        `INSERT INTO dealer_groups
              (dealer_group_id, tenant_id, name, status, created_by_user_link_id,
               updated_by_user_link_id, authorization_version)
            VALUES ($1, $2, $3, $4, $5, $5, 1)
            RETURNING dealer_group_id AS unit_id, status, authorization_version`,
-          [unitId, input.tenantId, input.name, status, actor],
-        );
-        break;
-      case 'legal_entity':
-        created = await executor.query(
-          `INSERT INTO legal_entities
+        [unitId, input.tenantId, input.name, status, actor],
+      );
+      break;
+    case 'legal_entity':
+      created = await executor.query(
+        `INSERT INTO legal_entities
              (legal_entity_id, tenant_id, dealer_group_id, name, status,
               created_by_user_link_id, updated_by_user_link_id, authorization_version)
            VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
            RETURNING legal_entity_id AS unit_id, status, authorization_version`,
-          [unitId, input.tenantId, input.parentId, input.name, status, actor],
-        );
-        break;
-      case 'rooftop':
-        created = await executor.query(
-          `INSERT INTO rooftops
+        [unitId, input.tenantId, input.parentId, input.name, status, actor],
+      );
+      break;
+    case 'rooftop':
+      created = await executor.query(
+        `INSERT INTO rooftops
              (rooftop_id, tenant_id, legal_entity_id, name, status,
               created_by_user_link_id, updated_by_user_link_id, authorization_version)
            VALUES ($1, $2, $3, $4, $5, $6, $6, 1)
            RETURNING rooftop_id AS unit_id, status, authorization_version`,
-          [unitId, input.tenantId, input.parentId, input.name, status, actor],
-        );
-        break;
-      case 'department':
-        created = await executor.query(
-          `INSERT INTO departments
+        [unitId, input.tenantId, input.parentId, input.name, status, actor],
+      );
+      break;
+    case 'department':
+      created = await executor.query(
+        `INSERT INTO departments
              (department_id, tenant_id, rooftop_id, code, name, status,
               created_by_user_link_id, updated_by_user_link_id, authorization_version)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $7, 1)
            RETURNING department_id AS unit_id, status, authorization_version`,
-          [unitId, input.tenantId, input.parentId, input.code, input.name, status, actor],
-        );
-        break;
-    }
-    const row = created.rows[0] as Row;
-    const result = await recordMutation(executor, {
-      tenantId: input.tenantId,
-      entityType: input.level,
-      entityId: String(row.unit_id),
-      eventType: 'identity.organization_unit.created',
-      actingUserLinkId: actor,
-      authorizationVersion: version(row),
-      details: {
-        level: input.level,
-        status,
-        parent_level: UNIT_PARENT[input.level],
-        parent_id: input.parentId,
-      },
-    });
-    return {
-      ...result,
-      tenantId: input.tenantId,
+        [unitId, input.tenantId, input.parentId, input.code, input.name, status, actor],
+      );
+      break;
+  }
+  const row = created.rows[0] as Row;
+  const result = await recordMutation(executor, {
+    tenantId: input.tenantId,
+    entityType: input.level,
+    entityId: String(row.unit_id),
+    eventType: 'identity.organization_unit.created',
+    actingUserLinkId: actor,
+    authorizationVersion: version(row),
+    details: {
       level: input.level,
-      unitId: String(row.unit_id),
-      status: String(row.status) as OrgUnitStatus,
-    };
+      status,
+      parent_level: UNIT_PARENT[input.level],
+      parent_id: input.parentId,
+    },
   });
+  return {
+    ...result,
+    tenantId: input.tenantId,
+    level: input.level,
+    unitId: String(row.unit_id),
+    status: String(row.status) as OrgUnitStatus,
+  };
 }
 
 /**
@@ -477,6 +494,8 @@ export async function changeOrganizationUnitStatus(input: {
 }): Promise<OrganizationUnitMutation | null> {
   return withTransaction(async (executor) => {
     const actor = await requireActor(executor, input.actingUserLinkId);
+    // RT1: row-secured organization tables — see createOrganizationUnit.
+    await setTenantContext(executor, input.tenantId);
     let updated;
     switch (input.level) {
       case 'dealer_group':
@@ -1060,31 +1079,44 @@ export async function deactivateUserLink(input: {
   deactivatedByUserLinkId: string;
 }): Promise<boolean> {
   return withTransaction(async (executor) => {
-    const actor = await requireActor(executor, input.deactivatedByUserLinkId);
-    const updated = await executor.query(
-      `UPDATE user_links
-          SET status = 'deactivated',
-              deactivated_at = NOW(),
-              deactivated_by_user_link_id = $2,
-              updated_by_user_link_id = $2,
-              authorization_version = authorization_version + 1
-        WHERE user_link_id = $1 AND status <> 'deactivated'
-        RETURNING tenant_id, authorization_version`,
-      [input.userLinkId, actor],
-    );
-    if (updated.rows.length === 0) return false;
-    const row = updated.rows[0] as Row;
-    await recordMutation(executor, {
-      tenantId: row.tenant_id === null ? null : String(row.tenant_id),
-      entityType: 'user_link',
-      entityId: input.userLinkId,
-      eventType: 'identity.user_link.deactivated',
-      actingUserLinkId: actor,
-      authorizationVersion: version(row),
-      details: { transition: '->deactivated' },
-    });
-    return true;
+    return deactivateUserLinkWithin(executor, input.deactivatedByUserLinkId, input.userLinkId);
   });
+}
+
+/**
+ * RT1: the same deactivation inside a CALLER-OWNED transaction, so the admin
+ * surface can spend the step-up grant, deactivate, and record the idempotent
+ * outcome atomically (a crash cannot record success without the effect).
+ */
+export async function deactivateUserLinkWithin(
+  executor: Executor,
+  deactivatedByUserLinkId: string,
+  userLinkId: string,
+): Promise<boolean> {
+  const actor = await requireActor(executor, deactivatedByUserLinkId);
+  const updated = await executor.query(
+    `UPDATE user_links
+        SET status = 'deactivated',
+            deactivated_at = NOW(),
+            deactivated_by_user_link_id = $2,
+            updated_by_user_link_id = $2,
+            authorization_version = authorization_version + 1
+      WHERE user_link_id = $1 AND status <> 'deactivated'
+      RETURNING tenant_id, authorization_version`,
+    [userLinkId, actor],
+  );
+  if (updated.rows.length === 0) return false;
+  const row = updated.rows[0] as Row;
+  await recordMutation(executor, {
+    tenantId: row.tenant_id === null ? null : String(row.tenant_id),
+    entityType: 'user_link',
+    entityId: userLinkId,
+    eventType: 'identity.user_link.deactivated',
+    actingUserLinkId: actor,
+    authorizationVersion: version(row),
+    details: { transition: '->deactivated' },
+  });
+  return true;
 }
 
 /**
@@ -1224,7 +1256,7 @@ function assertRoleScope(role: string, scopeLevel: string): void {
   }
 }
 
-async function grantRoleWithin(
+export async function grantRoleWithin(
   executor: Executor,
   actor: string,
   input: {
@@ -1356,7 +1388,7 @@ export async function changeRole(input: {
   });
 }
 
-async function revokeRoleWithin(
+export async function revokeRoleWithin(
   executor: Executor,
   actor: string,
   roleBindingId: string,
@@ -1698,6 +1730,9 @@ export async function startSupportSession(input: {
     );
     if (found.rows.length === 0) return null;
     const request = mapSupportAccessRequest(found.rows[0] as Row);
+    // RT1: see decideSupportAccess — the session-bounding triggers may walk
+    // row-secured tables, and the tenant is the request's own.
+    await setTenantContext(executor, request.tenantId);
     // Starting the session an approval authorized IS the approval authority,
     // so it is gated by the same published action at the same tenant scope.
     if (!(await mayActTenantWide(executor, SUPPORT_APPROVE_ACTION, request.tenantId, actor))) {
@@ -1756,6 +1791,11 @@ export async function decideSupportAccess(input: {
     );
     if (pending.rows.length === 0) return null;
     const targetTenantId = String((pending.rows[0] as Row).tenant_id);
+    // RT1: the approval's completeness triggers walk the row-secured
+    // organization tables (org_chain_defect on a non-tenant approved scope), so
+    // this transaction carries the tenant context — the REQUEST's own tenant,
+    // read from the locked row, never from the caller.
+    await setTenantContext(executor, targetTenantId);
     const requesterUserLinkId = String((pending.rows[0] as Row).requester_user_link_id);
     if (requesterUserLinkId === actor) {
       return null; // requester/approver separation, enforced before anything else

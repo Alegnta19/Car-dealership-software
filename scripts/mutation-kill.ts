@@ -615,6 +615,17 @@ export const MUTATIONS: Mutation[] = [
     testFile: 'tests/worker-jobs.test.ts',
     testName: 'the worker pass closes an expired SUPPORT window, exactly once',
   },
+  {
+    id: 'worker_forgets_admin_outbox_dispatch',
+    control:
+      'RT1: the worker runs the administration outbox dispatcher, so an invitation event ' +
+      'written with its row actually leaves the service instead of sitting undelivered',
+    file: 'apps/worker/src/main.ts',
+    from: '  { name: ADMIN_OUTBOX_DISPATCH_JOB, run: () => runAdminOutboxDispatchOnce() },\n',
+    to: '',
+    testFile: 'tests/worker-jobs.test.ts',
+    testName: 'the worker pass delivers a due administration outbox event, exactly once',
+  },
 
   /*
    * ── FBL-020-R5 §1.5 – §1.11: the runtime controls this revision added ────────

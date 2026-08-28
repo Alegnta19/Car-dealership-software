@@ -15,6 +15,8 @@ import {
 } from '@dealer/test-kit';
 import { closePool, query } from '@dealer/database';
 import {
+  TENANT_ADMIN_ROLE,
+  createStaffInvitation,
   decideSupportAccess,
   expireDueSupportSessions,
   expireStaleLoginTransactions,
@@ -649,6 +651,73 @@ describe(
         ).status,
         'pending',
         'the injected failure really did stop the login-transaction sweep',
+      );
+    });
+
+    // ── job 4: the administration outbox dispatcher (RT1) ────────────────────
+    test('the worker pass delivers a due administration outbox event, exactly once', async () => {
+      const admin = await makeUser(tenantId);
+      const created = await createStaffInvitation({
+        actingUserLinkId: admin,
+        tenantId,
+        email: 'invitee@example.com',
+        invitedRole: TENANT_ADMIN_ROLE,
+      });
+      assert.ok(!('error' in created), 'the seed invitation must be created');
+
+      const pending = await query(
+        `SELECT event_id FROM admin_outbox WHERE tenant_id = $1 AND delivered_at IS NULL`,
+        [tenantId],
+      );
+      assert.equal(pending.rows.length, 1, 'the invitation must enqueue exactly one event');
+      const eventId = String((pending.rows[0] as { event_id: unknown }).event_id);
+
+      // Pass 1: the WORKER'S OWN pass — the exact function `--once` calls —
+      // delivers the event and records the delivery in the dedupe ledger.
+      assert.deepEqual([...(await runAllJobsOnce())], [], 'the dispatch pass must not fail');
+      const afterFirst = await scalar(
+        `SELECT (delivered_at IS NOT NULL)::text AS delivered, attempts::int AS attempts
+           FROM admin_outbox WHERE event_id = $1`,
+        eventId,
+      );
+      assert.equal(afterFirst.delivered, 'true', 'one pass must mark the event delivered');
+      assert.equal(Number(afterFirst.attempts), 1, 'one pass is one attempt');
+      const ledgerCount = async (): Promise<number> =>
+        Number(
+          (
+            (
+              await query(
+                `SELECT COUNT(*)::int AS n FROM admin_outbox_deliveries WHERE event_id = $1`,
+                [eventId],
+              )
+            ).rows[0] as { n: number }
+          ).n,
+        );
+      assert.equal(await ledgerCount(), 1, 'the delivery must be recorded in the dedupe ledger');
+
+      // Pass 2: a delivered event is not claimable — nothing moves.
+      assert.deepEqual([...(await runAllJobsOnce())], []);
+      const afterSecond = await scalar(
+        `SELECT attempts::int AS attempts FROM admin_outbox WHERE event_id = $1`,
+        eventId,
+      );
+      assert.equal(Number(afterSecond.attempts), 1, 'a second pass must not touch the event');
+
+      // REPLAY: crash recovery re-marks the event undelivered. The ledger's
+      // primary key makes the business effect exactly-once — the replayed
+      // event is re-marked delivered WITHOUT a second delivery row.
+      await query(`UPDATE admin_outbox SET delivered_at = NULL WHERE event_id = $1`, [eventId]);
+      assert.deepEqual([...(await runAllJobsOnce())], []);
+      const afterReplay = await scalar(
+        `SELECT (delivered_at IS NOT NULL)::text AS delivered FROM admin_outbox
+          WHERE event_id = $1`,
+        eventId,
+      );
+      assert.equal(afterReplay.delivered, 'true', 'a replayed event must re-mark delivered');
+      assert.equal(
+        await ledgerCount(),
+        1,
+        'a replayed delivery must hit the ledger conflict — the effect happens exactly once',
       );
     });
   },

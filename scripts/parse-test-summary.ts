@@ -155,9 +155,20 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  *
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
+ *
+ * It moved 725 → 739 / 69 → 71 under RELEASE TRAIN 1 (Dealership Administration), which
+ * added fourteen tests in two new suites plus one in an existing battery: eight in
+ * `tests/tenant-isolation.test.ts` (the row-3 database-boundary proofs through the real
+ * `dealership_app` login — deny-by-default, predicate-free reads, cross-tenant
+ * write/reference refusals, forged context); four in `tests/dealership-admin.test.ts`
+ * (the owner journey end to end through the real HTTP surface, the refusal matrix, the
+ * single-use step-up discipline, and the problem-shaped unknown-route/self-deactivation
+ * refusals); one in `tests/worker-jobs.test.ts` (the administration outbox dispatcher,
+ * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
+ * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 725;
-export const MINIMUM_SUITES = 69;
+export const MINIMUM_TESTS = 739;
+export const MINIMUM_SUITES = 71;
 
 /**
  * The order's own floor.

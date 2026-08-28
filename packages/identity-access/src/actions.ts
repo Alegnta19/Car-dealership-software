@@ -95,6 +95,43 @@ export const IDENTITY_ACTION_DEFINITIONS = [
     allowedRoles: PLATFORM_SUPPORT_AUTHORITY_ROLES,
     plane: 'control_plane',
   },
+  // ── RELEASE TRAIN 1 — dealership administration ─────────────────────────
+  {
+    action: 'admin.dealership.view',
+    description: 'Read the dealership administration surface (settings, org, users)',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
+  {
+    action: 'admin.settings.update',
+    description: 'Create or update dealership settings (branding, timezone)',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
+  {
+    action: 'admin.hours.update',
+    description: 'Replace the dealership weekly business hours',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
+  {
+    action: 'admin.policy.update',
+    description: 'Set one bounded dealership policy value',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
+  {
+    action: 'admin.invitation.create',
+    description: 'Invite a staff member with a starting role at a scope',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
+  {
+    action: 'admin.invitation.revoke',
+    description: 'Revoke a pending staff invitation',
+    resourceType: null,
+    allowedRoles: [TENANT_ADMIN_ROLE],
+  },
 ] as const;
 
 export function createIdentityActionCatalog(): ActionCatalog {

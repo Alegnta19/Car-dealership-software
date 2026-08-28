@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 import {
+  ADMIN_OUTBOX_DISPATCH_JOB,
   LOGIN_TRANSACTION_EXPIRY_JOB,
   REAUTHENTICATION_EXPIRY_JOB,
   SUPPORT_ACCESS_EXPIRY_JOB,
@@ -60,8 +61,13 @@ describe('the worker job registry, through the compiled entry point (FBL-020-R5 
     const printed = JSON.parse(run.stdout.trim()) as { jobs: string[] };
     assert.deepEqual(
       printed.jobs,
-      [SUPPORT_ACCESS_EXPIRY_JOB, LOGIN_TRANSACTION_EXPIRY_JOB, REAUTHENTICATION_EXPIRY_JOB],
-      'the compiled worker must register the support, login-transaction and step-up sweeps',
+      [
+        SUPPORT_ACCESS_EXPIRY_JOB,
+        LOGIN_TRANSACTION_EXPIRY_JOB,
+        REAUTHENTICATION_EXPIRY_JOB,
+        ADMIN_OUTBOX_DISPATCH_JOB,
+      ],
+      'the compiled worker must register the three sweeps and the admin outbox dispatcher',
     );
 
     /*

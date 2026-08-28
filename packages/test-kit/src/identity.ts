@@ -543,8 +543,9 @@ export async function mintReauthGrant(input: {
   tenantId: string;
   userLinkId: string;
   action: string;
-  resourceId: string;
-  resourceType?: string;
+  /** null mints a RESOURCE-FREE grant (RT1's admin surface consumes those). */
+  resourceId: string | null;
+  resourceType?: string | null;
   /** Defaults to the HIGH assurance Fixed Ops operations now demand (R2). */
   assurance?: 'fresh_only' | 'fresh_and_mfa_policy';
 }): Promise<string> {
@@ -556,7 +557,9 @@ export async function mintReauthGrant(input: {
     userLinkId: input.userLinkId,
     sessionId: session.sessionId,
     action: input.action,
-    resourceType: input.resourceType ?? 'repair_order',
+    // A null resourceId is a resource-FREE grant: both facets stay null so the
+    // spend's IS NOT DISTINCT FROM comparison matches a resource-free consume.
+    resourceType: input.resourceId === null ? null : (input.resourceType ?? 'repair_order'),
     resourceId: input.resourceId,
     requiredAssurance: assurance,
     callbackUri: TEST_REAUTH_CALLBACK_URI,

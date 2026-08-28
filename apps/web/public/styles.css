@@ -1,0 +1,360 @@
+/* RT1 — dealership administration console. Dependency-free; the brand color
+   saved in settings feeds --brand at runtime. */
+:root {
+  --brand: #1f3a5f;
+  --brand-ink: #ffffff;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --ink: #1c2530;
+  --muted: #5b6675;
+  --line: #dde2e8;
+  --ok: #1a7f37;
+  --warn: #b45309;
+  --danger: #b91c1c;
+  --radius: 8px;
+  font-size: 15px;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+#app {
+  min-height: 100vh;
+}
+
+/* ── shell ── */
+.shell {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  min-height: 100vh;
+}
+.sidebar {
+  background: var(--brand);
+  color: var(--brand-ink);
+  padding: 1.25rem 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar .mast {
+  padding: 0 1.25rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  margin-bottom: 0.75rem;
+}
+.sidebar .mast .name {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+.sidebar .mast .sub {
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+.sidebar nav a {
+  display: block;
+  padding: 0.55rem 1.25rem;
+  color: inherit;
+  text-decoration: none;
+  opacity: 0.85;
+  border-left: 3px solid transparent;
+}
+.sidebar nav a:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.sidebar nav a.active {
+  opacity: 1;
+  border-left-color: var(--brand-ink);
+  background: rgba(255, 255, 255, 0.12);
+  font-weight: 600;
+}
+.sidebar .foot {
+  margin-top: auto;
+  padding: 1rem 1.25rem 0;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+.sidebar .foot button {
+  margin-top: 0.5rem;
+}
+.main {
+  padding: 1.5rem 2rem 3rem;
+  max-width: 1080px;
+}
+.main h1 {
+  font-size: 1.4rem;
+  margin: 0 0 1rem;
+}
+.main h2 {
+  font-size: 1.05rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+/* ── panels, tables, forms ── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+}
+.card .num {
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+.card .lbl {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.75rem 0 0.25rem;
+}
+input,
+select {
+  width: 100%;
+  max-width: 420px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+input[type='checkbox'] {
+  width: auto;
+}
+input[type='color'] {
+  padding: 0.1rem;
+  width: 3rem;
+  height: 2.2rem;
+}
+.row {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.row > div {
+  flex: 1 1 180px;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--brand);
+  background: var(--brand);
+  color: var(--brand-ink);
+  cursor: pointer;
+}
+button:hover {
+  filter: brightness(1.1);
+}
+button.ghost {
+  background: transparent;
+  color: var(--brand);
+}
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+button.small {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.82rem;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.actions {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* ── badges, tree, misc ── */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--line);
+}
+.badge.active,
+.badge.activated,
+.badge.accepted {
+  background: #d7ecdc;
+  color: var(--ok);
+}
+.badge.pending,
+.badge.pending_configuration {
+  background: #fdf0d5;
+  color: var(--warn);
+}
+.badge.inactive,
+.badge.archived,
+.badge.deactivated,
+.badge.revoked,
+.badge.expired {
+  background: #f3d8d8;
+  color: var(--danger);
+}
+.tree ul {
+  list-style: none;
+  margin: 0.25rem 0 0.25rem 1.25rem;
+  padding: 0;
+  border-left: 1px solid var(--line);
+}
+.tree li {
+  padding: 0.3rem 0 0.3rem 0.9rem;
+}
+.tree .node {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.tree .lvl {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.muted {
+  color: var(--muted);
+}
+.error-banner {
+  background: #fbeaea;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem;
+  margin-bottom: 1rem;
+}
+.center-card {
+  max-width: 420px;
+  margin: 15vh auto;
+  text-align: center;
+}
+.center-card .panel {
+  padding: 2rem;
+}
+
+/* ── toasts ── */
+#toasts {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 50;
+}
+.toast {
+  background: var(--ink);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0.65rem 1rem;
+  font-size: 0.88rem;
+  max-width: 380px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.toast.err {
+  background: var(--danger);
+}
+.toast .corr {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.8;
+  margin-top: 0.2rem;
+  word-break: break-all;
+}
+
+/* ── modal ── */
+.modal-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 28, 38, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+.modal {
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  width: min(480px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+}
+.modal h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+  }
+  .sidebar .mast {
+    border: 0;
+    margin: 0;
+    padding: 0.5rem 1rem;
+  }
+  .sidebar nav {
+    display: flex;
+  }
+  .sidebar .foot {
+    margin: 0;
+    padding: 0.5rem 1rem;
+  }
+  .main {
+    padding: 1rem;
+  }
+}

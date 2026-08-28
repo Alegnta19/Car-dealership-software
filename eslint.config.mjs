@@ -17,6 +17,24 @@ export default tseslint.config(
     },
   },
   {
+    // RT1: the static staff UI is BROWSER JavaScript served as-is by the API —
+    // no bundler, no Node globals. Declare the environment it actually runs in.
+    files: ['apps/web/public/**/*.js'],
+    languageOptions: {
+      sourceType: 'script',
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        location: 'readonly',
+        fetch: 'readonly',
+        crypto: 'readonly',
+        setTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+      },
+    },
+  },
+  {
     rules: {
       // Counted as debt, not banned outright in FBL-000: the service layer leans on
       // `any` for row shapes. The ratchet blocks growth; typed rows arrive with the

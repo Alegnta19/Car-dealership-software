@@ -374,7 +374,7 @@ describe(
       assert.equal(code, 0, `the real tree violates the boundary:\n${output}`);
       // The owned set is DERIVED from the migrations; if that stopped working the guard
       // would silently enforce less, so the run states what it found and this asserts it.
-      assert.match(output, /12 authorization-state table\(s\) derived from migrations/);
+      assert.match(output, /16 authorization-state table\(s\) derived from migrations/);
       for (const table of ['tenants', 'rooftops', 'role_bindings', 'user_links']) {
         assert.match(output, new RegExp(table));
       }

@@ -18,3 +18,4 @@ export {
   runtimePostureViolations,
   type RuntimePosture,
 } from './runtime-posture';
+export { setTenantContext, withTenantTransaction } from './tenant-context';

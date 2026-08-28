@@ -87,7 +87,14 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { closePool, query, readRuntimePosture, runtimePostureViolations } from '@dealer/database';
+import {
+  closePool,
+  query,
+  readRuntimePosture,
+  runtimePostureViolations,
+  setTenantContext,
+  withTransaction,
+} from '@dealer/database';
 import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
@@ -1065,15 +1072,22 @@ async function afterMigration060(outPath: string | undefined, logPath: string | 
   if (tid === undefined) {
     failures.push('after-060: the drill database holds no tenant to record a decision for');
   } else {
+    // RT1 (migration 061): the v4 evidence triggers walk the row-secured
+    // organization tables, so the app login's inserts run in transactions
+    // carrying the server-controlled tenant context, exactly as the shipped
+    // evidence writer does.
     try {
-      await query(
-        `INSERT INTO policy_decisions
-           (tenant_id, actor_type, action, decision, reason_code, policy_version,
-            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
-         VALUES ($1, 'system', 'system.retention.sweep', 'deny', 'DENY_SYSTEM_POLICY',
-                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
-        [tid],
-      );
+      await withTransaction(async (tx) => {
+        await setTenantContext(tx, tid);
+        await tx.query(
+          `INSERT INTO policy_decisions
+             (tenant_id, actor_type, action, decision, reason_code, policy_version,
+              scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+           VALUES ($1, 'system', 'system.retention.sweep', 'deny', 'DENY_SYSTEM_POLICY',
+                   'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+          [tid],
+        );
+      });
       say('after-060 activity: the app login recorded a decision row (system deny)');
     } catch (err) {
       failures.push(
@@ -1087,14 +1101,17 @@ async function afterMigration060(outPath: string | undefined, logPath: string | 
     // GENUINE app login, against the upgraded database.
     let systemAllowRefusal: { code?: string; message?: string } | null = null;
     try {
-      await query(
-        `INSERT INTO policy_decisions
-           (tenant_id, actor_type, action, decision, reason_code, policy_version,
-            scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
-         VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
-                 'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
-        [tid],
-      );
+      await withTransaction(async (tx) => {
+        await setTenantContext(tx, tid);
+        await tx.query(
+          `INSERT INTO policy_decisions
+             (tenant_id, actor_type, action, decision, reason_code, policy_version,
+              scope_level, scope_id, matched_role_binding_ids, matched_authorization_versions)
+           VALUES ($1, 'system', 'system.retention.sweep', 'allow', 'ALLOW_SYSTEM_POLICY',
+                   'fbl-020.1', 'tenant', $1, '{}'::uuid[], '{}'::bigint[])`,
+          [tid],
+        );
+      });
       failures.push(
         'after-060: the app login WROTE a system ALLOW — the ordinary runtime login must ' +
           'not be able to select the system lane (FBL-020-R7-C2 §4)',
