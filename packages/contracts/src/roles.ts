@@ -14,6 +14,16 @@ export const ROLES = {
   PARTS_CLERK: 'parts_clerk',
   WARRANTY_ADMIN: 'warranty_admin',
   VIEWER: 'service_viewer',
+  // ── RELEASE TRAIN 2 — the inventory department ──────────────────────────
+  //
+  // Inventory is a different department from service with different authority:
+  // the person who photographs a car and records its reconditioning cost is
+  // not the person who decides what it is advertised at. Two roles rather than
+  // one, because row 4 asks for an insufficient-role refusal that means
+  // something — a clerk who can do the day's work and cannot price or publish
+  // is the real distinction a dealership draws.
+  INVENTORY_MANAGER: 'inventory_manager',
+  INVENTORY_CLERK: 'inventory_clerk',
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];

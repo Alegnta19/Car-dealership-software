@@ -631,6 +631,15 @@
               "note": "the committed RELEASE TRAIN 1 dealership-administration migration, carried unmutated while a 057 control body is probed"
             }
           ]
+        },
+        "062_vehicle_acquisition_inventory.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "ab31183daa2bc7add62db33313c1608ad3e4c5ed656393b3f1fcb4f2f58151ab",
+              "note": "the committed RELEASE TRAIN 2 vehicle-acquisition-and-inventory migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

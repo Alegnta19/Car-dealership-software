@@ -242,13 +242,19 @@ async function renderApp() {
       el(
         'nav',
         null,
-        Object.keys(ROUTES).map(function (key) {
-          return el('a', {
-            href: '#/' + key,
-            class: key === route ? 'active' : '',
-            text: ROUTES[key].title,
-          });
-        }),
+        Object.keys(ROUTES)
+          .filter(function (key) {
+            // A screen reached from a row rather than the navigation declares
+            // itself hidden; it still routes, it just does not get a tab.
+            return !ROUTES[key].hidden;
+          })
+          .map(function (key) {
+            return el('a', {
+              href: '#/' + key,
+              class: key === route ? 'active' : '',
+              text: ROUTES[key].title,
+            });
+          }),
       ),
       el('div', { class: 'foot' }, [
         el('div', { text: 'Roles: ' + (state.session.roles || []).join(', ') }),

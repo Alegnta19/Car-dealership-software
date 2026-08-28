@@ -19,6 +19,7 @@
     "@dealer/database": "0.1.0",
     "@dealer/fixed-ops": "0.1.0",
     "@dealer/organization": "0.1.0",
-    "@dealer/identity-access": "0.1.0"
+    "@dealer/identity-access": "0.1.0",
+    "@dealer/inventory": "0.1.0"
   }
 }

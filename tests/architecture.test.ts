@@ -93,7 +93,7 @@ describe('architecture enforcement', () => {
   test('the ownership manifest matches the real workspace', () => {
     const { code, output } = run('scripts/check-architecture-manifest.ts');
     assert.equal(code, 0, output);
-    assert.match(output, /11 modules/);
+    assert.match(output, /12 modules/);
   });
 
   test('process.env stays confined to the approved configuration/composition files', () => {

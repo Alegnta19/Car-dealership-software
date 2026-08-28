@@ -156,6 +156,25 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * It moved 739 → 763 / 71 → 74 under RELEASE TRAIN 2 (Vehicle Acquisition and
+ * Inventory), which added twenty-four tests in three new suites: nine in
+ * `tests/inventory-isolation.test.ts` (row 4 — row security and its policy on every one
+ * of migration 062's fifteen tables, deny-by-default with no tenant context,
+ * predicate-free reads confined to one dealership, cross-dealership writes touching zero
+ * rows and refused at WITH CHECK, a tenant-qualified reference to another dealership's
+ * parent, a forged context, and the two rooftop proofs through the real HTTP stack where
+ * a rooftop-bound employee is answered 404 rather than told the car exists); eight in
+ * `tests/inventory-listing.test.ts` (row 3 — publication exactly once through the
+ * worker's own pass, a replayed delivery performing no second effect, a provider
+ * rejection recorded with its reason, a deferred channel retried into success,
+ * withdrawal preserving the publication history, reconciliation correcting the platform
+ * with an agreement control, the two dispatchers sharing one outbox without consuming
+ * each other's work, and a failing provider deferring rather than losing the event); and
+ * seven in `tests/inventory-journey.test.ts` (rows 1, 2, 3 and 5 — the whole
+ * acquisition-to-published-listing journey, retry-safety and version conflict, the
+ * controlled merge, the bounded import, a rooftop transfer, and the two role-refusal
+ * cases). Measured by the full local run before being written here.
+ *
  * It moved 725 → 739 / 69 → 71 under RELEASE TRAIN 1 (Dealership Administration), which
  * added fourteen tests in two new suites plus one in an existing battery: eight in
  * `tests/tenant-isolation.test.ts` (the row-3 database-boundary proofs through the real
@@ -167,8 +186,8 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 739;
-export const MINIMUM_SUITES = 71;
+export const MINIMUM_TESTS = 763;
+export const MINIMUM_SUITES = 74;
 
 /**
  * The order's own floor.

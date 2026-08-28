@@ -64,6 +64,7 @@ import {
   type IdentitySession,
   type PolicyEngine,
 } from '@dealer/identity-access';
+import { createInventoryActionCatalog } from '@dealer/inventory';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
 import { identityProvider } from '../identity/provider';
 
@@ -135,6 +136,7 @@ export function actionCatalog(): ActionCatalog {
     catalogInstance = mergeActionCatalogs(
       createServiceActionCatalog(),
       createIdentityActionCatalog(),
+      createInventoryActionCatalog(),
     );
   }
   return catalogInstance;
@@ -449,6 +451,16 @@ const RESOURCE_PARAMS: Record<string, string> = {
   service_waitlist_entry: 'waitlistEntryId',
   comeback_case: 'comebackId',
   ro_line_item: 'lineItemId',
+  // ── RELEASE TRAIN 2 ──────────────────────────────────────────────────────
+  //
+  // Everything hanging off a stock item — its prices, photographs, features,
+  // holds, costs, documents and transfers — is authorized THROUGH the stock
+  // item, so those routes all name `stockItemId` and declare
+  // `resourceType: 'stock_item'`. A listing gets its own entry because it is
+  // withdrawn and reconciled by its own identifier, after the vehicle it
+  // advertises has already been left behind in the URL.
+  stock_item: 'stockItemId',
+  stock_listing: 'listingId',
 };
 
 export function requireAction(action: string) {

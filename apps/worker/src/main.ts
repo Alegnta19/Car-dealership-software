@@ -41,6 +41,7 @@ import {
   expireStaleLoginTransactions,
   expireStaleReauthenticationTransactions,
 } from '@dealer/identity-access';
+import { dispatchDueListingEvents } from '@dealer/inventory';
 import { getConfig, logger } from '@dealer/platform';
 
 /** The registered job names. `--list-jobs` prints exactly this. */
@@ -75,6 +76,14 @@ export const REAUTHENTICATION_EXPIRY_JOB = 'identity.reauthentication_transactio
 export const ADMIN_OUTBOX_DISPATCH_JOB = 'admin.outbox.dispatch';
 
 /**
+ * RELEASE TRAIN 2 — the listing dispatcher. It carries a vehicle's publication
+ * or withdrawal to the listing provider and reconciles the answer, claiming
+ * ONLY `inventory.` outbox events so it and the administration dispatcher
+ * above share one table without consuming each other's work.
+ */
+export const LISTING_DISPATCH_JOB = 'inventory.listing.dispatch';
+
+/**
  * THE ONE REGISTRY. A name and the pass that runs it are the SAME entry, so the list
  * `--list-jobs` advertises and the work `--once` performs cannot drift apart: there is
  * no second array to keep in step, and a job cannot be announced without being run or
@@ -91,6 +100,7 @@ const REGISTRY: readonly RegisteredJob[] = [
   { name: LOGIN_TRANSACTION_EXPIRY_JOB, run: () => runLoginTransactionExpiryOnce() },
   { name: REAUTHENTICATION_EXPIRY_JOB, run: () => runReauthenticationExpiryOnce() },
   { name: ADMIN_OUTBOX_DISPATCH_JOB, run: () => runAdminOutboxDispatchOnce() },
+  { name: LISTING_DISPATCH_JOB, run: () => runListingDispatchOnce() },
 ];
 
 /** The registered job names, derived from the registry above — never restated. */
@@ -201,6 +211,35 @@ export async function runAdminOutboxDispatchOnce(): Promise<number> {
       failed: result.failed,
     },
     'administration outbox dispatch pass complete',
+  );
+  return processed;
+}
+
+/**
+ * ONE pass of the listing dispatcher.
+ *
+ * `dispatchDueListingEvents` claims due `inventory.listing.*` events one small
+ * transaction at a time, calls the provider, and commits the outcome, the
+ * listing's new state and the delivery-ledger row together. A DEFERRED answer
+ * is a retry rather than a failure — the event is pushed out with backoff and
+ * counted separately — so a busy channel does not look like a broken one.
+ */
+export async function runListingDispatchOnce(): Promise<number> {
+  const result = await dispatchDueListingEvents();
+  const processed = result.delivered + result.deduplicated + result.deferred + result.failed;
+  if (processed === 0) {
+    logger.debug({ job: LISTING_DISPATCH_JOB, processed: 0 }, 'no listing events due');
+    return 0;
+  }
+  logger.info(
+    {
+      job: LISTING_DISPATCH_JOB,
+      delivered: result.delivered,
+      deduplicated: result.deduplicated,
+      deferred: result.deferred,
+      failed: result.failed,
+    },
+    'listing dispatch pass complete',
   );
   return processed;
 }
