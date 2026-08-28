@@ -519,7 +519,7 @@
     "what_is_committed": "FBL-020-R7 sections 2 through 6 as amended by FBL-020-R7-A1, the FBL-020-R7-C1 acceptance corrections (migration 060), and the FBL-020-R7-C2 Final Bounded Closure: runtime identity (no startup role switching, dual-identity posture, the system-ALLOW privilege gate), control-plane payload refusal and exact support-authority revalidation, approval consumption coherence with absorbing terminal states, and the hard-stop upgrade prechecks with five representative refusal probes",
     "ci_run_for_this_working_tree": null,
     "how_it_was_transferred": "FBL-020-R7-A1 §4 restored normal repository use: the R7 work is committed on the fbl-020-r7 branch in ordinary, disclosed, forward-moving commits and pushed with the already-authorized credential, which is scrubbed after each use.",
-    "what_measured_it": "NOTHING YET for the C2 head, and this record does not pretend otherwise: the run recorded against evidence_commit_sha measured the R6 final head (ee5eb6b), the C1 closeout e10f500 is listed above with its own green exact-SHA run 32611508118, and the C2 commits above it are listed with run: null until their own exact-SHA runs exist. FBL-020-R7-C2 places the final commit-to-run binding in the return message (final SHA + exact-SHA CI run link + four-row checklist), because a checked-in record cannot hold a run id that did not exist when its commit was created. AFTER ACCEPTANCE: PR #12 was merged as caf6339; the C2 head df45d9e carries its green exact-SHA run 33111058743 (4/4 jobs). The Release Train 1 commit above carries run: null until its own run exists.",
+    "what_measured_it": "NOTHING YET for the C2 head, and this record does not pretend otherwise: the run recorded against evidence_commit_sha measured the R6 final head (ee5eb6b), the C1 closeout e10f500 is listed above with its own green exact-SHA run 32611508118, and the C2 commits above it are listed with run: null until their own exact-SHA runs exist. FBL-020-R7-C2 places the final commit-to-run binding in the return message (final SHA + exact-SHA CI run link + four-row checklist), because a checked-in record cannot hold a run id that did not exist when its commit was created. AFTER ACCEPTANCE: PR #12 was merged as caf6339; the C2 head df45d9e carries its green exact-SHA run 33111058743 (4/4 jobs). The Release Train 1 commit above carries run: null until its own run exists. RELEASE TRAIN 1: the code commit 910155f and this closeout carry run: null until their own runs exist; the documentation closeout b1ba34b is listed above with its RED exact-SHA run 33203292378 (#74), which failed only at the quality ratchet on this file’s formatting and is disclosed rather than re-run away.",
     "how_the_r7_work_was_verified_besides": "for the C2 wave, executed locally against a real PostgreSQL 16 on 127.0.0.1:55434: the full battery (725 tests / 69 suites, zero failed, cancelled, skipped or todo; the one red during iteration was the dirty-tree documentation gate that committing resolves), the database-control mutation registry (69 controls and predicates, 69 killed, 0 survivors), the runtime mutation registry (see the return message for the run outcome), all four 060 acceptance-precheck probes and the new 057 tenant-mismatch probe proven refused-as-declared on locally staged pre-060/pre-057 copies, and the runtime-posture battery on the genuine dealership_app login. The populated upgrade drill and fresh/upgraded convergence are exercised by the exact-SHA CI run, as every revision has run them. For Release Train 1 the full battery measured 739 tests / 71 suites, zero failed, cancelled, skipped or todo, on the post-merge tree."
   },
   "commit_budget": {
@@ -584,10 +584,7 @@
       "version_label": "Version 2.0",
       "section_14_3": "14.3 First active instruction — FBL-020-R2",
       "verification": "verified-from-repository-bytes",
-      "verified_by": [
-        "tests/delivery-documentation.test.ts",
-        "scripts/check-published-figures.ts"
-      ]
+      "verified_by": ["tests/delivery-documentation.test.ts", "scripts/check-published-figures.ts"]
     },
     "the_second_anchor_still_checked_in": {
       "file": "Car_Dealership_SaaS_Architecture_Blueprint.docx",
@@ -627,7 +624,7 @@
   ],
   "this_commit": {
     "is_code_bearing": false,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit is the RELEASE TRAIN 1 closeout that brings this record forward to the post-merge repository — the PR #12 merge changed the first-parent topology this record enumerates — and records the RT1 figures. Documents only, no code, no test, no migration. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown."
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit corrects exactly one condition — the repository formatter’s shape for this file, which run 33203292378 (#74) refused at the quality ratchet — and records the commit b1ba34b that run measured. Documents only, no code, no test, no migration. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown."
   },
   "commits_ahead_of_the_evidence_commit": [
     {
@@ -645,6 +642,41 @@
       "code_bearing": true,
       "run": null,
       "note": "RELEASE TRAIN 1 (Dealership Administration) — post-FBL-020 work, the first train after acceptance. Listed with run: null until its own exact-SHA run exists; the RT1 return message carries the commit-to-run binding, exactly as FBL-020-R7-C2’s did."
+    },
+    {
+      "sha": "b1ba34bf9575860522b83d848db2d58cee0a620b",
+      "short": "b1ba34b",
+      "subject": "RT1 closeout: the final-state record describes the post-merge repository",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 33203292378,
+        "run_number": 74,
+        "run_attempt": 1,
+        "head_sha": "b1ba34bf9575860522b83d848db2d58cee0a620b",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "note": "The Release Train 1 documentation closeout. Its exact-SHA run 33203292378 (#74) FAILED on one step of one job — the quality ratchet, over the formatting of this very file, which had been rewritten by a JSON serializer rather than by the repository formatter. The other three jobs were green, the populated upgrade drill and the fresh/upgraded fingerprint convergence among them. It is DOCUMENTATION-ONLY, so the red run is disclosed here in full and moves neither commit_budget.used nor commit_budget.failed_ci, exactly as the R7-C1 closeout 37c7662 and the R7-C2 closeout 1f36bbd are recorded above."
     }
   ]
 }
