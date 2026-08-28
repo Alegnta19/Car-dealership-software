@@ -624,7 +624,7 @@
   ],
   "this_commit": {
     "is_code_bearing": false,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit corrects exactly one condition — the repository formatter’s shape for this file, which run 33203292378 (#74) refused at the quality ratchet — and records the commit b1ba34b that run measured. Documents only, no code, no test, no migration. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown."
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it: the SHA does not exist until the commit is written, and writing it changes the SHA. This commit corrects exactly one condition — the two mutation figures run 33203747844 (#75) refused — and records the commit 0d8c5bd that run measured. Documents only, no code, no test, no migration. THAT CLAIM IS CHECKED, NOT TAKEN ON TRUST: scripts/check-final-state.ts reads the paths HEAD changed, wherever git can answer, and refuses this declaration over any path outside docs/ and root Markdown."
   },
   "commits_ahead_of_the_evidence_commit": [
     {
@@ -677,6 +677,41 @@
         ]
       },
       "note": "The Release Train 1 documentation closeout. Its exact-SHA run 33203292378 (#74) FAILED on one step of one job — the quality ratchet, over the formatting of this very file, which had been rewritten by a JSON serializer rather than by the repository formatter. The other three jobs were green, the populated upgrade drill and the fresh/upgraded fingerprint convergence among them. It is DOCUMENTATION-ONLY, so the red run is disclosed here in full and moves neither commit_budget.used nor commit_budget.failed_ci, exactly as the R7-C1 closeout 37c7662 and the R7-C2 closeout 1f36bbd are recorded above."
+    },
+    {
+      "sha": "0d8c5bdfbf3e170b03f6b20193768f2db14b79da",
+      "short": "0d8c5bd",
+      "subject": "RT1: the final-state record takes the repository formatter's shape",
+      "code_bearing": false,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 33203747844,
+        "run_number": 75,
+        "run_attempt": 1,
+        "head_sha": "0d8c5bdfbf3e170b03f6b20193768f2db14b79da",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 1,
+        "jobs": [
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          }
+        ]
+      },
+      "note": "The formatting correction for the record itself. Its exact-SHA run 33203747844 (#75) FAILED on one step of one job — the published-figures gate — because registering the administration outbox dispatcher moved the runtime mutation registry from 62 to 63 while mutations_declared and mutations_killed still published 62; those two figures read from the mutation-kill artifact that only a CI run produces, so no local run could see the disagreement. The battery itself PASSED in that run, as did the populated upgrade drill, the container build and the secret scan, and its mutation artifact records 63 declared / 63 killed / 0 survived with tree_dirty=false. DOCUMENTATION-ONLY, so the red run is disclosed here and moves neither commit_budget.used nor commit_budget.failed_ci."
     }
   ]
 }
