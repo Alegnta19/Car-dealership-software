@@ -626,6 +626,17 @@ export const MUTATIONS: Mutation[] = [
     testFile: 'tests/worker-jobs.test.ts',
     testName: 'the worker pass delivers a due administration outbox event, exactly once',
   },
+  {
+    id: 'worker_forgets_listing_dispatch',
+    control:
+      'RT2: the worker runs the listing dispatcher, so a publication requested through ' +
+      'the UI actually reaches the provider instead of sitting in the outbox for ever',
+    file: 'apps/worker/src/main.ts',
+    from: '  { name: LISTING_DISPATCH_JOB, run: () => runListingDispatchOnce() },\n',
+    to: '',
+    testFile: 'tests/inventory-listing.test.ts',
+    testName: 'the worker pass publishes a due listing, exactly once',
+  },
 
   /*
    * ── FBL-020-R5 §1.5 – §1.11: the runtime controls this revision added ────────

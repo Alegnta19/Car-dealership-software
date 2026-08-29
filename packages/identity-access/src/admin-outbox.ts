@@ -123,9 +123,18 @@ export async function dispatchDueAdminOutboxEvents(options?: {
     let claimedEventId: string | null = null;
     try {
       const outcome = await withTransaction(async (tx) => {
+        // RELEASE TRAIN 2: THIS DISPATCHER CLAIMS ONLY ITS OWN EVENT TYPES.
+        //
+        // `admin_outbox` is domain-neutral and Release Train 2 enqueues its
+        // listing deliveries on the same table. Without this predicate the two
+        // dispatchers race for every row, and whichever won would mark the
+        // OTHER domain's event delivered without delivering it — a silently
+        // lost publication. The `admin.` prefix is the namespace this file has
+        // always written, so the filter narrows nothing that existed before it.
         const claimed = await tx.query(
           `SELECT * FROM admin_outbox
             WHERE delivered_at IS NULL AND available_at <= NOW()
+              AND event_type LIKE 'admin.%'
             ORDER BY occurred_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1`,

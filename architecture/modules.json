@@ -90,7 +90,8 @@
         "@dealer/database",
         "@dealer/fixed-ops",
         "@dealer/organization",
-        "@dealer/identity-access"
+        "@dealer/identity-access",
+        "@dealer/inventory"
       ],
       "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
@@ -107,7 +108,8 @@
         "@dealer/database",
         "@dealer/fixed-ops",
         "@dealer/organization",
-        "@dealer/identity-access"
+        "@dealer/identity-access",
+        "@dealer/inventory"
       ],
       "prohibited": [
         "queues, outbox tables and schedulers until FBL-040",
@@ -140,6 +142,26 @@
       "allowedDealerDeps": ["@dealer/contracts", "@dealer/platform", "@dealer/database"],
       "prohibited": ["express", "provider SDKs", "fixed-ops business rules"],
       "database": "owns the FBL-020 organization tables (migration 055)",
+      "status": "active"
+    },
+    "@dealer/inventory": {
+      "path": "packages/inventory",
+      "owner": "inventory-domain",
+      "purpose": "Release Train 2 vehicle acquisition and inventory: the acquisition party, the canonical VIN-identified vehicle, its stock identity and lifecycle, acquisition documents and costs, merchandising (versioned pricing, media, features, holds, transfers, aging) and listing publication reconciled through bounded provider adapters.",
+      "publicEntry": "packages/inventory/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/identity-access"
+      ],
+      "prohibited": [
+        "express",
+        "provider SDKs",
+        "fixed-ops business rules",
+        "service/repair workflow"
+      ],
+      "database": "owns the Release Train 2 vehicle, party, stock, merchandising and listing tables (migration 062)",
       "status": "active"
     },
     "@dealer/identity-access": {

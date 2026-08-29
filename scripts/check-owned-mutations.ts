@@ -137,6 +137,44 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'same contract mutations.ts carries, over the migration-061 administration tables',
   },
   {
+    file: 'packages/inventory/src/parties.ts',
+    because:
+      'RELEASE TRAIN 2’s acquisition-party services: create, correct, consent and the ' +
+      'controlled merge, each under the server-controlled tenant context with a real ' +
+      'acting user link, an advanced authorization_version and one audit row in the ' +
+      'same transaction — and the merge preserves both records rather than deleting one',
+  },
+  {
+    file: 'packages/inventory/src/vehicles.ts',
+    because:
+      'RELEASE TRAIN 2’s canonical vehicle: find-or-create by VIN and the provider ' +
+      'decode, both attributed and versioned; the VIN itself is never rewritten, ' +
+      'because that would rekey the identity the whole train is built on',
+  },
+  {
+    file: 'packages/inventory/src/stock.ts',
+    because:
+      'RELEASE TRAIN 2’s stock identity: acquisition, lifecycle transitions, documents ' +
+      'and costs, every one taking an acting user link, advancing the row’s version and ' +
+      'writing one audit row in the transaction that made the change',
+  },
+  {
+    file: 'packages/inventory/src/merchandising.ts',
+    because:
+      'RELEASE TRAIN 2’s merchandising: versioned pricing, media, features, holds and ' +
+      'rooftop transfers. Pricing supersedes rather than overwrites and features are ' +
+      'replaced as a whole set anchored on the parent stock item’s version, so every ' +
+      'change is attributable and none of it destroys what it replaced',
+  },
+  {
+    file: 'packages/inventory/src/listings.ts',
+    because:
+      'RELEASE TRAIN 2’s publication: the listing state machine and the dispatcher that ' +
+      'carries it to the provider. Every state change commits with its outbox event, its ' +
+      'delivery-ledger row and its audit row, which is what makes an at-least-once ' +
+      'delivery an exactly-once business effect',
+  },
+  {
     file: 'scripts/upgrade-precheck-refusals-057.ts',
     because:
       'FBL-020-R7-C2 §4’s fifth probe injector: it plants ONE retained cross-tenant ' +
@@ -243,6 +281,25 @@ const EXPECTED_OWNED_TABLES = [
   'dealership_policies',
   'dealership_settings',
   'staff_invitations',
+  // RELEASE TRAIN 2 — migration 062's vehicle acquisition and inventory
+  // domain. Twelve tables carry authorization_version and are therefore inside
+  // this boundary; the three append-only ledgers 062 also adds
+  // (vehicle_decodes, party_merges, listing_events) deliberately do not, since
+  // an evidence row is never updated and has no version to advance. Every
+  // write to these goes through the attributed services in
+  // packages/inventory/src (declared in OWNERS below).
+  'parties',
+  'party_consents',
+  'stock_costs',
+  'stock_documents',
+  'stock_features',
+  'stock_holds',
+  'stock_items',
+  'stock_listings',
+  'stock_media',
+  'stock_prices',
+  'stock_transfers',
+  'vehicles',
 ] as const;
 
 /**

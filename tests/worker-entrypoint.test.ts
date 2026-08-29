@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 import {
   ADMIN_OUTBOX_DISPATCH_JOB,
+  LISTING_DISPATCH_JOB,
   LOGIN_TRANSACTION_EXPIRY_JOB,
   REAUTHENTICATION_EXPIRY_JOB,
   SUPPORT_ACCESS_EXPIRY_JOB,
@@ -66,8 +67,9 @@ describe('the worker job registry, through the compiled entry point (FBL-020-R5 
         LOGIN_TRANSACTION_EXPIRY_JOB,
         REAUTHENTICATION_EXPIRY_JOB,
         ADMIN_OUTBOX_DISPATCH_JOB,
+        LISTING_DISPATCH_JOB,
       ],
-      'the compiled worker must register the three sweeps and the admin outbox dispatcher',
+      'the compiled worker must register the three sweeps and both outbox dispatchers',
     );
 
     /*
