@@ -16,8 +16,17 @@
  * another tenant resolves to null exactly like a resource that does not exist
  * — non-enumeration starts here — and an unknown resource type resolves to
  * nothing: deny, never guess.
+ *
+ * RT2-C1 §2 — THE LOOKUP RUNS INSIDE A TENANT-BOUND TRANSACTION. It used to
+ * run on a bare pooled connection and hand the tenant across as an argument,
+ * which meant `resource_org_leaf` had nothing but that argument to go on: any
+ * holder of the runtime login could name another dealership's tenant beside a
+ * known resource id and be told which rooftop owned it. The function now
+ * resolves only within the tenant bound to its transaction, so the engine
+ * binds it here — from ITS OWN authorization-bound tenant, the actor's or a
+ * support request's approved target, never a value taken off the request.
  */
-import { query } from '@dealer/database';
+import { withTenantTransaction } from '@dealer/database';
 import type { OrganizationNodeRef, ResourceScopeResolver } from '@dealer/identity-access';
 
 interface Row {
@@ -29,11 +38,9 @@ export const resolveServiceResourceScope: ResourceScopeResolver = async (
   resourceType: string,
   resourceId: string,
 ): Promise<OrganizationNodeRef | null> => {
-  const result = await query(`SELECT resource_org_leaf($1, $2, $3) AS leaf`, [
-    tenantId,
-    resourceType,
-    resourceId,
-  ]);
+  const result = await withTenantTransaction(tenantId, (tx) =>
+    tx.query(`SELECT resource_org_leaf($1, $2, $3) AS leaf`, [tenantId, resourceType, resourceId]),
+  );
   const leaf = (result.rows[0] as Row | undefined)?.leaf;
   if (leaf === null || leaf === undefined) return null;
   return { level: 'rooftop', id: String(leaf) };

@@ -366,6 +366,10 @@ router.put(
       tenantId: tenantOf(req),
       partyId,
       expectedVersion: Number(b.expected_version),
+      // The same explicit staff decision the create path takes: retyping one
+      // customer's email onto another record is refused unless a human says
+      // these really are two people who share it.
+      allowDuplicate: b.allow_duplicate === true,
       details: {
         displayName: typeof b.display_name === 'string' ? b.display_name : undefined,
         givenName: typeof b.given_name === 'string' ? b.given_name : undefined,

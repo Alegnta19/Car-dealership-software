@@ -636,7 +636,7 @@
           "required": true,
           "variants": [
             {
-              "sha256": "ab31183daa2bc7add62db33313c1608ad3e4c5ed656393b3f1fcb4f2f58151ab",
+              "sha256": "755b8baee4fd38d2b66d614ab0a264e1112c7e0bd7dbcf080b61e140ea3c55ae",
               "note": "the committed RELEASE TRAIN 2 vehicle-acquisition-and-inventory migration, carried unmutated while a 057 control body is probed"
             }
           ]

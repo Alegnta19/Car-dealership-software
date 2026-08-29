@@ -78,7 +78,7 @@ CREATE TABLE parties (
   organization_name       TEXT CHECK (organization_name IS NULL OR length(organization_name) BETWEEN 1 AND 200),
   email                   TEXT CHECK (email IS NULL OR (length(email) BETWEEN 3 AND 320 AND email LIKE '%@%')),
   -- Digits only, optionally leading '+'. The service normalizes before writing,
-  -- so the uniqueness index below compares like with like.
+  -- so the indexes below compare like with like.
   phone                   TEXT CHECK (phone IS NULL OR phone ~ '^\+?[0-9]{7,15}$'),
   address_line1           TEXT CHECK (address_line1 IS NULL OR length(address_line1) BETWEEN 1 AND 200),
   address_city            TEXT CHECK (address_city IS NULL OR length(address_city) BETWEEN 1 AND 100),
@@ -91,6 +91,16 @@ CREATE TABLE parties (
   -- history are preserved rather than deleted, which is what "controlled
   -- merge" means. Nothing may reference a merged party as if it were live.
   merged_into_party_id    UUID,
+  -- AN EXPLICIT STAFF OVERRIDE, not a preference: this party is allowed to
+  -- share an identifying email or phone with another active party because a
+  -- human looked at the candidates and said they are different people.
+  -- Households really do share one inbox and one landline, and the platform
+  -- must be able to say so out loud rather than make staff falsify a digit.
+  -- The flag is what lets the backstop indexes below be REAL and LIVABLE at
+  -- the same time: a row nobody overrode must be unique on its contact
+  -- details, an overridden row is outside the index, and the override itself
+  -- is recorded in `audit_events` against the actor who made it.
+  contact_sharing_override BOOLEAN NOT NULL DEFAULT false,
   created_by_user_link_id UUID NOT NULL,
   updated_by_user_link_id UUID NOT NULL,
   authorization_version   BIGINT NOT NULL DEFAULT 1,
@@ -105,24 +115,53 @@ CREATE TABLE parties (
   FOREIGN KEY (tenant_id, updated_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
 );
 
--- DETECTION INDEXES, DELIBERATELY NOT UNIQUE.
+-- DUPLICATE CONTROL: DETECTION INDEXES, PLUS A CONDITIONAL BACKSTOP.
 --
--- An earlier draft made (tenant, email) and (tenant, phone) UNIQUE over active
--- parties, which reads like strong duplicate prevention and is in fact a
--- product defect: households share an email address and a landline, so a
--- spouse trading in a second car would have been unable to exist. Two people
--- with one contact address is a REAL state, and a schema that cannot express
--- it forces staff to falsify data.
+-- An earlier draft made (tenant, email) and (tenant, phone) UNCONDITIONALLY
+-- UNIQUE over active parties. That reads like strong duplicate prevention and
+-- is in fact a product defect: households share an email address and a
+-- landline, so a spouse trading in a second car would have been unable to
+-- exist. Two people with one contact address is a REAL state, and a schema
+-- that cannot express it forces staff to falsify data.
 --
--- Duplicate control therefore lives where the judgement belongs — the service
--- searches these indexes before creating, returns the candidates it found, and
--- only creates anyway when a human explicitly decides they are different
--- people. That decision is audited. The indexes exist to make the search fast
--- and the detection reliable, not to refuse the second row.
+-- The correction to that was to drop the unique indexes entirely and leave
+-- the judgement to the service — and THAT was a second defect, in the
+-- opposite direction: a search followed by an insert is not a decision, it is
+-- a guess that two concurrent requests can both win, and the comments in the
+-- service claimed a database backstop that no longer existed. RT2-C1 §1 puts
+-- enforcement back, made CONDITIONAL on the explicit override above rather
+-- than unconditional:
+--
+--   * `idx_parties_active_email` / `idx_parties_active_phone` are DETECTION.
+--     They are not unique, they cover every active party including the
+--     deliberately shared ones, and they are what `findDuplicateCandidates`
+--     searches to show staff who they would be duplicating.
+--   * `uq_parties_unshared_email` / `uq_parties_unshared_phone` are the
+--     BACKSTOP. They are unique across the active parties nobody overrode, so
+--     a second unshared row carrying the same normalized contact value is
+--     impossible even if the service's decision were skipped or lost a race —
+--     while a household member created under an explicit, audited override
+--     sits outside the index and stays perfectly representable.
+--
+-- The service still decides first, under a transaction-scoped advisory lock
+-- on the contact values, so the normal answer to a race is one creation and
+-- one honest 'duplicate' rather than one creation and one constraint
+-- violation. The indexes are what make that answer TRUE rather than merely
+-- likely.
+--
+-- Email is indexed on `lower(email)` because the service lower-cases before
+-- writing, and a value that somehow reached the table without passing through
+-- the service must still collide with one that did.
 CREATE INDEX idx_parties_active_email
   ON parties (tenant_id, lower(email)) WHERE status = 'active' AND email IS NOT NULL;
 CREATE INDEX idx_parties_active_phone
   ON parties (tenant_id, phone) WHERE status = 'active' AND phone IS NOT NULL;
+CREATE UNIQUE INDEX uq_parties_unshared_email
+  ON parties (tenant_id, lower(email))
+  WHERE status = 'active' AND email IS NOT NULL AND contact_sharing_override = false;
+CREATE UNIQUE INDEX uq_parties_unshared_phone
+  ON parties (tenant_id, phone)
+  WHERE status = 'active' AND phone IS NOT NULL AND contact_sharing_override = false;
 CREATE INDEX idx_parties_name ON parties (tenant_id, lower(display_name));
 
 -- Contact consent, per channel. Absence of a row means UNKNOWN, and the
@@ -659,19 +698,26 @@ GRANT DELETE ON stock_features TO dealership_runtime;
 --
 -- It was SECURITY INVOKER, and that was correct while every table it read was
 -- unsecured. The two branches below read RLS-SECURED tables, and the resolver
--- is called by the policy engine BEFORE any tenant context exists — the engine
--- is deciding whether the caller may act, so nothing has opened a transaction
--- on the caller's behalf yet. As an invoker function it would therefore see NO
--- ROWS under the runtime login, return NULL, and the engine would report every
--- stock item as nonexistent: the entire train would 404 for legitimate staff
--- while passing every owner-connection test.
+-- runs while the engine is still DECIDING whether the caller may act. As an
+-- invoker function under the runtime login it would see NO ROWS, return NULL,
+-- and the engine would report every stock item as nonexistent: the entire
+-- train would 404 for legitimate staff while passing every owner-connection
+-- test. So the resolver reads as the definer, with `search_path` pinned so no
+-- schema ahead of `public` can substitute a table.
 --
--- Running as the definer resolves the row and CANNOT widen anyone's authority:
--- `p_tenant` is supplied by the engine from AUTHENTICATED STATE, never by the
--- caller, and every branch filters on it, so the function can only ever answer
--- "which rooftop of the tenant you already are" — and the answer is then fed
--- back into the ancestry walk that actually decides reach. `search_path` is
--- pinned so no schema ahead of `public` can substitute a table.
+-- ── AND WHY BEING `SECURITY DEFINER` IS NOT ENOUGH ──────────────────────────
+--
+-- An earlier revision of this migration justified that power by asserting that
+-- "`p_tenant` is supplied by the engine from AUTHENTICATED STATE, never by the
+-- caller". That was FALSE, and provably so: `p_tenant` is a function argument,
+-- and anything holding the runtime login can pass whatever it likes. The
+-- assertion described how the SERVER calls the function, not what the FUNCTION
+-- requires — and a security property that only holds while every caller
+-- behaves is not a property.
+--
+-- The gate in the body is what makes the claim true. The engine now resolves
+-- inside a tenant-bound transaction (see the Fixed Ops scope resolver), and
+-- the function trusts THE CONTEXT rather than the argument.
 --
 -- ── WHICH RESOURCE TYPES THIS TRAIN REGISTERS, AND WHY ONLY TWO ─────────────
 --
@@ -694,60 +740,103 @@ RETURNS uuid
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
-DECLARE leaf uuid;
+DECLARE
+  leaf   uuid;
+  ctx    uuid;
+  tenant uuid;
 BEGIN
+  -- ── THE TRUSTED PATH GATE (RT2-C1 §2) ─────────────────────────────────────
+  --
+  -- This function reads PAST row security, and it has to: the authorization
+  -- engine must resolve a resource in order to decide whether its caller may
+  -- see it, and that decision cannot itself be gated on the answer.
+  --
+  -- Power like that is only safe while it cannot be ADDRESSED directly, and
+  -- `p_tenant` made it addressable. An ordinary runtime connection could name
+  -- another dealership's tenant beside a known stock or listing id and be told
+  -- which rooftop owns it — an existence-and-location oracle over exactly the
+  -- rows row security exists to hide, needing no forged context at all, just
+  -- an argument. Row security was intact the whole time; the oracle simply
+  -- walked around it.
+  --
+  -- So a caller-selected tenant is no longer authority. The tenant that counts
+  -- is the one the SERVER bound to this transaction from the authenticated
+  -- session, and `p_tenant` is now only a claim, honoured when it AGREES with
+  -- that context and refused when it does not. A runtime session that was
+  -- never bound resolves nothing at all.
+  --
+  -- One caller still resolves by argument: a role that already reads every row
+  -- without asking — a superuser, or the migration and evidence owners running
+  -- the policy-evidence triggers and the upgrade drills, which call this
+  -- function while validating a decision row. For them it is not an oracle,
+  -- because it returns nothing they could not read straight from the table.
+  ctx := app_tenant_ctx();
+  IF ctx IS NOT NULL THEN
+    IF p_tenant IS DISTINCT FROM ctx THEN
+      RETURN NULL;
+    END IF;
+    tenant := ctx;
+  ELSIF to_regrole('dealership_runtime') IS NOT NULL
+    AND pg_has_role(session_user, 'dealership_runtime', 'USAGE')
+    AND NOT COALESCE((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false)
+  THEN
+    RETURN NULL;
+  ELSE
+    tenant := p_tenant;
+  END IF;
+
   IF p_type = 'service_appointment' THEN
     SELECT t.location_id INTO leaf FROM service_appointments t
-     WHERE t.tenant_id = p_tenant AND t.appointment_id = p_id;
+     WHERE t.tenant_id = tenant AND t.appointment_id = p_id;
   ELSIF p_type = 'repair_order' THEN
     SELECT t.location_id INTO leaf FROM repair_orders t
-     WHERE t.tenant_id = p_tenant AND t.ro_id = p_id;
+     WHERE t.tenant_id = tenant AND t.ro_id = p_id;
   ELSIF p_type = 'service_queue_item' THEN
     SELECT t.location_id INTO leaf FROM service_queue_items t
-     WHERE t.tenant_id = p_tenant AND t.queue_item_id = p_id;
+     WHERE t.tenant_id = tenant AND t.queue_item_id = p_id;
   ELSIF p_type = 'service_waitlist_entry' THEN
     SELECT t.location_id INTO leaf FROM service_waitlist_entries t
-     WHERE t.tenant_id = p_tenant AND t.waitlist_entry_id = p_id;
+     WHERE t.tenant_id = tenant AND t.waitlist_entry_id = p_id;
   ELSIF p_type = 'mpi_session' THEN
     SELECT ro.location_id INTO leaf FROM mpi_sessions t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.mpi_session_id = p_id;
+     WHERE t.tenant_id = tenant AND t.mpi_session_id = p_id;
   ELSIF p_type = 'ro_line_item' THEN
     SELECT ro.location_id INTO leaf FROM ro_line_items t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.line_item_id = p_id;
+     WHERE t.tenant_id = tenant AND t.line_item_id = p_id;
   ELSIF p_type = 'ro_parts_line' THEN
     SELECT ro.location_id INTO leaf FROM ro_parts_lines t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.part_line_id = p_id;
+     WHERE t.tenant_id = tenant AND t.part_line_id = p_id;
   ELSIF p_type = 'ro_sublet_job' THEN
     SELECT ro.location_id INTO leaf FROM ro_sublet_jobs t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.sublet_job_id = p_id;
+     WHERE t.tenant_id = tenant AND t.sublet_job_id = p_id;
   ELSIF p_type = 'service_portal_task' THEN
     SELECT ro.location_id INTO leaf FROM service_portal_tasks t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.portal_task_id = p_id;
+     WHERE t.tenant_id = tenant AND t.portal_task_id = p_id;
   ELSIF p_type = 'tech_work_ticket' THEN
     SELECT ro.location_id INTO leaf FROM tech_work_tickets t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.ticket_id = p_id;
+     WHERE t.tenant_id = tenant AND t.ticket_id = p_id;
   ELSIF p_type = 'warranty_claim' THEN
     SELECT ro.location_id INTO leaf FROM warranty_claims t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
-     WHERE t.tenant_id = p_tenant AND t.claim_id = p_id;
+     WHERE t.tenant_id = tenant AND t.claim_id = p_id;
   ELSIF p_type = 'comeback_case' THEN
     SELECT ro.location_id INTO leaf FROM comeback_cases t
       JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.original_ro_id
-     WHERE t.tenant_id = p_tenant AND t.comeback_id = p_id;
+     WHERE t.tenant_id = tenant AND t.comeback_id = p_id;
   -- ── RELEASE TRAIN 2 ──────────────────────────────────────────────────────
   ELSIF p_type = 'stock_item' THEN
     SELECT t.rooftop_id INTO leaf FROM stock_items t
-     WHERE t.tenant_id = p_tenant AND t.stock_item_id = p_id;
+     WHERE t.tenant_id = tenant AND t.stock_item_id = p_id;
   ELSIF p_type = 'stock_listing' THEN
     SELECT si.rooftop_id INTO leaf FROM stock_listings t
       JOIN stock_items si ON si.tenant_id = t.tenant_id AND si.stock_item_id = t.stock_item_id
-     WHERE t.tenant_id = p_tenant AND t.listing_id = p_id;
+     WHERE t.tenant_id = tenant AND t.listing_id = p_id;
   END IF;
   RETURN leaf;
 END;

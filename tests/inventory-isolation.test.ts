@@ -73,6 +73,7 @@ describe(
       rooftopA: string;
       rooftopB: string;
       stockItemId: string;
+      listingId: string;
       partyId: string;
       admin: string;
     }
@@ -170,11 +171,19 @@ describe(
          VALUES ($1, 'person', $2, $3, $3) RETURNING party_id`,
         [tenantId, `${name} Customer`, admin],
       );
+      const listing = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `INSERT INTO stock_listings (tenant_id, stock_item_id, channel, state,
+                                     created_by_user_link_id, updated_by_user_link_id)
+         VALUES ($1, $2, 'marketplace', 'draft', $3, $3) RETURNING listing_id`,
+        [tenantId, stockItemId, admin],
+      );
       return {
         tenantId,
         rooftopA: a.rooftopId,
         rooftopB: b.rooftopId,
         stockItemId,
+        listingId: String((listing.rows[0] as { listing_id: unknown }).listing_id),
         partyId: String((party.rows[0] as { party_id: unknown }).party_id),
         admin,
       };
@@ -340,6 +349,95 @@ describe(
           `${table} is empty under a forged context`,
         );
       }
+    });
+
+    // ── RT2-C1 §2: the resource resolver is not a lookup service ─────────────
+    //
+    // `resource_org_leaf` reads past row security so the authorization engine
+    // can resolve a resource before deciding who may see it. It used to take
+    // the tenant as an ARGUMENT, which made that power directly addressable: a
+    // runtime connection could name another dealership beside a known stock or
+    // listing id and be told which rooftop owned it — no forged context, no
+    // broken policy, just a function call. These probes are run on the genuine
+    // `dealership_app` connection, because that is who could ask.
+
+    async function leaf(tenantId: string, type: string, id: string): Promise<string | null> {
+      const r = await app.query(`SELECT resource_org_leaf($1, $2, $3) AS leaf`, [
+        tenantId,
+        type,
+        id,
+      ]);
+      const value = (r.rows[0] as { leaf: string | null }).leaf;
+      return value === null ? null : String(value);
+    }
+
+    test('the runtime cannot resolve another dealership’s stock or listing by naming its tenant', async () => {
+      await contextOf(alpha.tenantId);
+
+      // CONTROL FIRST: inside its own bound tenant the resolver still answers,
+      // which is what the authorization engine depends on. A test that only
+      // showed nulls would pass against a function that had simply stopped
+      // working.
+      assert.equal(
+        await leaf(alpha.tenantId, 'stock_item', alpha.stockItemId),
+        alpha.rooftopA,
+        'CONTROL: Alpha resolves its own car to its own rooftop',
+      );
+      assert.equal(
+        await leaf(alpha.tenantId, 'stock_listing', alpha.listingId),
+        alpha.rooftopA,
+        'CONTROL: Alpha resolves its own listing to its own rooftop',
+      );
+
+      // …and naming Beta's tenant beside Beta's own identifiers — every value
+      // an attacker could have — answers nothing.
+      assert.equal(
+        await leaf(beta.tenantId, 'stock_item', beta.stockItemId),
+        null,
+        "Beta's car does not resolve for an Alpha-bound session",
+      );
+      assert.equal(
+        await leaf(beta.tenantId, 'stock_listing', beta.listingId),
+        null,
+        "Beta's listing does not resolve for an Alpha-bound session",
+      );
+
+      // Nor does mixing the two: Alpha's own tenant with Beta's identifiers,
+      // which is what a caller would try once the direct form stopped working.
+      assert.equal(await leaf(alpha.tenantId, 'stock_item', beta.stockItemId), null);
+      assert.equal(await leaf(alpha.tenantId, 'stock_listing', beta.listingId), null);
+
+      // THE REFUSAL IS A REFUSAL, NOT AN ABSENCE. Bind the same connection to
+      // Beta and those exact identifiers resolve — so the nulls above are the
+      // gate declining to answer Alpha, not Beta's rows failing to exist or
+      // the registry having forgotten how to reach them.
+      await contextOf(beta.tenantId);
+      assert.equal(await leaf(beta.tenantId, 'stock_item', beta.stockItemId), beta.rooftopA);
+      assert.equal(await leaf(beta.tenantId, 'stock_listing', beta.listingId), beta.rooftopA);
+    });
+
+    test('with no tenant context the runtime resolves nothing at all', async () => {
+      await noContext();
+      // Every row is named beside the tenant that genuinely owns it — the
+      // strongest form of the question, and still the answer is nothing,
+      // because the argument is not authority any more.
+      for (const [tenantId, type, id] of [
+        [alpha.tenantId, 'stock_item', alpha.stockItemId],
+        [alpha.tenantId, 'stock_listing', alpha.listingId],
+        [beta.tenantId, 'stock_item', beta.stockItemId],
+        [beta.tenantId, 'stock_listing', beta.listingId],
+      ] as const) {
+        assert.equal(
+          await leaf(tenantId, type, id),
+          null,
+          `${type} resolves to nothing without a server-set tenant`,
+        );
+      }
+
+      // …and a forged context naming no real dealership resolves nothing
+      // either, so the gate is not merely "any context will do".
+      await contextOf(randomUUID());
+      assert.equal(await leaf(alpha.tenantId, 'stock_item', alpha.stockItemId), null);
     });
 
     // ── the rooftop boundary, through the real HTTP stack ────────────────────

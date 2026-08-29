@@ -10,12 +10,20 @@
  *   * CONSENT IS OPT-IN EVIDENCE. A channel with no row is UNKNOWN, and
  *     unknown is not permission. `contactableOn` answers the only question a
  *     caller should ask, so no caller has to remember that rule.
- *   * DUPLICATES ARE DETECTED BEFORE THEY ARE CREATED, and refused by the
- *     database if the detection is skipped. `findDuplicateCandidates` is the
- *     search; migration 062's partial unique indexes on (tenant, email) and
- *     (tenant, phone) for ACTIVE parties are the backstop, and a 23505 from
- *     them is translated back into the same 'duplicate' answer rather than
- *     escaping as a database error.
+ *   * DUPLICATES ARE DECIDED, NOT GUESSED AT. The decision is made under a
+ *     transaction-scoped advisory lock on the normalized contact values, taken
+ *     in a stable order, so two requests carrying the same email cannot both
+ *     look, both find nothing, and both write. One creates and the other is
+ *     told it is a duplicate, and the refusal names who it collided with.
+ *     Migration 062's `uq_parties_unshared_*` indexes are the backstop
+ *     underneath that — unique across the active parties nobody overrode — and
+ *     a 23505 from them is translated back into the same 'duplicate' answer
+ *     rather than escaping as a database error.
+ *   * SHARING CONTACT DETAILS IS A DECISION SOMEONE MAKES, not a thing that
+ *     merely happens. A household shares an inbox and a landline, so the
+ *     second record is creatable — but only when a human passes the explicit
+ *     override, and the override is written into `audit_events` naming the
+ *     parties it concerns and which field is shared. Never the values.
  *   * A MERGE PRESERVES BOTH RECORDS. The absorbed party is not deleted: it
  *     keeps its row, its identifiers and its history, and gains a pointer to
  *     the survivor. Relationships are repointed, the survivor adopts consents
@@ -58,6 +66,8 @@ export interface PartyView {
   readonly addressCountry: string | null;
   readonly status: PartyStatus;
   readonly mergedIntoPartyId: string | null;
+  /** A human decided this record may share contact details with another. */
+  readonly contactSharingOverride: boolean;
   readonly authorizationVersion: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -149,6 +159,7 @@ function mapParty(row: Row): PartyView {
     addressCountry: row.address_country === null ? null : String(row.address_country),
     status: String(row.status) as PartyStatus,
     mergedIntoPartyId: row.merged_into_party_id === null ? null : String(row.merged_into_party_id),
+    contactSharingOverride: row.contact_sharing_override === true,
     authorizationVersion: Number(row.authorization_version),
     createdAt: new Date(row.created_at as string).toISOString(),
     updatedAt: new Date(row.updated_at as string).toISOString(),
@@ -158,53 +169,132 @@ function mapParty(row: Row): PartyView {
 const PARTY_COLUMNS = `party_id, party_type, display_name, given_name, family_name,
        organization_name, email, phone, address_line1, address_city, address_region,
        address_postal_code, address_country, status, merged_into_party_id,
-       authorization_version, created_at, updated_at`;
+       contact_sharing_override, authorization_version, created_at, updated_at`;
 
 // ── duplicate detection ─────────────────────────────────────────────────────
 
 export interface DuplicateCandidate {
   readonly party: PartyView;
-  /** Which fact matched — what a human needs to judge the suggestion. */
-  readonly matchedOn: 'email' | 'phone' | 'name';
+  /** Which identifying fact matched — what a human needs to judge the answer. */
+  readonly matchedOn: 'email' | 'phone';
+}
+
+// THE UNLOCKED SEARCH THAT USED TO LIVE HERE IS GONE (RT2-C1 §1).
+//
+// `findDuplicateCandidates` read the same rows as `identifyingCollisions`
+// below, but without the advisory lock — it was the read half of the
+// read-then-write that let two concurrent creates both find nothing. Once the
+// decision moved under the lock, nothing called it, and an exported helper
+// named "find duplicate candidates" sitting beside the real gate is a trap: it
+// looks like the duplicate check, and calling it instead reintroduces exactly
+// the defect this correction removed.
+//
+// Its one distinguishing feature was a NAME arm — same display name, offered
+// as a suggestion rather than a collision. Nothing ever saw it: both call
+// sites filtered name matches out before returning, so it was computed and
+// discarded on every request. Staff search for people through
+// `searchParties`, which is what the customers screen actually calls.
+
+// ── the collision decision ──────────────────────────────────────────────────
+
+/**
+ * SERIALIZE THE DECISION, IN A STABLE ORDER.
+ *
+ * A duplicate check that reads and then writes is not a decision — it is a
+ * guess, and two requests carrying the same email can both make it, both find
+ * nothing, and both write. Every path that decides whether a contact value is
+ * already taken takes a TRANSACTION-SCOPED ADVISORY LOCK on that value first,
+ * so competing decisions queue instead of racing: the loser's re-read happens
+ * after the winner has committed, and sees it.
+ *
+ * The keys are SORTED before they are taken. A create naming both an email and
+ * a phone needs two locks, and two such creates that took them in opposite
+ * orders would deadlock. Sorting the fully-qualified key strings gives every
+ * caller in the cluster one order, so they queue rather than collide.
+ *
+ * The lock is advisory rather than a row lock because the row being protected
+ * is the one that does NOT exist yet — there is nothing to lock but the value.
+ * It is transaction-scoped, so it is released by COMMIT or ROLLBACK and a
+ * failed request cannot strand it.
+ */
+async function lockContactDecision(
+  executor: Executor,
+  tenantId: string,
+  email: string | null,
+  phone: string | null,
+): Promise<void> {
+  const keys: string[] = [];
+  if (email !== null) keys.push(`party-contact:${tenantId}:email:${email}`);
+  if (phone !== null) keys.push(`party-contact:${tenantId}:phone:${phone}`);
+  keys.sort();
+  for (const key of keys) {
+    await executor.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+  }
 }
 
 /**
- * The candidates a new party would collide with, strongest evidence first.
- * Email and phone are identifying; a name alone is a suggestion and never
- * blocks a creation, because two people genuinely share a name.
+ * The ACTIVE parties whose identifying contact details this write would
+ * collide with — email and phone only, never a name, and never the party
+ * being written itself. Call it holding `lockContactDecision`.
  */
-export async function findDuplicateCandidates(
+async function identifyingCollisions(
   executor: Executor,
   tenantId: string,
-  probe: { email?: string | null; phone?: string | null; displayName?: string | null },
+  email: string | null,
+  phone: string | null,
+  excludePartyId: string | null,
 ): Promise<DuplicateCandidate[]> {
-  const email = normalizeEmail(probe.email);
-  const phone = normalizePhone(probe.phone);
-  const name = (probe.displayName ?? '').trim().toLowerCase();
-  if (email === null && phone === null && name.length === 0) return [];
-
+  if (email === null && phone === null) return [];
   const found = await executor.query(
     `SELECT ${PARTY_COLUMNS},
-            CASE WHEN $2::text IS NOT NULL AND lower(email) = $2 THEN 'email'
-                 WHEN $3::text IS NOT NULL AND phone = $3 THEN 'phone'
-                 ELSE 'name' END AS matched_on
+            CASE WHEN $2::text IS NOT NULL AND lower(email) = $2 THEN 'email' ELSE 'phone' END
+              AS matched_on
        FROM parties
       WHERE tenant_id = $1
         AND status = 'active'
+        AND ($4::uuid IS NULL OR party_id <> $4)
         AND ( ($2::text IS NOT NULL AND lower(email) = $2)
-           OR ($3::text IS NOT NULL AND phone = $3)
-           OR ($4::text <> '' AND lower(display_name) = $4) )
-      ORDER BY 1
+           OR ($3::text IS NOT NULL AND phone = $3) )
+      ORDER BY party_id
       LIMIT 25`,
-    [tenantId, email, phone, name],
+    [tenantId, email, phone, excludePartyId],
   );
-  const rank: Record<string, number> = { email: 0, phone: 1, name: 2 };
-  return (found.rows as Row[])
-    .map((r) => ({
-      party: mapParty(r),
-      matchedOn: String(r.matched_on) as 'email' | 'phone' | 'name',
-    }))
-    .sort((a, b) => (rank[a.matchedOn] as number) - (rank[b.matchedOn] as number));
+  return (found.rows as Row[]).map((r) => ({
+    party: mapParty(r),
+    matchedOn: String(r.matched_on) as 'email' | 'phone',
+  }));
+}
+
+/**
+ * What the audit trail records when staff deliberately let two records share
+ * contact details. BOUNDED IDENTIFIERS AND FIELD NAMES ONLY: which parties,
+ * and which of email/phone is shared. The customer's actual address and number
+ * stay in the row where they belong — an override is a fact about a decision,
+ * not an excuse to copy contact details into the audit trail.
+ */
+function overrideEvidence(
+  collisions: DuplicateCandidate[],
+  email: string | null,
+  phone: string | null,
+): Record<string, unknown> {
+  // The fields are compared rather than read off `matchedOn`. That label
+  // carries ONE reason per candidate because it exists to tell staff why a
+  // record was suggested; a record that shares both an inbox and a landline
+  // would be reported as sharing only the inbox, and an audit entry that
+  // understates what was overridden is worse than none.
+  const fields = new Set<string>();
+  for (const c of collisions) {
+    if (email !== null && c.party.email !== null && c.party.email.toLowerCase() === email) {
+      fields.add('email');
+    }
+    if (phone !== null && c.party.phone === phone) fields.add('phone');
+  }
+  return {
+    contact_sharing_override: true,
+    shared_contact_fields: [...fields].sort(),
+    shared_contact_with_party_ids: collisions.map((c) => c.party.partyId).slice(0, 10),
+    shared_contact_party_count: collisions.length,
+  };
 }
 
 // ── reads ───────────────────────────────────────────────────────────────────
@@ -363,26 +453,34 @@ export async function createPartyWithin(
 
   const actor = await requireActor(executor, input.actingUserLinkId);
 
-  if (input.allowDuplicate !== true) {
-    const candidates = await findDuplicateCandidates(executor, input.tenantId, {
-      email,
-      phone,
-      displayName,
-    });
-    // A NAME-ONLY match is a suggestion, not a collision: two customers may
-    // genuinely share a name, and refusing that would make the platform
-    // unusable. Only an identifying match stops the create.
-    const identifying = candidates.filter((c) => c.matchedOn !== 'name');
-    if (identifying.length > 0) return { outcome: 'duplicate', candidates: identifying };
+  // THE DECISION, TAKEN UNDER A LOCK. Everything from here to the INSERT is
+  // one indivisible judgement: a competing create carrying the same email
+  // waits at `lockContactDecision` and reads the outcome of this one.
+  await lockContactDecision(executor, input.tenantId, email, phone);
+  const collisions = await identifyingCollisions(executor, input.tenantId, email, phone, null);
+  // A NAME-ONLY match is a suggestion, not a collision: two customers may
+  // genuinely share a name, and refusing that would make the platform
+  // unusable. Only an identifying match stops the create — and only an
+  // explicit staff override lets it through anyway.
+  if (collisions.length > 0 && input.allowDuplicate !== true) {
+    return { outcome: 'duplicate', candidates: collisions };
   }
+  const sharing = collisions.length > 0;
 
+  // The INSERT runs inside a SAVEPOINT so that a backstop violation — which
+  // should now be unreachable through this function, and is kept handled
+  // because "should be unreachable" is not a guarantee — leaves a transaction
+  // the recovery read below can still run in. Without it a 23505 would poison
+  // the caller's whole acquisition.
+  await executor.query('SAVEPOINT party_insert');
   try {
     const written = await executor.query(
       `INSERT INTO parties
          (tenant_id, party_type, display_name, given_name, family_name, organization_name,
           email, phone, address_line1, address_city, address_region, address_postal_code,
-          address_country, created_by_user_link_id, updated_by_user_link_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+          address_country, contact_sharing_override,
+          created_by_user_link_id, updated_by_user_link_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)
        RETURNING ${PARTY_COLUMNS}`,
       [
         input.tenantId,
@@ -398,9 +496,11 @@ export async function createPartyWithin(
         d.addressRegion ?? null,
         d.addressPostalCode ?? null,
         d.addressCountry ?? null,
+        sharing,
         actor,
       ],
     );
+    await executor.query('RELEASE SAVEPOINT party_insert');
     const party = mapParty(written.rows[0] as Row);
     const mutation = await recordMutation(executor, {
       tenantId: input.tenantId,
@@ -411,20 +511,22 @@ export async function createPartyWithin(
       authorizationVersion: party.authorizationVersion,
       // The party's NAME and CONTACT DETAILS are not written to the audit
       // trail: the row carries them, and an audit detail is not the place for
-      // a customer's address.
-      details: { party_type: party.partyType },
+      // a customer's address. An OVERRIDE is different — that is a decision a
+      // person made, and it is recorded as identifiers and field names.
+      details: sharing
+        ? { party_type: party.partyType, ...overrideEvidence(collisions, email, phone) }
+        : { party_type: party.partyType },
     });
     return { outcome: 'created', party, mutation };
   } catch (err) {
+    await executor.query('ROLLBACK TO SAVEPOINT party_insert');
     if (!isUniqueViolation(err)) throw err;
-    // The pre-check was skipped (allowDuplicate) or lost a race. Either way
-    // the database has just told us what the pre-check would have.
-    const candidates = await findDuplicateCandidates(executor, input.tenantId, {
-      email,
-      phone,
-      displayName,
-    });
-    return { outcome: 'duplicate', candidates: candidates.filter((c) => c.matchedOn !== 'name') };
+    // The backstop fired: something reached the table without this decision.
+    // The database has just told us what the decision would have.
+    return {
+      outcome: 'duplicate',
+      candidates: await identifyingCollisions(executor, input.tenantId, email, phone, null),
+    };
   }
 }
 
@@ -443,6 +545,14 @@ export type PartyUpdateOutcome =
  * Updates a party under OPTIMISTIC CONCURRENCY: the caller states the version
  * it read, and a disagreement changes nothing and says so. A merged or
  * archived party is not editable — its record is history.
+ *
+ * RT2-C1 §1 — AN EDIT IS A WAY TO CREATE A DUPLICATE, and this path used to
+ * have no opinion about that: it wrote, and relied on a database constraint
+ * that had been removed, so retyping one customer's email onto another's
+ * record silently produced two active parties sharing it. The same locked
+ * collision decision the create path makes is made here, against the values
+ * the row would END UP with, excluding the row itself. A refusal changes
+ * nothing at all — the version is not consumed and the row is not touched.
  */
 export async function updateParty(input: {
   actingUserLinkId: string;
@@ -450,6 +560,8 @@ export async function updateParty(input: {
   partyId: string;
   expectedVersion: number;
   details: PartyDetails;
+  /** Share contact details with another active party — a deliberate staff decision. */
+  allowDuplicate?: boolean | undefined;
 }): Promise<PartyUpdateOutcome> {
   return withTenantTransaction(input.tenantId, async (executor) => {
     const actor = await requireActor(executor, input.actingUserLinkId);
@@ -482,12 +594,31 @@ export async function updateParty(input: {
     const email = d.email === undefined ? current.email : normalizeEmail(d.email);
     const phone = d.phone === undefined ? current.phone : normalizePhone(d.phone);
 
+    // The same locked decision the create path makes, on the values this row
+    // would end up carrying, and never against itself. The row is already held
+    // by the FOR UPDATE above; the advisory lock is what serializes this
+    // against a CREATE racing for the same contact value, which holds no row.
+    await lockContactDecision(executor, input.tenantId, email, phone);
+    const collisions = await identifyingCollisions(
+      executor,
+      input.tenantId,
+      email,
+      phone,
+      input.partyId,
+    );
+    if (collisions.length > 0 && input.allowDuplicate !== true) {
+      // NOTHING IS WRITTEN. The refusal is the whole outcome.
+      return { outcome: 'duplicate' as const, candidates: collisions };
+    }
+    const sharing = collisions.length > 0;
+
     try {
       const written = await executor.query(
         `UPDATE parties
             SET display_name = $3, given_name = $4, family_name = $5, organization_name = $6,
                 email = $7, phone = $8, address_line1 = $9, address_city = $10,
                 address_region = $11, address_postal_code = $12, address_country = $13,
+                contact_sharing_override = $16,
                 updated_by_user_link_id = $14, updated_at = NOW(),
                 authorization_version = authorization_version + 1
           WHERE tenant_id = $1 AND party_id = $2 AND authorization_version = $15
@@ -510,6 +641,7 @@ export async function updateParty(input: {
           d.addressCountry === undefined ? current.addressCountry : d.addressCountry,
           actor,
           input.expectedVersion,
+          sharing,
         ],
       );
       if (written.rows.length === 0) {
@@ -526,20 +658,19 @@ export async function updateParty(input: {
         eventType: 'inventory.party.updated',
         actingUserLinkId: actor,
         authorizationVersion: party.authorizationVersion,
-        details: {},
+        details: sharing ? overrideEvidence(collisions, email, phone) : {},
       });
       return { outcome: 'saved' as const, party, mutation };
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
-      const candidates = await findDuplicateCandidates(executor, input.tenantId, {
-        email,
-        phone,
-        displayName,
-      });
       return {
         outcome: 'duplicate' as const,
-        candidates: candidates.filter(
-          (c) => c.matchedOn !== 'name' && c.party.partyId !== input.partyId,
+        candidates: await identifyingCollisions(
+          executor,
+          input.tenantId,
+          email,
+          phone,
+          input.partyId,
         ),
       };
     }
@@ -672,9 +803,18 @@ export type PartyMergeOutcome =
  *      contact values, and points at the survivor;
  *   4. a `party_merges` row records the pair, the actor and the counts.
  *
- * The absorbed party's contact values keep their uniqueness slot free because
- * migration 062's indexes are partial on `status = 'active'` — which is what
- * lets two records that duplicate an email be merged at all.
+ * The absorbed party's contact values free their backstop slot because
+ * `uq_parties_unshared_email` and `uq_parties_unshared_phone` are partial on
+ * `status = 'active'` — which is what lets two records that duplicate an email
+ * be merged at all.
+ *
+ * A merge deliberately does NOT recompute the survivor's
+ * `contact_sharing_override`. If absorbing the other record leaves the
+ * survivor as the only holder of that email, its flag may stay `true` and its
+ * row simply remains outside the backstop index. Nothing weakens: the refusal
+ * a duplicate meets is the LOCKED DECISION above, which reads every active
+ * party regardless of the flag; the index only ever narrows what could reach
+ * the table without that decision.
  */
 export async function mergeParties(input: {
   actingUserLinkId: string;
@@ -840,6 +980,28 @@ export async function importParties(input: {
     return { error: `an import carries at most ${PARTY_IMPORT_LIMIT} rows` };
   }
   return withTenantTransaction(input.tenantId, async (executor) => {
+    // EVERY CONTACT VALUE IN THE BATCH IS LOCKED UP FRONT, in the one global
+    // order `lockContactDecision` uses. Taking them row by row would let an
+    // import holding row 3's phone wait on row 7's email while a concurrent
+    // create held that email and waited on the phone — a genuine deadlock
+    // between two callers that were each individually well-ordered. Locking
+    // the whole batch first collapses the import to a single ordered acquirer.
+    const batchEmails = new Set<string>();
+    const batchPhones = new Set<string>();
+    for (const row of input.rows) {
+      const e = normalizeEmail(row.email);
+      const p = normalizePhone(row.phone);
+      if (e !== null) batchEmails.add(e);
+      if (p !== null) batchPhones.add(p);
+    }
+    const batchKeys = [
+      ...[...batchEmails].map((e) => `party-contact:${input.tenantId}:email:${e}`),
+      ...[...batchPhones].map((p) => `party-contact:${input.tenantId}:phone:${p}`),
+    ].sort();
+    for (const key of batchKeys) {
+      await executor.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+    }
+
     const outcomes: PartyImportOutcome[] = [];
     for (let index = 0; index < input.rows.length; index += 1) {
       const row = input.rows[index] as PartyImportRow;

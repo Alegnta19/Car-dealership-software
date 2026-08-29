@@ -156,6 +156,20 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * It moved 763 → 770 under RELEASE TRAIN 2's bounded correction (RT2-C1), which added
+ * seven tests to two existing suites and no new suite: five in
+ * `tests/inventory-journey.test.ts` (row 1's duplicate decision under concurrency — two
+ * overlapping transactions producing one creation and one refusal, with the second
+ * observed WAITING on the contact lock in `pg_locks` rather than merely arriving later;
+ * an edit onto another customer's email or phone refused with neither row moved and the
+ * version not consumed; a household sharing one address by explicit decision on both
+ * create and edit; the override present in `audit_events` as identifiers and field names
+ * with the contact values absent; and two dealerships deciding independently about the
+ * same address) and two in `tests/inventory-isolation.test.ts` (row 4's resolver probes
+ * on the genuine `dealership_app` connection — an Alpha-bound session resolving its own
+ * stock and listing but never Beta's however the tenant is named, and an unbound session
+ * resolving nothing at all). Measured by the full local run before being written here.
+ *
  * It moved 739 → 763 / 71 → 74 under RELEASE TRAIN 2 (Vehicle Acquisition and
  * Inventory), which added twenty-four tests in three new suites: nine in
  * `tests/inventory-isolation.test.ts` (row 4 — row security and its policy on every one
@@ -186,7 +200,7 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 763;
+export const MINIMUM_TESTS = 770;
 export const MINIMUM_SUITES = 74;
 
 /**
