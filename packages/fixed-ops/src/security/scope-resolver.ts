@@ -17,14 +17,23 @@
  * — non-enumeration starts here — and an unknown resource type resolves to
  * nothing: deny, never guess.
  *
- * RT2-C1 §2 — THE LOOKUP RUNS INSIDE A TENANT-BOUND TRANSACTION. It used to
- * run on a bare pooled connection and hand the tenant across as an argument,
- * which meant `resource_org_leaf` had nothing but that argument to go on: any
- * holder of the runtime login could name another dealership's tenant beside a
- * known resource id and be told which rooftop owned it. The function now
- * resolves only within the tenant bound to its transaction, so the engine
- * binds it here — from ITS OWN authorization-bound tenant, the actor's or a
- * support request's approved target, never a value taken off the request.
+ * RT2-C2 §A — THE ENGINE CALLS THE ORDINARY LOOKUP, NOT THE PRIVILEGED ONE.
+ *
+ * `resource_org_leaf` reads past row security, and this module used to call it
+ * on a bare pooled connection with the tenant as an argument — so any holder of
+ * the runtime login could name another dealership beside a known resource id
+ * and be told which rooftop owned it. RT2-C1 made the function trust
+ * `app_tenant_ctx()` instead, which only moved the vector: that GUC is set by
+ * the client. EXECUTE on it is now revoked from PUBLIC and held by the evidence
+ * owner alone, and the engine resolves through `resource_org_leaf_visible` —
+ * SECURITY INVOKER, no tenant argument, bound by the same row security as the
+ * session it serves.
+ *
+ * The transaction still carries the server's tenant context, because that is
+ * what row security reads and what the Fixed Ops branches filter on. What
+ * changed is that the context is no longer AUTHORITY over a bypass — it is
+ * simply the session the lookup happens in, and the lookup can return nothing
+ * the session could not already select for itself.
  */
 import { withTenantTransaction } from '@dealer/database';
 import type { OrganizationNodeRef, ResourceScopeResolver } from '@dealer/identity-access';
@@ -39,7 +48,7 @@ export const resolveServiceResourceScope: ResourceScopeResolver = async (
   resourceId: string,
 ): Promise<OrganizationNodeRef | null> => {
   const result = await withTenantTransaction(tenantId, (tx) =>
-    tx.query(`SELECT resource_org_leaf($1, $2, $3) AS leaf`, [tenantId, resourceType, resourceId]),
+    tx.query(`SELECT resource_org_leaf_visible($1, $2) AS leaf`, [resourceType, resourceId]),
   );
   const leaf = (result.rows[0] as Row | undefined)?.leaf;
   if (leaf === null || leaf === undefined) return null;

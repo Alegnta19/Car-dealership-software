@@ -44,6 +44,13 @@ describe(
   () => {
     const OWNER_URL = process.env.TEST_DATABASE_URL as string;
     const APP_PASSWORD = 'rt2_isolation_test_pw';
+    /**
+     * AN UNRELATED LOW-PRIVILEGE LOGIN. Not the dealership runtime, not a member
+     * of anything: the ordinary shape of "some other account exists on this
+     * cluster". It must have no path to either resolver, which is a different
+     * claim from the runtime having none.
+     */
+    const STRANGER = 'rt2c2_unrelated_login';
     let app: Client;
     let server: Server;
     let base: string;
@@ -86,6 +93,11 @@ describe(
       await owner.connect();
       try {
         await owner.query(`ALTER ROLE dealership_app PASSWORD '${APP_PASSWORD}'`);
+        await owner.query(`DO $$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${STRANGER}') THEN
+            CREATE ROLE ${STRANGER} LOGIN;
+          END IF;
+        END $$`);
       } finally {
         await owner.end();
       }
@@ -108,6 +120,13 @@ describe(
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await env.stop();
       await closePool();
+      const owner = new Client({ connectionString: OWNER_URL });
+      await owner.connect();
+      try {
+        await owner.query(`DROP ROLE IF EXISTS ${STRANGER}`);
+      } finally {
+        await owner.end();
+      }
     });
 
     async function noContext(): Promise<void> {
@@ -371,73 +390,208 @@ describe(
       return value === null ? null : String(value);
     }
 
-    test('the runtime cannot resolve another dealership’s stock or listing by naming its tenant', async () => {
-      await contextOf(alpha.tenantId);
+    /** The RLS-constrained lookup the runtime is actually allowed to use. */
+    async function visible(type: string, id: string): Promise<string | null> {
+      const r = await app.query(`SELECT resource_org_leaf_visible($1, $2) AS leaf`, [type, id]);
+      const value = (r.rows[0] as { leaf: string | null }).leaf;
+      return value === null ? null : String(value);
+    }
 
-      // CONTROL FIRST: inside its own bound tenant the resolver still answers,
-      // which is what the authorization engine depends on. A test that only
-      // showed nulls would pass against a function that had simply stopped
-      // working.
-      assert.equal(
-        await leaf(alpha.tenantId, 'stock_item', alpha.stockItemId),
-        alpha.rooftopA,
-        'CONTROL: Alpha resolves its own car to its own rooftop',
-      );
-      assert.equal(
-        await leaf(alpha.tenantId, 'stock_listing', alpha.listingId),
-        alpha.rooftopA,
-        'CONTROL: Alpha resolves its own listing to its own rooftop',
-      );
+    /**
+     * Whatever the bypass resolver does when the runtime calls it: the refusal
+     * itself, or the value it should never have produced.
+     */
+    async function leafAttempt(
+      tenantId: string,
+      type: string,
+      id: string,
+    ): Promise<{ refused: true; code: string } | { refused: false; leaf: string | null }> {
+      try {
+        return { refused: false, leaf: await leaf(tenantId, type, id) };
+      } catch (err) {
+        return { refused: true, code: String((err as { code?: string }).code ?? 'unknown') };
+      }
+    }
 
-      // …and naming Beta's tenant beside Beta's own identifiers — every value
-      // an attacker could have — answers nothing.
-      assert.equal(
-        await leaf(beta.tenantId, 'stock_item', beta.stockItemId),
-        null,
-        "Beta's car does not resolve for an Alpha-bound session",
-      );
-      assert.equal(
-        await leaf(beta.tenantId, 'stock_listing', beta.listingId),
-        null,
-        "Beta's listing does not resolve for an Alpha-bound session",
-      );
+    // ── RT2-C2 §A: the bypass resolver is not reachable from the runtime ─────
+    //
+    // RT2-C1 bound `resource_org_leaf` to `app_tenant_ctx()`. That was not a
+    // fix: `app.tenant_id` is CLIENT-WRITABLE. Any holder of the runtime login
+    // could set it to Beta and ask the SECURITY DEFINER resolver — which reads
+    // past row security — for a Beta rooftop, and be told. Authority had moved
+    // from one caller-supplied value to another.
+    //
+    // The fix is a PRIVILEGE, not a predicate: the bypass resolver is executable
+    // only by an explicit, non-assumable database-owned role. No session state a
+    // client can write reaches it, because none of it changes who you are.
 
-      // Nor does mixing the two: Alpha's own tenant with Beta's identifiers,
-      // which is what a caller would try once the direct form stopped working.
-      assert.equal(await leaf(alpha.tenantId, 'stock_item', beta.stockItemId), null);
-      assert.equal(await leaf(alpha.tenantId, 'stock_listing', beta.listingId), null);
+    test('the bypass resolver refuses the runtime under every session state it can set', async () => {
+      const attempts: Array<[string, () => Promise<void>]> = [
+        ['a bound Alpha context', async () => contextOf(alpha.tenantId)],
+        ['app.tenant_id forged to Beta', async () => contextOf(beta.tenantId)],
+        ['no context at all', async () => noContext()],
+        [
+          'app.tenant_id forged to Beta by plain SET',
+          async () => {
+            await app.query(`SET app.tenant_id = '${beta.tenantId}'`);
+          },
+        ],
+        [
+          'after SET ROLE dealership_runtime',
+          async () => {
+            await app.query('SET ROLE dealership_runtime');
+            await app.query(`SELECT set_config('app.tenant_id', $1, false)`, [beta.tenantId]);
+          },
+        ],
+        [
+          'after RESET ROLE',
+          async () => {
+            await app.query('RESET ROLE');
+            await app.query(`SELECT set_config('app.tenant_id', $1, false)`, [beta.tenantId]);
+          },
+        ],
+      ];
 
-      // THE REFUSAL IS A REFUSAL, NOT AN ABSENCE. Bind the same connection to
-      // Beta and those exact identifiers resolve — so the nulls above are the
-      // gate declining to answer Alpha, not Beta's rows failing to exist or
-      // the registry having forgotten how to reach them.
-      await contextOf(beta.tenantId);
-      assert.equal(await leaf(beta.tenantId, 'stock_item', beta.stockItemId), beta.rooftopA);
-      assert.equal(await leaf(beta.tenantId, 'stock_listing', beta.listingId), beta.rooftopA);
-    });
-
-    test('with no tenant context the runtime resolves nothing at all', async () => {
-      await noContext();
-      // Every row is named beside the tenant that genuinely owns it — the
-      // strongest form of the question, and still the answer is nothing,
-      // because the argument is not authority any more.
-      for (const [tenantId, type, id] of [
-        [alpha.tenantId, 'stock_item', alpha.stockItemId],
-        [alpha.tenantId, 'stock_listing', alpha.listingId],
-        [beta.tenantId, 'stock_item', beta.stockItemId],
-        [beta.tenantId, 'stock_listing', beta.listingId],
-      ] as const) {
-        assert.equal(
-          await leaf(tenantId, type, id),
-          null,
-          `${type} resolves to nothing without a server-set tenant`,
-        );
+      for (const [label, arrange] of attempts) {
+        await arrange();
+        for (const [type, id] of [
+          ['stock_item', beta.stockItemId],
+          ['stock_listing', beta.listingId],
+        ] as const) {
+          for (const named of [beta.tenantId, alpha.tenantId]) {
+            const got = await leafAttempt(named, type, id);
+            assert.equal(
+              got.refused,
+              true,
+              `${label}: resource_org_leaf answered a ${type} question instead of refusing`,
+            );
+            assert.equal(
+              (got as { code: string }).code,
+              '42501',
+              `${label}: the refusal must be INSUFFICIENT PRIVILEGE, not a lucky null`,
+            );
+          }
+        }
       }
 
-      // …and a forged context naming no real dealership resolves nothing
-      // either, so the gate is not merely "any context will do".
+      // The role it would need is one it cannot become.
+      await assert.rejects(
+        app.query('SET ROLE dealership_evidence_owner'),
+        /permission denied|must be (a )?member/i,
+        'the runtime cannot assume the role that holds the resolver',
+      );
+      await app.query('RESET ROLE');
+    });
+
+    test('PUBLIC holds no grant on the bypass resolver, and an unrelated login has no path', async () => {
+      const acl = await app.query(
+        `SELECT COALESCE(array_to_string(p.proacl, ','), '(default: PUBLIC)') AS acl
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proname = 'resource_org_leaf'`,
+      );
+      const entries = String((acl.rows[0] as { acl: string }).acl);
+      assert.ok(
+        !entries.includes('(default: PUBLIC)'),
+        'a NULL proacl IS a PUBLIC grant — the resolver must carry an explicit ACL',
+      );
+      assert.ok(
+        !/(^|,)=X\//.test(entries),
+        `PUBLIC still holds EXECUTE on the bypass resolver: ${entries}`,
+      );
+      assert.ok(
+        entries.includes('dealership_evidence_owner=X/'),
+        `the non-assumable owner must hold the only granted path: ${entries}`,
+      );
+      assert.ok(
+        !/dealership_runtime=X\/|dealership_app=X\//.test(entries),
+        `the runtime must hold no grant of its own: ${entries}`,
+      );
+
+      // An unrelated low-privilege login — no dealership membership at all.
+      const owner = new Client({ connectionString: OWNER_URL });
+      await owner.connect();
+      await owner.query(`ALTER ROLE ${STRANGER} PASSWORD '${APP_PASSWORD}'`);
+      await owner.end();
+      const u = new URL(OWNER_URL);
+      u.username = STRANGER;
+      u.password = APP_PASSWORD;
+      const stranger = new Client({ connectionString: u.toString() });
+      await stranger.connect();
+      try {
+        await assert.rejects(
+          stranger.query(`SELECT resource_org_leaf($1, 'stock_item', $2)`, [
+            beta.tenantId,
+            beta.stockItemId,
+          ]),
+          /permission denied/i,
+          'an unrelated login has no execution path to the bypass resolver',
+        );
+        await assert.rejects(
+          stranger.query(`SELECT resource_org_leaf_visible('stock_item', $1)`, [beta.stockItemId]),
+          /permission denied/i,
+          'nor to the runtime lookup',
+        );
+      } finally {
+        await stranger.end();
+      }
+    });
+
+    test('the runtime resolves its own resources through an RLS-constrained lookup, and nothing else', async () => {
+      await contextOf(alpha.tenantId);
+      assert.equal(
+        await visible('stock_item', alpha.stockItemId),
+        alpha.rooftopA,
+        'CONTROL: the engine can still resolve the car it is authorizing',
+      );
+      assert.equal(
+        await visible('stock_listing', alpha.listingId),
+        alpha.rooftopA,
+        'CONTROL: and its listing',
+      );
+      assert.equal(await visible('stock_item', beta.stockItemId), null);
+      assert.equal(await visible('stock_listing', beta.listingId), null);
+
+      // No tenant argument exists to supply, and an unbound session sees nothing.
+      await noContext();
+      for (const [type, id] of [
+        ['stock_item', alpha.stockItemId],
+        ['stock_listing', alpha.listingId],
+        ['stock_item', beta.stockItemId],
+        ['stock_listing', beta.listingId],
+      ] as const) {
+        assert.equal(await visible(type, id), null, `${type} resolves to nothing when unbound`);
+      }
       await contextOf(randomUUID());
-      assert.equal(await leaf(alpha.tenantId, 'stock_item', alpha.stockItemId), null);
+      assert.equal(await visible('stock_item', alpha.stockItemId), null);
+    });
+
+    test('POSITIVE CONTROL: the privileged path still resolves, through the real evidence writer', async () => {
+      // Migration 059 §3.4 REFUSES a resource-typed ALLOW whose resource does
+      // not resolve. So a decision that lands is the resolver answering — from
+      // inside the trigger, on the path that kept its grant.
+      const manager = await seedActor(env.issuer, {
+        tenantId: alpha.tenantId,
+        roles: [ROLES.INVENTORY_MANAGER],
+      });
+      const res = await fetch(`${base}/api/inventory/stock/${alpha.stockItemId}`, {
+        headers: { authorization: `Bearer ${manager.token}` },
+      });
+      assert.equal(res.status, 200, 'CONTROL: the authorized read succeeds');
+
+      const decided = await fixtureAuthorizationStateWrite(
+        'seed-authorization-state',
+        `SELECT resource_rooftop_id::text AS rooftop FROM policy_decisions
+          WHERE tenant_id = $1 AND decision = 'allow' AND resource_type = 'stock_item'
+            AND resource_id = $2
+          ORDER BY occurred_at DESC LIMIT 1`,
+        [alpha.tenantId, alpha.stockItemId],
+      );
+      assert.equal(decided.rows.length, 1, 'the ALLOW was recorded, so §3.4 resolved the resource');
+      assert.equal(
+        String((decided.rows[0] as { rooftop: string }).rooftop),
+        alpha.rooftopA,
+        "and the rooftop it stamped is the database's own resolution",
+      );
     });
 
     // ── the rooftop boundary, through the real HTTP stack ────────────────────

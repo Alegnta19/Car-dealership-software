@@ -95,7 +95,6 @@ import {
   setTenantContext,
   withTransaction,
 } from '@dealer/database';
-import { resolveServiceResourceScope } from '@dealer/fixed-ops';
 import {
   bootstrapIdentityOrigin,
   createActionCatalog,
@@ -105,9 +104,32 @@ import {
   grantRole,
   refreshProviderSession,
   revokeRole,
+  type OrganizationNodeRef,
   type ProviderRefreshResult,
+  type ResourceScopeResolver,
   type VerifiedAccessToken,
 } from '@dealer/identity-access';
+
+/**
+ * The resolver a 059 database has. See the note at its call site: the shipped
+ * `resolveServiceResourceScope` now reads `resource_org_leaf_visible`, which
+ * migration 062 creates, so on a chain that stops at 059 the registry has to be
+ * read the way 059 itself exposed it. Identical shape to the production port.
+ */
+const resolveThrough059Registry: ResourceScopeResolver = async (
+  tenantId: string,
+  resourceType: string,
+  resourceId: string,
+): Promise<OrganizationNodeRef | null> => {
+  const found = await query(`SELECT resource_org_leaf($1, $2, $3) AS leaf`, [
+    tenantId,
+    resourceType,
+    resourceId,
+  ]);
+  const leaf = (found.rows[0] as { leaf?: unknown } | undefined)?.leaf;
+  if (leaf === null || leaf === undefined) return null;
+  return { level: 'rooftop', id: String(leaf) };
+};
 
 /** The impersonation shape a non-impersonated provider reply carries. */
 const NOT_IMPERSONATED = { impersonated: false, impersonatorEmailPresent: false } as const;
@@ -912,10 +934,20 @@ async function afterMigration059(outPath: string | undefined, logPath: string | 
         allowedRoles: ['tenant_admin'],
       },
     ]),
-    // THE REAL RESOLVER — the one production wires in — which now resolves
-    // through migration 059's `resource_org_leaf`, the same authority the
-    // evidence trigger validates the snapshot against.
-    resolveResourceScope: resolveServiceResourceScope,
+    // THE RESOLVER THIS CHAIN POINT HAD.
+    //
+    // The database under this stage stops at 059: `resource_org_leaf` is the
+    // whole registry, and it is still executable by the runtime because the
+    // REVOKE that takes that away arrives in 062, which is not applied here.
+    // Calling it directly is therefore what production DID at this point in
+    // history, and it is the same authority the §3.4 trigger validates the
+    // snapshot against — which is the property this stage exists to prove.
+    //
+    // `resolveServiceResourceScope` is not used here any more because it now
+    // calls `resource_org_leaf_visible`, a 062 function that does not exist on
+    // a 059 database. It is exercised against the CURRENT chain by the full
+    // battery instead, where the resource path it takes is the one that ships.
+    resolveResourceScope: resolveThrough059Registry,
   });
   const outcome = await engine.decide({
     actor: { userLinkId, actorScope: 'dealership', tenantId },

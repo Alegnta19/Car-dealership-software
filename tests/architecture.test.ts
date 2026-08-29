@@ -859,4 +859,70 @@ describe('architecture enforcement', () => {
       assert.match(scripts['architecture:check'] ?? '', /check-audit-inventory\.ts/);
     });
   });
+
+  describe('the resource registry has exactly one branch list (RT2-C2 §A)', () => {
+    /**
+     * Migration 062 split the registry by PRIVILEGE: `resource_org_leaf` keeps
+     * the row-security bypass and is executable only by the evidence owner, and
+     * `resource_org_leaf_visible` is the ordinary lookup the engine calls.
+     *
+     * Two functions is two places to register a resource type, and a type
+     * present in one and missing from the other is the worst kind of drift: the
+     * engine would authorize it one way while the evidence trigger validated it
+     * another, and nothing would be red. This is the thing that stops that.
+     */
+    const migration = readFileSync(
+      join(ROOT, 'migrations', '062_vehicle_acquisition_inventory.sql'),
+      'utf8',
+    );
+
+    function branchesOf(functionName: string): string[] {
+      const start = migration.indexOf(`CREATE OR REPLACE FUNCTION ${functionName}(`);
+      assert.ok(start >= 0, `${functionName} is not declared in migration 062`);
+      const end = migration.indexOf('$$ LANGUAGE plpgsql STABLE;', start);
+      assert.ok(end > start, `${functionName} has no recognisable end`);
+      const body = migration.slice(start, end);
+      return [...body.matchAll(/p_type = '([a-z_]+)'/g)].map((m) => m[1] as string).sort();
+    }
+
+    test('every resource type the privileged resolver knows, the ordinary one knows too', () => {
+      const privileged = branchesOf('resource_org_leaf');
+      const visible = branchesOf('resource_org_leaf_visible');
+      assert.ok(privileged.length >= 14, `the registry looks truncated: ${privileged.join(',')}`);
+      assert.deepEqual(
+        visible,
+        privileged,
+        'the two resource registries disagree about which types exist',
+      );
+      // …and the two Release Train 2 types are genuinely among them, so the
+      // comparison is not two identical empty lists agreeing about nothing.
+      for (const type of ['stock_item', 'stock_listing']) {
+        assert.ok(privileged.includes(type), `${type} is not registered at all`);
+      }
+    });
+
+    test('the privileged resolver is granted away from PUBLIC, in the migration itself', () => {
+      assert.match(
+        migration,
+        /REVOKE ALL ON FUNCTION resource_org_leaf\(uuid, text, uuid\) FROM PUBLIC;/,
+        'a NULL proacl grants EXECUTE to PUBLIC — the revoke must be written down',
+      );
+      assert.match(
+        migration,
+        /GRANT EXECUTE ON FUNCTION resource_org_leaf\(uuid, text, uuid\) TO dealership_evidence_owner;/,
+      );
+      assert.ok(
+        !/GRANT EXECUTE ON FUNCTION resource_org_leaf\(uuid, text, uuid\) TO dealership_runtime/.test(
+          migration,
+        ),
+        'granting the bypass resolver back to the runtime would undo the whole correction',
+      );
+      // The ordinary lookup takes no tenant argument: the vector cannot be
+      // supplied because the signature does not accept it.
+      assert.match(
+        migration,
+        /CREATE OR REPLACE FUNCTION resource_org_leaf_visible\(p_type text, p_id uuid\)/,
+      );
+    });
+  });
 });

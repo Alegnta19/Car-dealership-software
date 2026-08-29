@@ -710,14 +710,26 @@ GRANT DELETE ON stock_features TO dealership_runtime;
 -- An earlier revision of this migration justified that power by asserting that
 -- "`p_tenant` is supplied by the engine from AUTHENTICATED STATE, never by the
 -- caller". That was FALSE, and provably so: `p_tenant` is a function argument,
--- and anything holding the runtime login can pass whatever it likes. The
--- assertion described how the SERVER calls the function, not what the FUNCTION
--- requires — and a security property that only holds while every caller
--- behaves is not a property.
+-- and anything holding the runtime login can pass whatever it likes.
 --
--- The gate in the body is what makes the claim true. The engine now resolves
--- inside a tenant-bound transaction (see the Fixed Ops scope resolver), and
--- the function trusts THE CONTEXT rather than the argument.
+-- The first correction replaced the argument with `app_tenant_ctx()`. That was
+-- ALSO false, for the same reason one step along: the runtime sets that GUC
+-- itself. `SET app.tenant_id = '<beta>'` and the oracle answered again — and
+-- the probe written against the argument now passed, which is worse than
+-- failing, because it certified the hole.
+--
+-- TWO FUNCTIONS, SPLIT BY PRIVILEGE, is the fix.
+--
+--   * `resource_org_leaf` keeps the bypass and LOSES ITS AUDIENCE. EXECUTE is
+--     revoked from PUBLIC and granted to `dealership_evidence_owner` alone —
+--     NOLOGIN, no members, not assumable by the runtime. The policy-evidence
+--     triggers reach it because they RUN AS that role; the runtime cannot, by
+--     any argument, GUC, `SET ROLE`, `RESET ROLE` or empty session, because
+--     none of those change who it is.
+--   * `resource_org_leaf_visible` is what the ENGINE calls. It bypasses
+--     nothing, takes NO tenant argument at all, and sees stock and listings
+--     exactly as row security shows them to the session — so it can never
+--     answer a question the caller could not already ask of the table.
 --
 -- ── WHICH RESOURCE TYPES THIS TRAIN REGISTERS, AND WHY ONLY TWO ─────────────
 --
@@ -742,48 +754,27 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   leaf   uuid;
-  ctx    uuid;
   tenant uuid;
 BEGIN
-  -- ── THE TRUSTED PATH GATE (RT2-C1 §2) ─────────────────────────────────────
+  -- ── WHO MAY ASK IS A PRIVILEGE, NOT A PREDICATE (RT2-C2 §A) ───────────────
   --
-  -- This function reads PAST row security, and it has to: the authorization
-  -- engine must resolve a resource in order to decide whether its caller may
-  -- see it, and that decision cannot itself be gated on the answer.
+  -- There is no gate in this body, deliberately. RT2-C1 put one here — resolve
+  -- only for `app_tenant_ctx()`, refuse a `p_tenant` that disagrees — and it
+  -- was not a fix. `app.tenant_id` is a plain GUC that the runtime login sets
+  -- itself. Authority moved from one caller-supplied value to another, and a
+  -- session that wanted Beta's rooftop only had to say `SET app.tenant_id` and
+  -- ask again. A test written against the argument passed while the hole was
+  -- open, which is the worst outcome of the two.
   --
-  -- Power like that is only safe while it cannot be ADDRESSED directly, and
-  -- `p_tenant` made it addressable. An ordinary runtime connection could name
-  -- another dealership's tenant beside a known stock or listing id and be told
-  -- which rooftop owns it — an existence-and-location oracle over exactly the
-  -- rows row security exists to hide, needing no forged context at all, just
-  -- an argument. Row security was intact the whole time; the oracle simply
-  -- walked around it.
-  --
-  -- So a caller-selected tenant is no longer authority. The tenant that counts
-  -- is the one the SERVER bound to this transaction from the authenticated
-  -- session, and `p_tenant` is now only a claim, honoured when it AGREES with
-  -- that context and refused when it does not. A runtime session that was
-  -- never bound resolves nothing at all.
-  --
-  -- One caller still resolves by argument: a role that already reads every row
-  -- without asking — a superuser, or the migration and evidence owners running
-  -- the policy-evidence triggers and the upgrade drills, which call this
-  -- function while validating a decision row. For them it is not an oracle,
-  -- because it returns nothing they could not read straight from the table.
-  ctx := app_tenant_ctx();
-  IF ctx IS NOT NULL THEN
-    IF p_tenant IS DISTINCT FROM ctx THEN
-      RETURN NULL;
-    END IF;
-    tenant := ctx;
-  ELSIF to_regrole('dealership_runtime') IS NOT NULL
-    AND pg_has_role(session_user, 'dealership_runtime', 'USAGE')
-    AND NOT COALESCE((SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = session_user), false)
-  THEN
-    RETURN NULL;
-  ELSE
-    tenant := p_tenant;
-  END IF;
+  -- Nothing a client can WRITE can decide who may read past row security. Only
+  -- who the client IS can, so the answer is the GRANT below, not code here:
+  -- EXECUTE is revoked from PUBLIC and held by `dealership_evidence_owner`
+  -- alone — a NOLOGIN role the runtime is not a member of and cannot SET ROLE
+  -- to. The evidence triggers reach it because they RUN as that role; the
+  -- runtime cannot reach it at all, with a forged context, a chosen argument,
+  -- a role change or an empty session. The runtime resolves through
+  -- `resource_org_leaf_visible` below, which bypasses nothing.
+  tenant := p_tenant;
 
   IF p_type = 'service_appointment' THEN
     SELECT t.location_id INTO leaf FROM service_appointments t
@@ -841,6 +832,139 @@ BEGIN
   RETURN leaf;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+-- THE AUDIENCE. A NULL `proacl` is not "no grants" — it is the DEFAULT grant,
+-- and for a function the default is EXECUTE TO PUBLIC. That is how a
+-- bypass-row-security resolver came to be callable by every login on the
+-- cluster without one line ever saying so. Revoking first makes the ACL
+-- explicit; the single GRANT then says exactly who may ask.
+REVOKE ALL ON FUNCTION resource_org_leaf(uuid, text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION resource_org_leaf(uuid, text, uuid) TO dealership_evidence_owner;
+
+-- THE PATH THAT KEEPS IT, AND WHY IT IS NOT ASSUMABLE.
+--
+-- Migration 059's §3.4 validator and 060's §5 support-scope check both call the
+-- resolver, and both were SECURITY INVOKER — so they ran as `dealership_app`,
+-- which is precisely why the function had to be reachable by the runtime.
+-- Their bodies are frozen in migrations nobody may edit, but WHO THEY RUN AS
+-- is not part of a body: they become SECURITY DEFINER owned by
+-- `dealership_evidence_owner`, the same shape 059 already gave the matched-
+-- bindings normalizer.
+--
+-- This is the correct posture for them on its own terms. They are VALIDATORS:
+-- their job is to check a decision row against the true state of the database,
+-- not against the subset its writer happens to be able to see. A validator
+-- that inherits the caller's blind spots validates less the more the caller is
+-- restricted.
+--
+-- `dealership_evidence_owner` is NOLOGIN, holds no members, and the runtime is
+-- not one — `SET ROLE dealership_evidence_owner` fails for `dealership_app`.
+-- The search path is pinned on both, because a SECURITY DEFINER function that
+-- resolves names through the caller's `search_path` hands the caller the role.
+ALTER FUNCTION policy_decisions_v4_structural_validity()
+  OWNER TO dealership_evidence_owner;
+ALTER FUNCTION policy_decisions_v4_structural_validity()
+  SECURITY DEFINER SET search_path = public, pg_temp;
+ALTER FUNCTION policy_decisions_support_scope_reaches_resource()
+  OWNER TO dealership_evidence_owner;
+ALTER FUNCTION policy_decisions_support_scope_reaches_resource()
+  SECURITY DEFINER SET search_path = public, pg_temp;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- THE RUNTIME'S OWN LOOKUP — RLS-CONSTRAINED, AND TAKING NO TENANT AT ALL
+--
+-- The authorization engine still has to resolve a resource to a rooftop. It
+-- does it here, and this function is ORDINARY: `SECURITY INVOKER`, so every
+-- read is subject to exactly the row security the calling session already
+-- lives under. It cannot become an oracle, because it can only ever return
+-- what `SELECT` would have returned to the same session on the same row.
+--
+-- THERE IS NO TENANT PARAMETER. Not one that is checked, not one that is
+-- ignored — none. The vector this correction closes was a caller naming a
+-- tenant, so the signature does not offer the chance. For the two Release
+-- Train 2 resources the tenant predicate is not needed and would be noise:
+-- `stock_items` and `stock_listings` carry deny-by-default row security, and
+-- the policy IS the predicate.
+--
+-- The twelve Fixed Ops branches keep an explicit `app_tenant_ctx()` filter,
+-- because those tables carry NO row security — they predate it — and without a
+-- predicate the lookup would span tenants. That filter is the session's own
+-- context rather than an argument, and for tables the runtime may already
+-- `SELECT` in full it discloses nothing new. Giving Fixed Ops row security is
+-- a change to Fixed Ops, not to this train.
+--
+-- The branch list must stay in step with `resource_org_leaf` above; a resource
+-- type registered in one and missing from the other would authorize
+-- differently from how it is validated. `tests/architecture.test.ts` compares
+-- the two branch sets and fails when they diverge.
+-- ────────────────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION resource_org_leaf_visible(p_type text, p_id uuid)
+RETURNS uuid
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+DECLARE leaf uuid;
+BEGIN
+  IF p_type = 'service_appointment' THEN
+    SELECT t.location_id INTO leaf FROM service_appointments t
+     WHERE t.tenant_id = app_tenant_ctx() AND t.appointment_id = p_id;
+  ELSIF p_type = 'repair_order' THEN
+    SELECT t.location_id INTO leaf FROM repair_orders t
+     WHERE t.tenant_id = app_tenant_ctx() AND t.ro_id = p_id;
+  ELSIF p_type = 'service_queue_item' THEN
+    SELECT t.location_id INTO leaf FROM service_queue_items t
+     WHERE t.tenant_id = app_tenant_ctx() AND t.queue_item_id = p_id;
+  ELSIF p_type = 'service_waitlist_entry' THEN
+    SELECT t.location_id INTO leaf FROM service_waitlist_entries t
+     WHERE t.tenant_id = app_tenant_ctx() AND t.waitlist_entry_id = p_id;
+  ELSIF p_type = 'mpi_session' THEN
+    SELECT ro.location_id INTO leaf FROM mpi_sessions t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.mpi_session_id = p_id;
+  ELSIF p_type = 'ro_line_item' THEN
+    SELECT ro.location_id INTO leaf FROM ro_line_items t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.line_item_id = p_id;
+  ELSIF p_type = 'ro_parts_line' THEN
+    SELECT ro.location_id INTO leaf FROM ro_parts_lines t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.part_line_id = p_id;
+  ELSIF p_type = 'ro_sublet_job' THEN
+    SELECT ro.location_id INTO leaf FROM ro_sublet_jobs t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.sublet_job_id = p_id;
+  ELSIF p_type = 'service_portal_task' THEN
+    SELECT ro.location_id INTO leaf FROM service_portal_tasks t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.portal_task_id = p_id;
+  ELSIF p_type = 'tech_work_ticket' THEN
+    SELECT ro.location_id INTO leaf FROM tech_work_tickets t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.ticket_id = p_id;
+  ELSIF p_type = 'warranty_claim' THEN
+    SELECT ro.location_id INTO leaf FROM warranty_claims t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.claim_id = p_id;
+  ELSIF p_type = 'comeback_case' THEN
+    SELECT ro.location_id INTO leaf FROM comeback_cases t
+      JOIN repair_orders ro ON ro.tenant_id = t.tenant_id AND ro.ro_id = t.original_ro_id
+     WHERE t.tenant_id = app_tenant_ctx() AND t.comeback_id = p_id;
+  -- ── RELEASE TRAIN 2 — row security is the predicate ──────────────────────
+  ELSIF p_type = 'stock_item' THEN
+    SELECT t.rooftop_id INTO leaf FROM stock_items t
+     WHERE t.stock_item_id = p_id;
+  ELSIF p_type = 'stock_listing' THEN
+    SELECT si.rooftop_id INTO leaf FROM stock_listings t
+      JOIN stock_items si ON si.tenant_id = t.tenant_id AND si.stock_item_id = t.stock_item_id
+     WHERE t.listing_id = p_id;
+  END IF;
+  RETURN leaf;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+REVOKE ALL ON FUNCTION resource_org_leaf_visible(text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION resource_org_leaf_visible(text, uuid) TO dealership_runtime;
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- Section 6 — DENY-BY-DEFAULT ROW SECURITY

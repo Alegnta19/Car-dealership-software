@@ -156,6 +156,18 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * It moved 770 → 774 / 74 → 75 under RT2-C2, the resolver-privilege correction, which
+ * replaced two probes and added four in two existing suites plus one new suite line:
+ * `tests/inventory-isolation.test.ts` lost the two RT2-C1 resolver probes — they
+ * asserted a design that had moved authority into a client-writable GUC — and gained
+ * four (the bypass resolver refusing the runtime under every session state it can set,
+ * PUBLIC holding no grant with an unrelated low-privilege login having no path, the
+ * RLS-constrained lookup resolving only the session's own resources, and a positive
+ * control proving the privileged path still resolves through the real evidence writer);
+ * `tests/architecture.test.ts` gained a suite of two holding the split registry's two
+ * branch lists identical and the REVOKE/GRANT written down in the migration itself.
+ * Measured by the full local run before being written here.
+ *
  * It moved 763 → 770 under RELEASE TRAIN 2's bounded correction (RT2-C1), which added
  * seven tests to two existing suites and no new suite: five in
  * `tests/inventory-journey.test.ts` (row 1's duplicate decision under concurrency — two
@@ -200,8 +212,8 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 770;
-export const MINIMUM_SUITES = 74;
+export const MINIMUM_TESTS = 774;
+export const MINIMUM_SUITES = 75;
 
 /**
  * The order's own floor.
