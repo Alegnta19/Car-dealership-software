@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
@@ -93,7 +93,7 @@ describe('architecture enforcement', () => {
   test('the ownership manifest matches the real workspace', () => {
     const { code, output } = run('scripts/check-architecture-manifest.ts');
     assert.equal(code, 0, output);
-    assert.match(output, /12 modules/);
+    assert.match(output, /13 modules/);
   });
 
   test('process.env stays confined to the approved configuration/composition files', () => {
@@ -871,14 +871,30 @@ describe('architecture enforcement', () => {
      * engine would authorize it one way while the evidence trigger validated it
      * another, and nothing would be red. This is the thing that stops that.
      */
-    const migration = readFileSync(
-      join(ROOT, 'migrations', '062_vehicle_acquisition_inventory.sql'),
-      'utf8',
-    );
+    /**
+     * THE LAST DECLARATION IS THE ONE IN FORCE. Each train that registers a
+     * resource type re-declares both resolvers, so reading a migration by name
+     * would pin this gate to whichever train happened to be current when it was
+     * written — and it would keep passing against a copy nothing runs. The
+     * migrations are applied in filename order, so the newest file that
+     * declares a function holds its live body.
+     */
+    const migrationFiles = readdirSync(join(ROOT, 'migrations'))
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+
+    function declaringMigration(functionName: string): string {
+      const needle = `CREATE OR REPLACE FUNCTION ${functionName}(`;
+      for (let i = migrationFiles.length - 1; i >= 0; i -= 1) {
+        const text = readFileSync(join(ROOT, 'migrations', migrationFiles[i] as string), 'utf8');
+        if (text.includes(needle)) return text;
+      }
+      assert.fail(`${functionName} is declared in no migration at all`);
+    }
 
     function branchesOf(functionName: string): string[] {
+      const migration = declaringMigration(functionName);
       const start = migration.indexOf(`CREATE OR REPLACE FUNCTION ${functionName}(`);
-      assert.ok(start >= 0, `${functionName} is not declared in migration 062`);
       const end = migration.indexOf('$$ LANGUAGE plpgsql STABLE;', start);
       assert.ok(end > start, `${functionName} has no recognisable end`);
       const body = migration.slice(start, end);
@@ -902,6 +918,7 @@ describe('architecture enforcement', () => {
     });
 
     test('the privileged resolver is granted away from PUBLIC, in the migration itself', () => {
+      const migration = declaringMigration('resource_org_leaf');
       assert.match(
         migration,
         /REVOKE ALL ON FUNCTION resource_org_leaf\(uuid, text, uuid\) FROM PUBLIC;/,

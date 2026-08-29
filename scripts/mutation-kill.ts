@@ -594,6 +594,29 @@ export const MUTATIONS: Mutation[] = [
     testName: 'the worker pass ages a stale LOGIN transaction, exactly once',
   },
   {
+    id: 'worker_forgets_campaign_dispatch',
+    control:
+      'the worker runs the campaign dispatcher, so a launched campaign is actually ' +
+      'delivered in production — and, more to the point, so suppression and quiet hours ' +
+      'are re-checked at send time rather than only when a test calls the function',
+    file: 'apps/worker/src/main.ts',
+    from: '  { name: CAMPAIGN_DISPATCH_JOB, run: () => runCampaignDispatchOnce() },\n',
+    to: '',
+    testFile: 'tests/worker-jobs.test.ts',
+    testName: 'the worker pass dispatches a due campaign send, exactly once',
+  },
+  {
+    id: 'worker_forgets_lead_sla_sweep',
+    control:
+      'the worker runs the first-response sweep, so an unanswered lead is escalated in ' +
+      'production; without it the clock runs and nobody is ever told',
+    file: 'apps/worker/src/main.ts',
+    from: '  { name: LEAD_SLA_SWEEP_JOB, run: () => runLeadSlaSweepOnce() },\n',
+    to: '',
+    testFile: 'tests/worker-jobs.test.ts',
+    testName: 'the worker pass escalates an unanswered lead, exactly once',
+  },
+  {
     id: 'worker_forgets_reauthentication_expiry',
     control:
       'the worker runs the reauthentication expiry sweep, so an uncompleted step-up reaches ' +

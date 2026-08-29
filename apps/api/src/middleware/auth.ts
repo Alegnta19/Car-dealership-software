@@ -65,6 +65,7 @@ import {
   type PolicyEngine,
 } from '@dealer/identity-access';
 import { createInventoryActionCatalog } from '@dealer/inventory';
+import { createCrmActionCatalog } from '@dealer/crm';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
 import { identityProvider } from '../identity/provider';
 
@@ -137,6 +138,7 @@ export function actionCatalog(): ActionCatalog {
       createServiceActionCatalog(),
       createIdentityActionCatalog(),
       createInventoryActionCatalog(),
+      createCrmActionCatalog(),
     );
   }
   return catalogInstance;
@@ -461,6 +463,17 @@ const RESOURCE_PARAMS: Record<string, string> = {
   // advertises has already been left behind in the URL.
   stock_item: 'stockItemId',
   stock_listing: 'listingId',
+  // ── RELEASE TRAIN 3 ──────────────────────────────────────────────────────
+  //
+  // Everything hanging off a lead — its activities, its assignment, its
+  // lifecycle and its handoff — is authorized THROUGH the lead, so those routes
+  // name `leadId`. An appointment gets its own entry because it is rescheduled
+  // and cancelled by its own identifier once the lead is behind it in the URL,
+  // and a campaign gets one because approving and launching it are decisions
+  // about the campaign rather than about any lead.
+  lead: 'leadId',
+  appointment: 'appointmentId',
+  campaign: 'campaignId',
 };
 
 export function requireAction(action: string) {

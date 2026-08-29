@@ -10,6 +10,8 @@ import {
   LOGIN_TRANSACTION_EXPIRY_JOB,
   REAUTHENTICATION_EXPIRY_JOB,
   SUPPORT_ACCESS_EXPIRY_JOB,
+  CAMPAIGN_DISPATCH_JOB,
+  LEAD_SLA_SWEEP_JOB,
   WORKER_JOBS,
 } from '@dealer/worker';
 import {
@@ -68,8 +70,11 @@ describe('the worker job registry, through the compiled entry point (FBL-020-R5 
         REAUTHENTICATION_EXPIRY_JOB,
         ADMIN_OUTBOX_DISPATCH_JOB,
         LISTING_DISPATCH_JOB,
+        CAMPAIGN_DISPATCH_JOB,
+        LEAD_SLA_SWEEP_JOB,
       ],
-      'the compiled worker must register the three sweeps and both outbox dispatchers',
+      'the compiled worker must register the three sweeps, both outbox dispatchers, ' +
+        'the campaign dispatcher and the first-response sweep',
     );
 
     /*

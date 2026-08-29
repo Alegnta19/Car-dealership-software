@@ -116,6 +116,8 @@ jobs:
           grep -q 'identity.reauthentication_transaction.expiry' artifacts/worker-smoke.txt
           grep -q 'admin.outbox.dispatch' artifacts/worker-smoke.txt
           grep -q 'inventory.listing.dispatch' artifacts/worker-smoke.txt
+          grep -q 'crm.campaign.dispatch' artifacts/worker-smoke.txt
+          grep -q 'crm.lead.sla_sweep' artifacts/worker-smoke.txt
 
       - name: Migrations apply from an empty database
         run: npm run migrate

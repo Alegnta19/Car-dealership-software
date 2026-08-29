@@ -1,5 +1,5 @@
 {
-  "name": "@dealer/api",
+  "name": "@dealer/crm",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/index.js",
@@ -17,12 +17,7 @@
     "@dealer/contracts": "0.1.0",
     "@dealer/platform": "0.1.0",
     "@dealer/database": "0.1.0",
-    "@dealer/fixed-ops": "0.1.0",
-    "express": "^4.21.2",
-    "prom-client": "^15.1.3",
-    "@dealer/organization": "0.1.0",
     "@dealer/identity-access": "0.1.0",
-    "@dealer/inventory": "0.1.0",
-    "@dealer/crm": "0.1.0"
+    "@dealer/inventory": "0.1.0"
   }
 }

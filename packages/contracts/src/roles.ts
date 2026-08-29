@@ -24,6 +24,8 @@ export const ROLES = {
   // is the real distinction a dealership draws.
   INVENTORY_MANAGER: 'inventory_manager',
   INVENTORY_CLERK: 'inventory_clerk',
+  MARKETING_MANAGER: 'marketing_manager',
+  BDC_AGENT: 'bdc_agent',
 } as const;
 
 export type Role = (typeof ROLES)[keyof typeof ROLES];

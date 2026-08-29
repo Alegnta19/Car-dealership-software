@@ -14,7 +14,8 @@
       "@dealer/web": ["apps/web/src/index.ts"],
       "@dealer/organization": ["packages/organization/src/index.ts"],
       "@dealer/identity-access": ["packages/identity-access/src/index.ts"],
-      "@dealer/inventory": ["packages/inventory/src/index.ts"]
+      "@dealer/inventory": ["packages/inventory/src/index.ts"],
+      "@dealer/crm": ["packages/crm/src/index.ts"]
     },
     "noEmit": true
   },
