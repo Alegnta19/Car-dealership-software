@@ -640,6 +640,15 @@
               "note": "the committed RELEASE TRAIN 2 vehicle-acquisition-and-inventory migration, carried unmutated while a 057 control body is probed"
             }
           ]
+        },
+        "063_crm_bdc_marketing.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "6ed0cdd5f170b47d4de6e4e69a911314e78d06b0d1739ddf233844c2a82d20f0",
+              "note": "the committed RELEASE TRAIN 3 CRM, BDC and marketing migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

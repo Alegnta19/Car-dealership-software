@@ -167,6 +167,64 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'change is attributable and none of it destroys what it replaced',
   },
   {
+    file: 'packages/crm/src/leads.ts',
+    because:
+      'RELEASE TRAIN 3’s lead: capture under an advisory lock on the interest, lifecycle ' +
+      'transitions through an enumerated machine, and the sales handoff — every one ' +
+      'taking an acting user link, advancing the row’s version and writing one audit row ' +
+      'in the transaction that made the change. The handoff freezes a snapshot rather ' +
+      'than pointing at a row that can still move',
+  },
+  {
+    file: 'packages/crm/src/routing.ts',
+    because:
+      'RELEASE TRAIN 3’s ownership and clock: queues, assignment under optimistic ' +
+      'concurrency with an append-only history, the response policy superseded rather ' +
+      'than overwritten, and the escalation sweep whose idempotence is a database ' +
+      'constraint rather than a check',
+  },
+  {
+    file: 'packages/crm/src/activities.ts',
+    because:
+      'RELEASE TRAIN 3’s shared timeline and appointments: attributed and versioned, ' +
+      'with a reschedule recorded as a move that keeps both times rather than as an edit',
+  },
+  {
+    file: 'packages/crm/src/consent-records.ts',
+    because:
+      'RELEASE TRAIN 3’s permission record: consent per channel and purpose, and a ' +
+      'suppression keyed on the contact value so it outlives the record it was made ' +
+      'against. Both attributed and versioned, and neither copies the contact detail ' +
+      'into the audit trail',
+  },
+  {
+    file: 'packages/crm/src/sources.ts',
+    because:
+      'RELEASE TRAIN 3’s source catalog: attributed and versioned, and retired rather ' +
+      'than deleted so the touches that named a source keep their meaning',
+  },
+  {
+    file: 'packages/crm/src/campaigns.ts',
+    because:
+      'RELEASE TRAIN 3’s campaigns and their frozen versions: created, drafted, ' +
+      'audience-built, approved and launched, each attributed, versioned and audited in ' +
+      'the transaction that made the change — and the launch raises its outbox event in ' +
+      'that same transaction',
+  },
+  {
+    file: 'packages/crm/src/sends.ts',
+    because:
+      'RELEASE TRAIN 3’s delivery: the send state machine, its per-attempt event ledger ' +
+      'and the reconciliation of replies. Suppression and consent are re-checked in the ' +
+      'same transaction as the send, and an opt-out writes its suppression there too',
+  },
+  {
+    file: 'packages/crm/src/attribution.ts',
+    because:
+      'RELEASE TRAIN 3’s attribution runs: computed over the immutable touch ledger, ' +
+      'superseding rather than mutating a previous run, attributed and audited',
+  },
+  {
     file: 'packages/inventory/src/listings.ts',
     because:
       'RELEASE TRAIN 2’s publication: the listing state machine and the dispatcher that ' +
@@ -300,6 +358,29 @@ const EXPECTED_OWNED_TABLES = [
   'stock_prices',
   'stock_transfers',
   'vehicles',
+  // ── RELEASE TRAIN 3 (migration 063) ──────────────────────────────────────
+  //
+  // Twelve tables carry `authorization_version` because they hold CURRENT STATE
+  // somebody may correct: a lead and its owner, the queues and the response
+  // policy, the source catalog, an activity, an appointment, consent, a
+  // suppression, a campaign, its version, and a send whose delivery state
+  // changes as a provider answers. The train's twelve APPEND-ONLY tables —
+  // intakes, source touches, assignments, status events, escalations, the
+  // handoff, appointment history, the frozen template and audience, delivery
+  // events, replies and computed credit — deliberately carry no version,
+  // because nothing corrects them: a further row is written instead.
+  'appointments',
+  'attribution_runs',
+  'campaign_sends',
+  'campaign_versions',
+  'campaigns',
+  'contact_suppressions',
+  'lead_activities',
+  'lead_queues',
+  'lead_sla_policies',
+  'lead_sources',
+  'leads',
+  'party_purpose_consents',
 ] as const;
 
 /**

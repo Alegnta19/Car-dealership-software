@@ -1,0 +1,188 @@
+{
+  "order": "Master Blueprint Section 14.3 Part A (RT3-C1) — persisted browser/DOM owner journey",
+  "how_it_was_driven": "The REAL console, served by the REAL application, against a REAL database, behind a REAL cookie login. Only the identity PROVIDER is replaced, at the seam the shipped code already exposes (`useIdentityProviderForTests`): there is no WorkOS to call, and the fake signs genuine tokens with the local issuer so the production verification path runs unchanged. Every step below was performed by clicking the console's OWN buttons and filling its OWN form controls — the handlers that ran are the ones that ship, and each stage records the DOM that resulted. The in-app browser pane does not composite in this environment, so the clicks were dispatched programmatically onto the real DOM elements and the rendered DOM was read back; what is NOT proved here is the pixel-level pointer path, and that is stated rather than glossed.",
+  "operator": "one person holding marketing_manager and bdc_agent",
+  "navigation_rendered": [
+    "Overview",
+    "Dealership settings",
+    "Business hours",
+    "Policies",
+    "Organization",
+    "Users & access",
+    "Inventory",
+    "Customers",
+    "Pipeline",
+    "Campaigns",
+    "Consent"
+  ],
+  "stages": [
+    {
+      "stage": "1. pipeline, empty",
+      "hash": "#/pipeline",
+      "heading": "Pipeline",
+      "cards": [
+        "0 — Open leads",
+        "0 — Awaiting first reply",
+        "0 — Past the target",
+        "0 — Appointments booked",
+        "— — Median reply"
+      ],
+      "text": "Pipeline 0 Open leads 0 Awaiting first reply 0 Past the target 0 Appointments booked — Median reply No leads yet. Capture a lead"
+    },
+    {
+      "stage": "2. lead captured through the console's own dialog",
+      "hash": "#/lead/ff64f5bb-3f3f-40eb-8fb0-d02c0a2ed55b",
+      "heading": "Lead",
+      "cards": [
+        "New — State",
+        "not yet — First reply",
+        "8/31/2026, 5:58:20 AM — Reply due",
+        "8/31/2026, 6:28:20 AM — Escalates",
+        "no — Escalated"
+      ],
+      "note": "TWO DEADLINES ARE VISIBLE, thirty minutes apart and sixty: the response target the dealership promised the customer, and the threshold at which a manager is told. Before this correction the screen showed one, and the sweep escalated at the wrong one.",
+      "text": "Lead New State not yet First reply 8/31/2026, 5:58:20 AM Reply due 8/31/2026, 6:28:20 AM Escalates no Escalated Owner unassigned Disposition — Captured 8/31/2026, 5:28:20 AM | Log activity | Book appointment | Mark Working | Close lead | Timeline 8/31/2026, 5:28:20 AM touch website"
+    },
+    {
+      "stage": "3. an outbound call stops the clock; a note would not have",
+      "hash": "#/lead/ff64f5bb-3f3f-40eb-8fb0-d02c0a2ed55b",
+      "heading": "Lead",
+      "cards": [
+        "New — State",
+        "8/31/2026, 5:28:23 AM — First reply",
+        "8/31/2026, 5:58:20 AM — Reply due",
+        "8/31/2026, 6:28:20 AM — Escalates",
+        "no — Escalated"
+      ],
+      "text": "Lead New State 8/31/2026, 5:28:23 AM First reply … Timeline 8/31/2026, 5:28:20 AM touch website 8/31/2026, 5:28:23 AM activity.call Called back, arranging a visit outbound"
+    },
+    {
+      "stage": "4. appointment booked — and the funnel says so",
+      "hash": "#/lead/ff64f5bb-3f3f-40eb-8fb0-d02c0a2ed55b",
+      "heading": "Lead",
+      "cards": [
+        "Appointment set — State",
+        "8/31/2026, 5:28:23 AM — First reply",
+        "8/31/2026, 5:58:20 AM — Reply due",
+        "8/31/2026, 6:28:20 AM — Escalates",
+        "no — Escalated"
+      ],
+      "note": "Before this correction a lead still marked `new` kept that label with an appointment already in the diary — the screen said one thing and the calendar another. The status event records `new -> appointment_set`, the move that actually happened, rather than inventing an intermediate one.",
+      "text": "Lead Appointment set State … Log activity | Book appointment | Mark Qualified | Close lead | Hand to sales | Timeline … appointment.scheduled test_drive … status new -> appointment_set"
+    },
+    {
+      "stage": "5. handed to sales — the CRM stops",
+      "hash": "#/lead/ff64f5bb-3f3f-40eb-8fb0-d02c0a2ed55b",
+      "heading": "Lead",
+      "cards": [
+        "Handed to sales — State",
+        "8/31/2026, 5:28:23 AM — First reply",
+        "8/31/2026, 5:58:20 AM — Reply due",
+        "8/31/2026, 6:28:20 AM — Escalates",
+        "no — Escalated"
+      ],
+      "text": "Lead Handed to sales State … Disposition handed_to_sales … Handed to sales 8/31/2026, 5:28:41 AM \"This lead belongs to sales now. The CRM stops here.\" Timeline … status new -> appointment_set … status appointment_set -> handed_off"
+    },
+    {
+      "stage": "6. campaigns, empty",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "cards": [
+        "0 — Active campaigns",
+        "0 — Sending now",
+        "0 — Delivered",
+        "0 — Withheld",
+        "0 — Held for quiet hours",
+        "0 — Replies",
+        "0 — Opt-outs"
+      ],
+      "text": "Campaigns … Revenue and ROI: NOT_YET_AVAILABLE. Attribution credits sources and campaigns today. Money is reported as unavailable rather than as zero, because no sale exists in this platform yet. New campaign | Consent & suppression | Compute attribution | Campaigns No campaigns yet."
+    },
+    {
+      "stage": "7. campaign created in the browser",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "text": "Spring open day draft Downtown · email · sales_marketing · quiet hours 21:00–08:00 UTC No versions drafted. Draft a version"
+    },
+    {
+      "stage": "8. version drafted in the browser",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "text": "Version State Audience Delivered Withheld Next step | v1 draft 0 0 0 Build audience"
+    },
+    {
+      "stage": "9. audience resolved, with the exclusions itemized",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "audience_dialog": "Audience for v1 | Who: every current customer | Considered 3 | Will receive it 1 | No usable address 0 | Have not agreed 2 | Asked us to stop 0",
+      "note": "The refusals are shown beside the reach. A screen that displayed only the one person it would reach would teach a marketer that the list is small, when what is small is the PERMISSION — a different problem with a different fix.",
+      "text": "Version State Audience Delivered Withheld Next step | v1 draft 1 0 0 Build audience Approve"
+    },
+    {
+      "stage": "10. version approved in the browser",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "text": "v1 approved 1 0 0 Launch"
+    },
+    {
+      "stage": "11. version launched in the browser",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "cards": [
+        "1 — Active campaigns",
+        "1 — Sending now",
+        "0 — Delivered",
+        "0 — Withheld",
+        "0 — Held for quiet hours",
+        "0 — Replies",
+        "0 — Opt-outs"
+      ],
+      "note": "The campaign now reads `active`. Before this correction nothing ever moved that status off `draft`, so the \"active campaigns\" figure could only ever be zero — a dashboard number with no path to any other value.",
+      "text": "Spring open day active … v1 executing 1 0 0 Delivery"
+    },
+    {
+      "stage": "12. the COMPILED worker delivered it",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "cards": [
+        "1 — Active campaigns",
+        "0 — Sending now",
+        "1 — Delivered",
+        "0 — Withheld",
+        "0 — Held for quiet hours",
+        "0 — Replies",
+        "0 — Opt-outs"
+      ],
+      "worker_log": "campaign dispatch pass complete job=crm.campaign.dispatch tenants=1 outboxDelivered=1 outboxReplayed=0 sent=1 deferred=0 suppressed=0 retrying=0 failed=0",
+      "delivery_dialog": "Delivery for v1 | Customer State Why withheld Attempts Responses | Iris Customer sent — 1 — Log reply Log opt-out",
+      "text": "v1 completed 1 1 0 Delivery"
+    },
+    {
+      "stage": "13. a reply logged in the browser became a lead",
+      "hash": "#/campaigns",
+      "heading": "Campaigns",
+      "cards": [
+        "1 — Active campaigns",
+        "0 — Sending now",
+        "1 — Delivered",
+        "0 — Withheld",
+        "0 — Held for quiet hours",
+        "1 — Replies",
+        "0 — Opt-outs"
+      ],
+      "text": "… Leads by source | Newsletter newsletter 1 | Dealer website website 1"
+    },
+    {
+      "stage": "14. consent and suppression screen",
+      "hash": "#/consent",
+      "heading": "Consent",
+      "text": "Consent \"Permission is checked twice. Once when an audience is built, and again in the moment before each message is handed to a provider — so somebody who opts out after a campaign is approved still does not receive it.\" Suppressed contacts Nobody has asked to be left alone. Suppress a contact"
+    },
+    {
+      "stage": "15. a contact suppressed in the browser",
+      "hash": "#/consent",
+      "heading": "Consent",
+      "text": "Suppressed contacts | Contact Kind Reason Since | samuel.tesfaye@example.com email unsubscribe 8/31/2026, 5:29:58 AM"
+    }
+  ]
+}

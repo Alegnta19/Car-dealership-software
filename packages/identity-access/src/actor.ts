@@ -190,3 +190,42 @@ export async function rolesForUserLink(
         );
   return (result.rows as Array<{ role: string }>).map((r) => r.role);
 }
+
+/**
+ * THE ROOFTOPS AN ACTOR MAY SEE, from their EFFECTIVE bindings only.
+ *
+ * Release Train 3's manager view is scoped to "permitted rooftops", and the
+ * only honest source for that list is the same binding table the policy engine
+ * decides from — read through the SHARED effectiveness predicate, so a binding
+ * that is revoked, superseded or outside its window cannot widen a dashboard
+ * after it has stopped authorizing anything.
+ *
+ * A binding above a rooftop reaches every rooftop beneath it: a tenant-scoped
+ * manager sees the whole dealership, a legal-entity binding sees that entity's
+ * stores, and a rooftop binding sees one. The walk is done by migration 059's
+ * `org_ancestry_all`, which is the same registry the engine walks, so this list
+ * cannot disagree with what the engine would allow.
+ */
+export async function permittedRooftopIds(tenantId: string, userLinkId: string): Promise<string[]> {
+  const result = await query(
+    `SELECT DISTINCT r.rooftop_id::text AS rooftop_id
+       FROM rooftops r
+       JOIN role_bindings rb
+         ON rb.tenant_id = r.tenant_id
+        AND rb.user_link_id = $2
+        AND ${EFFECTIVE_ROLE_BINDING_SQL}
+      WHERE r.tenant_id = $1
+        AND r.status = 'active'
+        AND (
+          rb.scope_level = 'tenant'
+          OR (rb.scope_level = 'rooftop' AND rb.scope_id = r.rooftop_id)
+          OR EXISTS (
+            SELECT 1 FROM org_ancestry_all($1, 'rooftop', r.rooftop_id) chain
+             WHERE chain.level = rb.scope_level AND chain.node_id = rb.scope_id
+          )
+        )
+      ORDER BY 1`,
+    [tenantId, userLinkId],
+  );
+  return (result.rows as Array<{ rooftop_id: string }>).map((r) => r.rooftop_id);
+}

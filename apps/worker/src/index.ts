@@ -8,6 +8,8 @@
  */
 export {
   ADMIN_OUTBOX_DISPATCH_JOB,
+  CAMPAIGN_DISPATCH_JOB,
+  LEAD_SLA_SWEEP_JOB,
   LISTING_DISPATCH_JOB,
   LOGIN_TRANSACTION_EXPIRY_JOB,
   REAUTHENTICATION_EXPIRY_JOB,
@@ -16,6 +18,8 @@ export {
   main,
   runAdminOutboxDispatchOnce,
   runAllJobsOnce,
+  runCampaignDispatchOnce,
+  runLeadSlaSweepOnce,
   runListingDispatchOnce,
   runLoginTransactionExpiryOnce,
   runReauthenticationExpiryOnce,

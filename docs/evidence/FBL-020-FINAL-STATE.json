@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 15,
+    "used": 13,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -570,9 +570,15 @@
         "used": 1,
         "failed_ci": 0,
         "verdict": "DISCLOSED — ONE code-bearing commit, listed as this_commit below. Its predecessor 97f0db3 is listed above with a GREEN run and a defect: no run failed, and the correction was still owed. A budget that counted only red runs would have recorded nothing here at all."
+      },
+      "RT3": {
+        "allowed": "no numeric budget (FBL-020-R7-A1 §4, which governs this repository's orders and their corrections)",
+        "used": 1,
+        "failed_ci": 0,
+        "verdict": "DISCLOSED — ONE code-bearing commit, listed as this_commit below. Release Train 3 and its bounded correction RT3-C1 are the SAME commit: the correction amends migration 063 and the code around it rather than adding a second migration, which is what the order permits and what keeps the chain honest. Its predecessor 43ffbfa was pushed and had a GREEN exact-SHA run (33240099536, #85) and was nevertheless returned for four outcomes; that commit is not in this repository any more, because the correction replaced it."
       }
     },
-    "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here. AFTER THE PR #12 MERGE (FBL-020 ACCEPTED AND CLOSED) the first-parent line this record enumerates changed: the sixteen C1/C2 branch commits sit behind the merge commit’s second parent, so used now counts the nine code-bearing commits of the measured range plus the merge commit caf6339 and the Release Train 1 commit 910155f — eleven — and failed_ci counts the four recorded red runs of the measured range. Nothing was deleted: every previously enumerated commit, subject and run is reachable in this repository’s history and in the git history of this file. AFTER THE PR #13 MERGE (Release Train 1 accepted and closed) the first-parent line moved again: Release Train 1’s four commits sit behind the merge commit 371819c’s second parent, exactly as the C1/C2 commits sit behind caf6339’s. used therefore counts the nine code-bearing commits of the measured range plus the two merge commits and the Release Train 2 commit e77e5cf — twelve — and failed_ci still counts the four recorded red runs of the measured range. Nothing was deleted: every commit named in any earlier revision of this record is reachable in this repository and preserved in this file’s git history. The Release Train 2 typecheck correction is code-bearing (it edits tsconfig.json), so used moves 12 -> 13; 2fc5d28 above is documentation-only and its red run is disclosed without being charged to the budget, exactly as the R7-C1 and R7-C2 documentation closeouts are. RT2-C1 adds ONE code-bearing commit — the bounded correction whose record this is — taking used 13 -> 14. 9606c11 above was already counted as the previous closeout's this_commit and is not counted twice. RT2-C2 adds ONE further code-bearing commit — the resolver-privilege correction whose record this is — taking used 14 -> 15."
+    "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here. AFTER THE PR #12 MERGE (FBL-020 ACCEPTED AND CLOSED) the first-parent line this record enumerates changed: the sixteen C1/C2 branch commits sit behind the merge commit’s second parent, so used now counts the nine code-bearing commits of the measured range plus the merge commit caf6339 and the Release Train 1 commit 910155f — eleven — and failed_ci counts the four recorded red runs of the measured range. Nothing was deleted: every previously enumerated commit, subject and run is reachable in this repository’s history and in the git history of this file. AFTER THE PR #13 MERGE (Release Train 1 accepted and closed) the first-parent line moved again: Release Train 1’s four commits sit behind the merge commit 371819c’s second parent, exactly as the C1/C2 commits sit behind caf6339’s. used therefore counts the nine code-bearing commits of the measured range plus the two merge commits and the Release Train 2 commit e77e5cf — twelve — and failed_ci still counts the four recorded red runs of the measured range. Nothing was deleted: every commit named in any earlier revision of this record is reachable in this repository and preserved in this file’s git history. The Release Train 2 typecheck correction is code-bearing (it edits tsconfig.json), so used moves 12 -> 13; 2fc5d28 above is documentation-only and its red run is disclosed without being charged to the budget, exactly as the R7-C1 and R7-C2 documentation closeouts are. RT2-C1 adds ONE code-bearing commit — the bounded correction whose record this is — taking used 13 -> 14. 9606c11 above was already counted as the previous closeout's this_commit and is not counted twice. RT2-C2 adds ONE further code-bearing commit — the resolver-privilege correction whose record this is — taking used 14 -> 15. RELEASE TRAIN 3 adds ONE code-bearing commit — the CRM, BDC and marketing train whose record this is. The count nevertheless FALLS from 15 to 13, and that is not a discount: the Release Train 2 merge collapsed four branch commits into one, exactly as the Release Train 1 merge did before it, so the repository now contains three merges where it once contained a merge and four commits. The budget counts what this repository holds; the commits it replaced are named in the merge entry above and keep their own runs in this file's history."
   },
   "submission": {
     "status": "SUBMITTED FOR REVIEW — NOT ACCEPTED",
@@ -636,7 +642,7 @@
   ],
   "this_commit": {
     "is_code_bearing": true,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is the RT2-C2 bounded correction: EXECUTE on the row-security-bypassing resource_org_leaf is revoked from PUBLIC and held by dealership_evidence_owner alone, the two frozen evidence triggers that call it become SECURITY DEFINER owned by that non-assumable role, and the engine resolves through a new SECURITY INVOKER lookup that takes no tenant argument. It edits a migration, a package, a script, tests and documents, so it IS code-bearing and is counted."
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is RELEASE TRAIN 3 — CRM, BDC and marketing — as corrected by RT3-C1: the browser-visible operator journey completed, exact parent/rooftop/assignment/terminal-state authority enforced, intake concurrency, SLA timing, consent truth and worker-processing corrected, and pre-sale revenue made structurally unrepresentable. It edits migrations, packages, apps, scripts and tests, so it IS code-bearing and is counted."
   },
   "commits_ahead_of_the_evidence_commit": [
     {
@@ -645,7 +651,7 @@
       "subject": "FBL-020 ACCEPTED AND CLOSED — R7-C2 Final Bounded Closure (PR #12)",
       "code_bearing": true,
       "run": null,
-      "note": "The PR #12 merge commit. Its second parent df45d9e is the C2 final head, measured green by exact-SHA run 33111058743 (4/4 jobs); the sixteen C1/C2 branch commits it carries are preserved in this repository and in the git history of this record."
+      "note": "The FBL-020 acceptance merge. Its second parent df45d9e carried the green exact-SHA run 33111058743; the merge commit itself has no run of its own."
     },
     {
       "sha": "371819c78046af62b7005664d6460d4e3a002585",
@@ -653,120 +659,15 @@
       "subject": "Release Train 1 — Dealership Administration (PR #13)",
       "code_bearing": true,
       "run": null,
-      "note": "The PR #13 merge commit, and the reason this list changed shape a second time. Merging moved Release Train 1’s four commits (910155f, b1ba34b, 0d8c5bd, d9e71c4) off the first-parent line and behind this commit’s SECOND parent, so a record enumerating that line no longer names them individually. Nothing was lost: d9e71c4 carries the green exact-SHA run 33205641171 (#76, 4/4 jobs) that the architect accepted, all four commits remain reachable in this repository, and their entries stand unedited in the git history of this file. Counted code-bearing — it is the commit that brought the Release Train 1 code onto main — with run: null because no workflow run names this merge commit as its head_sha."
+      "note": "The Release Train 1 merge. Its second parent d9e71c4 carried the green exact-SHA run 33205641171 (#76), 4/4."
     },
     {
-      "sha": "e77e5cf5fdb656c92966c84da5bb0487172896b0",
-      "short": "e77e5cf",
-      "subject": "RT2: vehicle acquisition and inventory — party, canonical stock, merchandising, listings",
+      "sha": "516cc86dc0b4195a53be5f8d67f1a7b4330b1053",
+      "short": "516cc86",
+      "subject": "Release Train 2 — Vehicle Acquisition and Inventory (PR #14)",
       "code_bearing": true,
       "run": null,
-      "note": "RELEASE TRAIN 2 (Vehicle Acquisition and Inventory) — post-FBL-020 work, the second train after acceptance. Listed with run: null until its own exact-SHA run exists; the Release Train 2 return message carries the commit-to-run binding, as Release Train 1’s did."
-    },
-    {
-      "sha": "2fc5d283d2417ab9752a4fb32ba5bf340ea067b7",
-      "short": "2fc5d28",
-      "subject": "RT2 closeout: the final-state record describes the post-merge repository again",
-      "code_bearing": false,
-      "run": {
-        "workflow_path": ".github/workflows/ci.yml",
-        "run_id": 33216501045,
-        "run_number": 78,
-        "run_attempt": 1,
-        "head_sha": "2fc5d283d2417ab9752a4fb32ba5bf340ea067b7",
-        "conclusion": "failure",
-        "jobs_total": 4,
-        "jobs_non_success": 1,
-        "jobs": [
-          {
-            "name": "typecheck, lint ratchet, build, all tests, scans",
-            "conclusion": "failure"
-          },
-          {
-            "name": "populated upgrade drill + reconciliation negative controls",
-            "conclusion": "success"
-          },
-          {
-            "name": "secret scan (genuine full history)",
-            "conclusion": "success"
-          },
-          {
-            "name": "container build (digest-pinned base)",
-            "conclusion": "success"
-          }
-        ]
-      },
-      "note": "The Release Train 2 documentation closeout. Its exact-SHA run 33216501045 (#78) FAILED on ONE step of one job — Typecheck — because the root tsconfig.json maps every @dealer/* package to its SOURCE for typechecking and the new @dealer/inventory entry was missing: on a clean checkout, with no built dist to resolve against, the module could not be found. No local run could see it, because a built dist was present. The other three jobs were green, the populated upgrade drill and the fresh/upgraded convergence among them. DOCUMENTATION-ONLY, so the red run is disclosed here and moves neither commit_budget.used nor commit_budget.failed_ci."
-    },
-    {
-      "sha": "9606c115046211ea38cba2ba23a501120fd51211",
-      "short": "9606c11",
-      "subject": "RT2: the root tsconfig path map names @dealer/inventory",
-      "code_bearing": true,
-      "run": {
-        "workflow_path": ".github/workflows/ci.yml",
-        "run_id": 33216841008,
-        "run_number": 79,
-        "run_attempt": 1,
-        "head_sha": "9606c115046211ea38cba2ba23a501120fd51211",
-        "conclusion": "success",
-        "jobs_total": 4,
-        "jobs_non_success": 0,
-        "jobs": [
-          {
-            "name": "typecheck, lint ratchet, build, all tests, scans",
-            "conclusion": "success"
-          },
-          {
-            "name": "populated upgrade drill + reconciliation negative controls",
-            "conclusion": "success"
-          },
-          {
-            "name": "secret scan (genuine full history)",
-            "conclusion": "success"
-          },
-          {
-            "name": "container build (digest-pinned base)",
-            "conclusion": "success"
-          }
-        ]
-      },
-      "note": "The one-line correction run 33216501045 (#78) demanded: the root tsconfig.json maps every @dealer/* package to its SOURCE so typechecking resolves the workspace before anything is built, and @dealer/inventory had no entry. Its own exact-SHA run was GREEN 4/4 and is the run that closed Release Train 2 for architect review."
-    },
-    {
-      "sha": "97f0db37a7c95766657a7bf10a007cd4c7793642",
-      "short": "97f0db3",
-      "subject": "RT2-C1: the duplicate decision is decided, and the resolver is not an oracle",
-      "code_bearing": true,
-      "run": {
-        "workflow_path": ".github/workflows/ci.yml",
-        "run_id": 33229127605,
-        "run_number": 80,
-        "run_attempt": 1,
-        "head_sha": "97f0db37a7c95766657a7bf10a007cd4c7793642",
-        "conclusion": "success",
-        "jobs_total": 4,
-        "jobs_non_success": 0,
-        "jobs": [
-          {
-            "name": "typecheck, lint ratchet, build, all tests, scans",
-            "conclusion": "success"
-          },
-          {
-            "name": "populated upgrade drill + reconciliation negative controls",
-            "conclusion": "success"
-          },
-          {
-            "name": "secret scan (genuine full history)",
-            "conclusion": "success"
-          },
-          {
-            "name": "container build (digest-pinned base)",
-            "conclusion": "success"
-          }
-        ]
-      },
-      "note": "The RT2-C1 bounded correction. Its exact-SHA run was GREEN 4/4 and every objective gate passed on it. The architect nevertheless returned its SECOND outcome: binding resource_org_leaf to app_tenant_ctx() moved authority from a caller-supplied ARGUMENT to a caller-writable GUC, so a runtime session could still reach the row-security bypass by setting the context it wanted. The probe shipped in this commit asserted the argument form and therefore passed while the hole stood open — a green run over a design defect, disclosed here because the run being green is exactly what makes it worth writing down. RT2-C2 replaces the predicate with a privilege; the first outcome (the duplicate decision) was accepted and is untouched."
+      "note": "The Release Train 2 merge, carrying RT2 and both of its bounded corrections. Its second parent 6a781c2 carried the green exact-SHA run 33233271137 (#81), 4/4, and `git diff 6a781c2 516cc86` is empty — the merge holds the tested tree byte for byte. The four branch commits it contains (e77e5cf, 2fc5d28, 9606c11, 97f0db3) are reachable through it and are listed with their own runs in this file's history; the merge replaces them here because a true merge moves them off the line this gate walks, and the record must describe the repository as it is rather than as the branch was."
     }
   ]
 }

@@ -4,6 +4,9 @@ import { after, beforeEach, describe, test } from 'node:test';
 import {
   TEST_REAUTH_CALLBACK_URI,
   bootstrapAdministrator,
+  seedDealerGroup,
+  seedLegalEntity,
+  seedRooftop,
   ensureActiveConnection,
   fixtureAuthorizationStateWrite,
   mintReauthGrant,
@@ -28,6 +31,18 @@ import {
   startReauthentication,
 } from '@dealer/identity-access';
 import { LOGIN_TRANSACTION_EXPIRY_JOB, main, runAllJobsOnce } from '@dealer/worker';
+import { createParty } from '@dealer/inventory';
+import {
+  approveCampaignVersion,
+  buildAudience,
+  captureLead,
+  createCampaign,
+  defineLeadSource,
+  draftCampaignVersion,
+  executeCampaignVersion,
+  setPurposeConsent,
+  setSlaPolicy,
+} from '@dealer/crm';
 
 /**
  * FBL-020-R5 §4.8 — THE WORKER RUNS EVERY EXPIRY SWEEP THAT EXISTS.
@@ -719,6 +734,199 @@ describe(
         1,
         'a replayed delivery must hit the ledger conflict — the effect happens exactly once',
       );
+    });
+    // ── jobs 6 and 7: the Release Train 3 passes ─────────────────────────────
+    //
+    // Both are driven through `runAllJobsOnce` — the exact function `--once`
+    // calls — rather than through the service, so removing the registry entry
+    // breaks them. A test that called the pass directly would stay green while
+    // the deployment ran nothing, which is the failure these exist to catch.
+
+    /** A dealership with one rooftop, and the source every lead needs. */
+    async function seedCrmWorld(): Promise<{ rooftopId: string; admin: string }> {
+      const group = await seedDealerGroup({ tenantId, name: 'Sweep Group', status: 'active' });
+      const entity = await seedLegalEntity({
+        tenantId,
+        dealerGroupId: group.dealerGroupId,
+        name: 'Sweep LLC',
+        status: 'active',
+      });
+      const rooftop = await seedRooftop({
+        tenantId,
+        legalEntityId: entity.legalEntityId,
+        name: 'Sweep Downtown',
+        status: 'active',
+      });
+      const admin = await bootstrapAdministrator(tenantId);
+      const source = await defineLeadSource({
+        actingUserLinkId: admin,
+        tenantId,
+        sourceCode: 'website',
+        displayName: 'Website',
+        channel: 'web',
+        medium: 'organic',
+      });
+      assert.equal(source.outcome, 'saved');
+      return { rooftopId: rooftop.rooftopId, admin };
+    }
+
+    test('the worker pass dispatches a due campaign send, exactly once', async () => {
+      const { rooftopId, admin } = await seedCrmWorld();
+      const party = await createParty({
+        actingUserLinkId: admin,
+        tenantId,
+        partyType: 'person',
+        details: { givenName: 'Reader', familyName: 'One', email: 'reader.one@example.com' },
+      });
+      assert.equal(party.outcome, 'created');
+      const partyId = (party as { party: { partyId: string } }).party.partyId;
+      const consent = await setPurposeConsent({
+        actingUserLinkId: admin,
+        tenantId,
+        partyId,
+        channel: 'email',
+        purpose: 'sales_marketing',
+        state: 'granted',
+        source: 'counter',
+      });
+      assert.equal(consent.outcome, 'saved');
+
+      const campaign = await createCampaign({
+        actingUserLinkId: admin,
+        tenantId,
+        rooftopId,
+        name: 'Sweep Spring',
+        channel: 'email',
+        purpose: 'sales_marketing',
+        sourceCode: 'website',
+        // No quiet window: this test is about the worker running at all.
+        quietHoursStartMinute: 0,
+        quietHoursEndMinute: 0,
+      });
+      assert.equal(campaign.outcome, 'created');
+      const campaignId = (campaign as { campaign: { campaignId: string } }).campaign.campaignId;
+
+      const version = await draftCampaignVersion({
+        actingUserLinkId: admin,
+        tenantId,
+        campaignId,
+        subject: 'Spring',
+        body: 'Come and see us. Reply STOP to unsubscribe.',
+      });
+      assert.equal(version.outcome, 'drafted');
+      const drafted = (
+        version as { version: { campaignVersionId: string; authorizationVersion: number } }
+      ).version;
+      const audience = await buildAudience({
+        actingUserLinkId: admin,
+        tenantId,
+        campaignId,
+        campaignVersionId: drafted.campaignVersionId,
+        rule: 'all_active_customers',
+      });
+      assert.equal(audience.outcome, 'built');
+      assert.equal((audience as { result: { included: number } }).result.included, 1);
+      const approved = await approveCampaignVersion({
+        actingUserLinkId: admin,
+        tenantId,
+        campaignId,
+        campaignVersionId: drafted.campaignVersionId,
+        expectedVersion: drafted.authorizationVersion,
+      });
+      assert.equal(approved.outcome, 'approved', JSON.stringify(approved));
+      const launched = await executeCampaignVersion({
+        actingUserLinkId: admin,
+        tenantId,
+        campaignId,
+        campaignVersionId: drafted.campaignVersionId,
+        expectedVersion: (approved as { version: { authorizationVersion: number } }).version
+          .authorizationVersion,
+      });
+      assert.equal(launched.outcome, 'executing', JSON.stringify(launched));
+
+      const pending = await query(`SELECT state FROM campaign_sends WHERE tenant_id = $1`, [
+        tenantId,
+      ]);
+      assert.equal(String((pending.rows[0] as { state: string }).state), 'pending');
+
+      // THE PRODUCTION PASS.
+      assert.deepEqual(await runAllJobsOnce(), [], 'no job failed');
+      const afterOne = await query(
+        `SELECT state, attempts, external_ref FROM campaign_sends WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      const row = afterOne.rows[0] as { state: string; attempts: number; external_ref: string };
+      assert.equal(row.state, 'sent', 'the worker actually delivered it');
+      assert.equal(Number(row.attempts), 1);
+
+      // …and a second pass does it no second time.
+      assert.deepEqual(await runAllJobsOnce(), []);
+      const afterTwo = await query(`SELECT attempts FROM campaign_sends WHERE tenant_id = $1`, [
+        tenantId,
+      ]);
+      assert.equal(Number((afterTwo.rows[0] as { attempts: number }).attempts), 1, 'exactly once');
+      const sentEvents = await query(
+        `SELECT COUNT(*)::int AS n FROM campaign_send_events
+          WHERE tenant_id = $1 AND event_type = 'sent'`,
+        [tenantId],
+      );
+      assert.equal(Number((sentEvents.rows[0] as { n: number }).n), 1, 'one sent event, ever');
+    });
+
+    test('the worker pass escalates an unanswered lead, exactly once', async () => {
+      const { rooftopId, admin } = await seedCrmWorld();
+      const policy = await setSlaPolicy({
+        actingUserLinkId: admin,
+        tenantId,
+        rooftopId,
+        firstResponseMinutes: 30,
+        escalateAfterMinutes: 60,
+      });
+      assert.equal(policy.outcome, 'saved');
+      const captured = await captureLead({
+        actingUserLinkId: admin,
+        tenantId,
+        rooftopId,
+        intakeKey: 'unanswered-1',
+        channel: 'website',
+        sourceCode: 'website',
+        party: { givenName: 'Waiting', familyName: 'Customer', email: 'waiting@example.com' },
+      });
+      assert.equal(captured.outcome, 'created', JSON.stringify(captured));
+      const leadId = (captured as { lead: { leadId: string } }).lead.leadId;
+
+      // Nothing is late yet, so a pass now must escalate nothing.
+      assert.deepEqual(await runAllJobsOnce(), []);
+      const early = await query(
+        `SELECT COUNT(*)::int AS n FROM lead_escalations WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      assert.equal(Number((early.rows[0] as { n: number }).n), 0, 'a fresh lead is not late');
+
+      // THE ESCALATION clock runs out — not merely the response target. Only
+      // the deadline moves; the lead is untouched, which is what actually
+      // happens as time passes.
+      await fixtureAuthorizationStateWrite(
+        'simulate-authorization-drift',
+        `UPDATE leads SET escalate_at = NOW() - INTERVAL '5 minutes'
+          WHERE tenant_id = $1 AND lead_id = $2`,
+        [tenantId, leadId],
+      );
+
+      assert.deepEqual(await runAllJobsOnce(), []);
+      const raised = await query(
+        `SELECT COUNT(*)::int AS n FROM lead_escalations WHERE tenant_id = $1 AND lead_id = $2`,
+        [tenantId, leadId],
+      );
+      assert.equal(Number((raised.rows[0] as { n: number }).n), 1, 'the alarm was raised');
+
+      // …and a second pass raises nothing further.
+      assert.deepEqual(await runAllJobsOnce(), []);
+      const still = await query(
+        `SELECT COUNT(*)::int AS n FROM lead_escalations WHERE tenant_id = $1 AND lead_id = $2`,
+        [tenantId, leadId],
+      );
+      assert.equal(Number((still.rows[0] as { n: number }).n), 1, 'exactly once');
     });
   },
 );

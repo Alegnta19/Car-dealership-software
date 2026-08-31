@@ -42,6 +42,7 @@ import {
   expireStaleReauthenticationTransactions,
 } from '@dealer/identity-access';
 import { dispatchDueListingEvents } from '@dealer/inventory';
+import { runCampaignDispatchPass, runSlaSweepPass } from '@dealer/crm';
 import { getConfig, logger } from '@dealer/platform';
 
 /** The registered job names. `--list-jobs` prints exactly this. */
@@ -84,6 +85,16 @@ export const ADMIN_OUTBOX_DISPATCH_JOB = 'admin.outbox.dispatch';
 export const LISTING_DISPATCH_JOB = 'inventory.listing.dispatch';
 
 /**
+ * RELEASE TRAIN 3. Two passes, deliberately separate jobs: dispatching a
+ * campaign is provider work with retries and quiet hours, and sweeping the
+ * first-response clock is a cheap scan that must keep running even when a
+ * provider is down. One job doing both would let the slow half starve the
+ * half that raises the alarm.
+ */
+export const CAMPAIGN_DISPATCH_JOB = 'crm.campaign.dispatch';
+export const LEAD_SLA_SWEEP_JOB = 'crm.lead.sla_sweep';
+
+/**
  * THE ONE REGISTRY. A name and the pass that runs it are the SAME entry, so the list
  * `--list-jobs` advertises and the work `--once` performs cannot drift apart: there is
  * no second array to keep in step, and a job cannot be announced without being run or
@@ -101,6 +112,8 @@ const REGISTRY: readonly RegisteredJob[] = [
   { name: REAUTHENTICATION_EXPIRY_JOB, run: () => runReauthenticationExpiryOnce() },
   { name: ADMIN_OUTBOX_DISPATCH_JOB, run: () => runAdminOutboxDispatchOnce() },
   { name: LISTING_DISPATCH_JOB, run: () => runListingDispatchOnce() },
+  { name: CAMPAIGN_DISPATCH_JOB, run: () => runCampaignDispatchOnce() },
+  { name: LEAD_SLA_SWEEP_JOB, run: () => runLeadSlaSweepOnce() },
 ];
 
 /** The registered job names, derived from the registry above — never restated. */
@@ -242,6 +255,64 @@ export async function runListingDispatchOnce(): Promise<number> {
     'listing dispatch pass complete',
   );
   return processed;
+}
+
+/**
+ * ONE pass of the campaign dispatcher, across every active tenant.
+ *
+ * The pass drains the marketing outbox exactly once per launch and then
+ * dispatches due sends — which is where suppression and quiet hours are
+ * re-checked immediately before anything reaches a provider. A deferral is not
+ * a failure and is counted separately, so a campaign waiting for morning does
+ * not look like a broken one.
+ */
+export async function runCampaignDispatchOnce(): Promise<number> {
+  const result = await runCampaignDispatchPass();
+  const processed =
+    result.sent + result.deferred + result.suppressed + result.retrying + result.failed;
+  if (processed === 0 && result.outboxDelivered === 0) {
+    logger.debug({ job: CAMPAIGN_DISPATCH_JOB, processed: 0 }, 'no campaign work due');
+    return 0;
+  }
+  logger.info(
+    {
+      job: CAMPAIGN_DISPATCH_JOB,
+      tenants: result.tenantsVisited,
+      outboxDelivered: result.outboxDelivered,
+      outboxReplayed: result.outboxReplayed,
+      sent: result.sent,
+      deferred: result.deferred,
+      suppressed: result.suppressed,
+      retrying: result.retrying,
+      failed: result.failed,
+    },
+    'campaign dispatch pass complete',
+  );
+  return processed;
+}
+
+/**
+ * ONE pass of the first-response sweep. Idempotent by construction: the
+ * escalation ledger is unique per (lead, level), so running this twice — or
+ * twice at once — raises each alarm exactly once.
+ */
+export async function runLeadSlaSweepOnce(): Promise<number> {
+  const result = await runSlaSweepPass();
+  if (result.escalated === 0 && result.examined === 0) {
+    logger.debug({ job: LEAD_SLA_SWEEP_JOB, processed: 0 }, 'no overdue leads');
+    return 0;
+  }
+  logger.info(
+    {
+      job: LEAD_SLA_SWEEP_JOB,
+      tenants: result.tenantsVisited,
+      examined: result.examined,
+      escalated: result.escalated,
+      alreadyEscalated: result.alreadyEscalated,
+    },
+    'lead sla sweep complete',
+  );
+  return result.escalated;
 }
 
 /**

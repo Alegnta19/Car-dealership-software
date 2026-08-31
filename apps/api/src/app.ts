@@ -5,6 +5,7 @@ import authRouter from './routes/auth';
 import serviceCockpitRouter from './routes/service-cockpit';
 import adminRouter from './routes/admin';
 import inventoryRouter from './routes/inventory';
+import crmRouter from './routes/crm';
 import { ValidationError, getConfig } from '@dealer/platform';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { requestContext } from './middleware/request-context';
@@ -48,6 +49,7 @@ export function createApp(): Express {
   app.use('/api/service', serviceCockpitRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/inventory', inventoryRouter);
+  app.use('/api/crm', crmRouter);
 
   // RT1: the staff administration UI — static, dependency-free, served
   // same-origin so the session cookie and CSRF model apply unchanged. The

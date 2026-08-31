@@ -156,6 +156,37 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * It moved 801 → 807 / 78 → 79 under RT3-C1, the four-outcome correction, which added one
+ * suite — `tests/crm-authority.test.ts` — holding six probes: an activity reachable only
+ * through the lead that authorizes it, a campaign version reachable only through its own
+ * campaign, a lead assignable only to somebody who works its rooftop (and a queue only at
+ * that rooftop), a handed-off lead refusing every further CRM write, pre-sale revenue and
+ * ROI refused BY THE DATABASE rather than merely unwritten, and a customer merged away
+ * after approval withheld as `party_inactive` rather than as a missing address. Measured
+ * by the full local run before being written here.
+ *
+ * It moved 774 → 801 / 75 → 78 under RELEASE TRAIN 3 (CRM, BDC and Marketing), which
+ * added twenty-seven tests: five in `tests/crm-journey.test.ts` (the whole
+ * lead-to-handoff journey through the real HTTP stack, two genuinely overlapping intakes
+ * of one interest producing one lead, the first-response sweep escalating once however
+ * often it runs, the lifecycle machine refusing what it does not allow, and the
+ * unauthenticated and wrong-role refusals); nine in `tests/crm-campaign.test.ts`
+ * (permission gating the audience per channel AND purpose, the approval gate, an opt-out
+ * landing between approval and delivery and still stopping the message, quiet hours
+ * deferring rather than failing, the quiet-hours arithmetic across midnight and across
+ * zones, a transient failure retried into success beside a permanent one that stops,
+ * delivery at least once with the effect exactly once, a reply becoming pipeline and an
+ * opt-out becoming silence idempotently, and reconciliation correcting the platform);
+ * eleven in `tests/crm-isolation.test.ts` (row security and its policy on every one of
+ * migration 063's twenty-four tables, deny-by-default, predicate-free reads, cross-tenant
+ * reads and writes, a tenant-qualified reference to another dealership's parent, a forged
+ * context, the bypass resolver still refusing the runtime for the three new resource
+ * types, the ordinary lookup answering only about the session's own tenant, and the two
+ * rooftop proofs through the real HTTP stack); and two in `tests/worker-jobs.test.ts`
+ * (the campaign dispatcher and the first-response sweep, both driven through
+ * `runAllJobsOnce` so removing the registry entry breaks them). Measured by the full
+ * local run before being written here.
+ *
  * It moved 770 → 774 / 74 → 75 under RT2-C2, the resolver-privilege correction, which
  * replaced two probes and added four in two existing suites plus one new suite line:
  * `tests/inventory-isolation.test.ts` lost the two RT2-C1 resolver probes — they
@@ -212,8 +243,8 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 774;
-export const MINIMUM_SUITES = 75;
+export const MINIMUM_TESTS = 807;
+export const MINIMUM_SUITES = 79;
 
 /**
  * The order's own floor.

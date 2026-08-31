@@ -1,5 +1,5 @@
 {
-  "$comment": "Machine-readable module ownership and dependency map (FBL-010). The dependency-cruiser config derives its allowed-dependency rules FROM this file and scripts/check-architecture-manifest.ts keeps it honest against the real workspace manifests \u2014 one source of truth, no silent drift. Human-readable companion: docs/architecture/MODULE-OWNERSHIP.md.",
+  "$comment": "Machine-readable module ownership and dependency map (FBL-010). The dependency-cruiser config derives its allowed-dependency rules FROM this file and scripts/check-architecture-manifest.ts keeps it honest against the real workspace manifests — one source of truth, no silent drift. Human-readable companion: docs/architecture/MODULE-OWNERSHIP.md.",
   "modules": {
     "@dealer/contracts": {
       "path": "packages/contracts",
@@ -50,7 +50,7 @@
       ],
       "prohibited": ["express", "another module's persistence internals"],
       "database": "owns the phase-248 tables (migrations 000, 049-054)",
-      "status": "active \u2014 legacy/ is an explicitly mixed application/persistence component until FBL-060"
+      "status": "active — legacy/ is an explicitly mixed application/persistence component until FBL-060"
     },
     "@dealer/test-kit": {
       "path": "packages/test-kit",
@@ -91,11 +91,12 @@
         "@dealer/fixed-ops",
         "@dealer/organization",
         "@dealer/identity-access",
-        "@dealer/inventory"
+        "@dealer/inventory",
+        "@dealer/crm"
       ],
       "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
-      "status": "active \u2014 deployable"
+      "status": "active — deployable"
     },
     "@dealer/worker": {
       "path": "apps/worker",
@@ -109,7 +110,8 @@
         "@dealer/fixed-ops",
         "@dealer/organization",
         "@dealer/identity-access",
-        "@dealer/inventory"
+        "@dealer/inventory",
+        "@dealer/crm"
       ],
       "prohibited": [
         "queues, outbox tables and schedulers until FBL-040",
@@ -118,7 +120,7 @@
         "direct pg usage"
       ],
       "database": "none",
-      "status": "active \u2014 deployed beside the API; runs the support-access expiry job"
+      "status": "active — deployed beside the API; runs the support-access expiry job"
     },
     "@dealer/web": {
       "path": "apps/web",
@@ -132,7 +134,7 @@
         "product journeys in FBL-010"
       ],
       "database": "none",
-      "status": "shell \u2014 not deployed"
+      "status": "shell — not deployed"
     },
     "@dealer/organization": {
       "path": "packages/organization",
@@ -162,6 +164,27 @@
         "service/repair workflow"
       ],
       "database": "owns the Release Train 2 vehicle, party, stock, merchandising and listing tables (migration 062)",
+      "status": "active"
+    },
+    "@dealer/crm": {
+      "path": "packages/crm",
+      "owner": "crm-marketing",
+      "purpose": "CRM, BDC and marketing: lead intake and identity, routing, lifecycle and SLA, the shared activity and appointment timeline, consent-safe campaigns with suppression rechecked at send time, and deterministic versioned attribution up to the sales handoff.",
+      "publicEntry": "packages/crm/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/identity-access",
+        "@dealer/inventory"
+      ],
+      "prohibited": [
+        "sales, showroom, desking, deal or F&I logic",
+        "revenue figures",
+        "HTTP",
+        "provider SDKs"
+      ],
+      "database": "owns migration 063 tables",
       "status": "active"
     },
     "@dealer/identity-access": {
