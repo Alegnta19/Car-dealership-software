@@ -1,0 +1,163 @@
+{
+  "order": "Master Blueprint Section 14.3 Part B (FBL-100) — persisted browser/DOM owner journey",
+  "how_it_was_driven": "The REAL console, served by the REAL application, against a REAL database, behind a REAL cookie login. The browser walked `GET /auth/login` and `GET /auth/callback` itself and received its session cookie from the production callback route; nothing fabricated a session row. Only the identity PROVIDER is replaced, at the seam the shipped code already exposes (`useIdentityProviderForTests`): there is no WorkOS to call, and the fake signs genuine tokens with the local issuer so the production verification path — nonce binding included — runs unchanged. Every step below was performed by clicking the console's OWN buttons and filling its OWN form controls, so the handlers that ran are the ones that ship, and each stage records the DOM that resulted. The in-app browser pane does not composite in this environment, so the clicks were dispatched programmatically onto the real DOM elements and the rendered DOM was read back; what is NOT proved here is the pixel-level pointer path, and that is stated rather than glossed.",
+  "operator": "one person holding sales_manager, salesperson, bdc_agent and inventory_manager — the owner of a small store, who runs the floor and works customers on it",
+  "what_the_world_held_before_the_walk": "One rooftop (Downtown), one car acquired through Release Train 2's own service (stock A1234), one lead captured, qualified and handed to sales through Release Train 3's, and the operator on the floor rotation. Every row was made by the service that owns it; nothing was planted.",
+  "navigation_rendered": [
+    "Overview",
+    "Dealership settings",
+    "Business hours",
+    "Policies",
+    "Organization",
+    "Users & access",
+    "Inventory",
+    "Customers",
+    "Pipeline",
+    "Campaigns",
+    "Consent",
+    "Showroom",
+    "Deals"
+  ],
+  "stages": [
+    {
+      "stage": "1. the showroom, before anyone arrives",
+      "hash": "#/showroom",
+      "heading": "Showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival Nobody is in the building right now. The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be available —"
+    },
+    {
+      "stage": "2. a customer is in the building, waiting",
+      "hash": "#/showroom",
+      "heading": "Showroom",
+      "cards": [
+        "1 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 1 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival CUSTOMER WAITING STATE WITH Marta Silva just now Waiting unassigned Greet The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be available —"
+    },
+    {
+      "stage": "3a. the greeting toast — the up-list decided who, not the caller",
+      "toast": "Next up took the customer"
+    },
+    {
+      "stage": "3. greeted — the turn was taken and that person is now busy",
+      "hash": "#/showroom",
+      "heading": "Showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "1 — With a salesperson",
+        "0 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 1 With a salesperson 0 On the floor, free 0 Cars out on drives In the showroom Record an arrival CUSTOMER WAITING STATE WITH Marta Silva just now Greeted staff 330954be They have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be with customer 8/31/2026, 9:06:55 AM Back on the floor"
+    },
+    {
+      "stage": "4. the pipeline, and the figure this train does not have",
+      "hash": "#/deals",
+      "heading": "Deals",
+      "cards": ["0 — Open deals", "0 — Negotiating", "0 — Drives today", "0 — Manager turnovers"],
+      "text": "Deals 0 Open deals 0 Negotiating 0 Drives today 0 Manager turnovers Gross, commission and closing ratio: not available yet. These screens carry no figure because the deal is not desked until FBL-120 (Desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff Nothing in the pipeline. Deals arrive when the BDC hands a qualified lead over."
+    },
+    {
+      "stage": "5. the opportunity, received from the BDC handoff",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "Opportunity Marta Silva Downtown received STAGE Received OWNER unassigned CAME FROM BDC handoff f246bfe0 OPENED 8/31/2026, 9:07:06 AM Give this deal to somebody In showroom Demonstrated Negotiating Sold Lost Cars they are looking at Add a car Nothing shortlisted yet. What has happened Log something Negotiation round Get a manager Nothing logged yet.",
+      "note": "The customer and the showroom came from the handoff, not from the form: the only field the operator typed was the handoff id."
+    },
+    {
+      "stage": "6. a car on the shortlist, off the real inventory",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "Opportunity Marta Silva Downtown received … Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test drive This is the one What has happened Log something Negotiation round Get a manager Nothing logged yet."
+    },
+    {
+      "stage": "7. REFUSED — no licence check, no car leaves the lot",
+      "toast": "[invalid_request] a test drive starts after the driver’s licence has been checked",
+      "note": "The refusal was produced by clicking the console's own 'Start the drive' with the licence box unticked."
+    },
+    {
+      "stage": "8. out on a test drive, with the way to bring it back",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "… Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test drive This is the one Out on a test drive STOCK LEFT AT A1234 just now They are back What has happened … 8/31/2026, 9:07:23 AM demonstration.started: A1234"
+    },
+    {
+      "stage": "9. the car is back, and the shortlist says it was driven",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "… STOCK VEHICLE WHERE IT STANDS A1234 2003 demonstrated Test drive This is the one What has happened … 8/31/2026, 9:07:23 AM demonstration.started: A1234 8/31/2026, 9:07:27 AM demonstration.completed: A1234 interested",
+      "note": "Nobody typed 'demonstrated' — driving the car said so."
+    },
+    {
+      "stage": "10. the car they want",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "… STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive This is the one …"
+    },
+    {
+      "stage": "11. the negotiation form — every field on it, and no money among them",
+      "fields": [
+        "Who started it: The customer / Us",
+        "What was discussed",
+        "Where it left off: countered / accepted / declined / adjourned",
+        "A manager was in the conversation"
+      ],
+      "mentions_money": false,
+      "note": "The form's own text was scanned for price, cents, gross, amount, commission and a currency symbol. None appear, because `negotiation_rounds` has no money column to fill."
+    },
+    {
+      "stage": "12. the round is on the timeline, carrying what was said",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "… 8/31/2026, 9:07:41 AM negotiation.round 1: customer: countered asked what could be done on the trade"
+    },
+    {
+      "stage": "13. REFUSED — a turnover to yourself is not oversight",
+      "toast": "[invalid_request] a turnover to yourself is not oversight",
+      "note": "This store has one person, who is both the manager and the salesperson, so the only manager they can name is themselves. The refusal is the evidence here; the successful turnover is covered by tests/sales-journey.test.ts."
+    },
+    {
+      "stage": "14. negotiating — and only the moves the machine admits are offered",
+      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
+      "heading": "Opportunity",
+      "text": "Opportunity Marta Silva Downtown negotiating STAGE Negotiating OWNER unassigned CAME FROM BDC handoff f246bfe0 … Give this deal to somebody Demonstrated Sold Lost … 8/31/2026, 9:07:54 AM stage: received -> in_showroom 8/31/2026, 9:07:57 AM stage: in_showroom -> demonstrated 8/31/2026, … stage: demonstrated -> negotiating",
+      "note": "At `received` the screen offered In showroom, Demonstrated, Negotiating, Sold and Lost. At `negotiating` it offers Demonstrated, Sold and Lost — the buttons are the machine, so a move it does not admit is not on the screen to click."
+    },
+    {
+      "stage": "15. the manager’s board",
+      "hash": "#/deals",
+      "heading": "Deals",
+      "cards": ["1 — Open deals", "1 — Negotiating", "1 — Drives today", "0 — Manager turnovers"],
+      "text": "Deals 1 Open deals 1 Negotiating 1 Drives today 0 Manager turnovers Gross, commission and closing ratio: not available yet. These screens carry no figure because the deal is not desked until FBL-120 (Desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff CUSTOMER STAGE OWNER SHOWROOM AGE Marta Silva negotiating unassigned Downtown 0m Open"
+    },
+    {
+      "stage": "16. the visit is closed and the salesperson is free again",
+      "hash": "#/showroom",
+      "heading": "Showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival Nobody is in the building right now. The floor Put somebody on the floor … # SALESPERSON STATE LAST UP 1 staff 330954be available 8/31/2026, 9:06:55 AM",
+      "note": "Departing the visit returned the salesperson to the floor in the same transaction — the free count is 1 again without anybody pressing 'Back on the floor'."
+    }
+  ],
+  "what_this_does_and_does_not_show": [
+    "SHOWS: the whole FBL-100 operator journey is reachable in a browser, through the shipped console, against real data — arrival, greeting from the up-list, receiving the handoff, shortlisting real stock, a licence-gated test drive and its return, selecting the car, a negotiation round, the stage machine, the manager's board and closing the visit.",
+    "SHOWS: two refusals a person actually meets, rendered as readable messages with a correlation id rather than as a stack trace — the unchecked licence and the turnover to oneself.",
+    "SHOWS: there is no money on any of these screens, and the one place the subject comes up says the figure does not exist yet and names the release that will bring it.",
+    "DOES NOT SHOW: the pixel-level pointer path. The browser pane does not composite in this environment, so clicks were dispatched onto the real elements rather than delivered by a moving cursor.",
+    "DOES NOT SHOW: a successful manager turnover or a reassignment, because this one-person store has nobody else to name. Both are covered by tests/sales-journey.test.ts and tests/sales-authority.test.ts."
+  ]
+}

@@ -1122,6 +1122,132 @@ export const MUTATIONS: Mutation[] = [
     testFile: 'tests/login-admission.test.ts',
     testName: 'a login whose LOCAL SESSION cannot be established is terminal, with ONE audit event',
   },
+  // ── RELEASE TRAIN 4 (FBL-100) — the sales floor ────────────────────────────
+  //
+  // Six controls, each removed exactly the way somebody in a hurry would remove
+  // it: delete the guard, keep the file compiling, and see whether anything
+  // notices. The named test is the one that must die, and each is a test that
+  // asserts the BEHAVIOUR rather than the presence of the line — a test that
+  // only checked the guard existed would be killed by any edit at all.
+  //
+  // `from` is written as a template literal here because these guards are
+  // several lines of real source; the concatenated-string style above predates
+  // them and says the same thing more loudly.
+  {
+    id: 'test_drive_without_a_licence_check',
+    control: 'no car leaves the lot until somebody has checked the driver’s licence',
+    file: 'packages/sales/src/selling.ts',
+    from: `  if (input.licenceVerified !== true) {
+    return {
+      outcome: 'invalid',
+      error: 'a test drive starts after the driver’s licence has been checked',
+    };
+  }`,
+    to: '  void input.licenceVerified;',
+    testFile: 'tests/sales-journey.test.ts',
+    testName: 'a walk-in is greeted, sold to, demonstrated, negotiated and closed',
+  },
+  {
+    id: 'demonstration_start_not_serialized',
+    control:
+      'two salespeople reaching for the same car are serialized on the car, so the ' +
+      'loser is told where it went rather than handed a constraint violation',
+    file: 'packages/sales/src/selling.ts',
+    from: `  await executor.query(\`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))\`, [
+    \`sales.demonstration:\${input.tenantId}:\${input.stockItemId}\`,
+  ]);`,
+    to: '  void input.stockItemId;',
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the second drive really BLOCKS on the first — proven on pg_locks, not a timer',
+  },
+  {
+    id: 'demonstration_reachable_through_any_opportunity',
+    control:
+      'a test drive is authorized THROUGH its own opportunity — naming somebody ' +
+      'else’s drive under your own deal is not found',
+    file: 'packages/sales/src/selling.ts',
+    // This guard appears twice in the file (starting a drive, and ending one).
+    // `from` must occur EXACTLY ONCE, so the following line pins which of the
+    // two this mutation removes: the one in `endDemonstration`.
+    from: `    if (current.opportunityId !== input.opportunityId) return { outcome: 'not_found' as const };
+    if (current.state !== 'in_progress') {`,
+    to: `    if (current.state !== 'in_progress') {`,
+    testFile: 'tests/sales-authority.test.ts',
+    testName: 'a child is reachable only through its own parent',
+  },
+  {
+    id: 'named_greeter_never_checked_against_the_floor',
+    control:
+      'a salesperson named by a manager must actually be on the floor and free — ' +
+      'being allowed to work a rooftop is not the same as standing on it',
+    file: 'packages/sales/src/showroom.ts',
+    from: `      if (claimed === 'absent') {
+        return {
+          outcome: 'invalid' as const,
+          error: 'that salesperson is not on the floor right now',
+        };
+      }`,
+    to: '      void claimed;',
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'an explicit greeter is honoured, and must actually be on the floor',
+  },
+  {
+    id: 'unknown_vocabulary_reaches_the_constraint',
+    control:
+      'the service owns its own vocabularies, so a caller’s typo is a 422 that names the ' +
+      'words rather than a 500 from a CHECK constraint',
+    file: 'packages/sales/src/selling.ts',
+    from: `  if (!SALES_ACTIVITY_KINDS.includes(input.kind)) {
+    return {
+      outcome: 'invalid',
+      error: \`an activity is \${SALES_ACTIVITY_KINDS.join(', ')} — not \${input.kind}\`,
+    };
+  }`,
+    to: '  void SALES_ACTIVITY_KINDS;',
+    testFile: 'tests/sales-authority.test.ts',
+    testName: 'a word this platform does not know is the caller’s mistake, never a 500',
+  },
+  {
+    id: 'resourceless_command_reaches_any_rooftop',
+    control:
+      'a command that names no resource still belongs to a rooftop: the caller must ' +
+      'reach the one their request body names',
+    file: 'packages/sales/src/showroom.ts',
+    from: `  if (!(await reaches(input.tenantId, actor, input.rooftopId))) {
+    return { outcome: 'invalid', error: 'you do not run the floor at that rooftop' };
+  }`,
+    to: '  void actor;',
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'a caller who does not work a showroom cannot touch its floor, service-direct',
+  },
+  {
+    id: 'opportunity_assigned_across_rooftops',
+    control:
+      'an opportunity may be assigned only to somebody whose bindings reach the ' +
+      'rooftop it belongs to',
+    file: 'packages/sales/src/opportunities.ts',
+    from: `    const reach = await permittedRooftopIds(input.tenantId, input.toUserLinkId);
+    if (!reach.includes(current.rooftopId)) {
+      return {
+        outcome: 'invalid' as const,
+        error: 'that employee does not work the rooftop this opportunity belongs to',
+      };
+    }`,
+    to: '    void input.toUserLinkId;',
+    testFile: 'tests/sales-authority.test.ts',
+    testName: 'a rooftop is a boundary and a tenant is a wall',
+  },
+  {
+    id: 'finished_opportunity_still_takes_work',
+    control: 'a won or lost opportunity is finished, and refuses every further write',
+    file: 'packages/sales/src/opportunities.ts',
+    from: `  if (opportunity.stage === 'won' || opportunity.stage === 'lost') {
+    return { ok: false, reason: \`a \${opportunity.stage} opportunity takes no further work\` };
+  }`,
+    to: '  void opportunity.stage;',
+    testFile: 'tests/sales-journey.test.ts',
+    testName: 'a closed opportunity is closed: terminal states refuse further work',
+  },
   {
     id: 'worker_once_swallows_a_failed_sweep',
     control:

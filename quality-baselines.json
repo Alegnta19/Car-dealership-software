@@ -28,9 +28,7 @@
     }
   },
   "format": {
-    "total": 1,
-    "byFile": {
-      "eslint.config.mjs": 1
-    }
+    "total": 0,
+    "byFile": {}
   }
 }
