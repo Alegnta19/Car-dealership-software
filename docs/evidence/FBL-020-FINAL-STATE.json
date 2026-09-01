@@ -524,7 +524,7 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 14,
+    "used": 15,
     "failed_ci": 4,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
@@ -647,8 +647,8 @@
     "UNVERIFIED FOR THE UNCOMMITTED FBL-020-R6 WORK ON TOP OF IT"
   ],
   "this_commit": {
-    "is_code_bearing": true,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is RELEASE TRAIN 4 — Sales Pipeline and Showroom Management (FBL-100), built from migration 064 under Master Blueprint Section 14.3 Part B: the opportunity received from a CRM handoff and its stage machine, the showroom floor and the up-rotation that decides who takes a walk-in, vehicle selection and licence-checked test drives against real stock, the sales-side timeline, negotiation rounds carrying no figure, and manager turnover — with pre-sale money made structurally unrepresentable by named database constraints rather than by convention. It edits migrations, packages, apps, scripts and tests, so it IS code-bearing and is counted."
+    "is_code_bearing": false,
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is the RT4-C1 closeout of the record itself: it registers the three Release Train 4 commits above, corrects two entries of the outcome-7 journey that recorded MY OWN probe mistakes rather than product behaviour, and points the delivery report at that journey so the proof is findable. It touches nothing outside docs/, so it is NOT code-bearing and is not counted against the budget — counting a documentation commit would overstate the breach, which is as wrong as understating it."
   },
   "commits_ahead_of_the_evidence_commit": [
     {
@@ -682,6 +682,30 @@
       "code_bearing": true,
       "run": null,
       "note": "The Release Train 3 merge, carrying RT3 and its RT3-C1 correction. Its second parent ab46be8 carried the green exact-SHA run; `git diff ab46be8 f2a4f60` is empty — the merge holds the tested tree byte for byte. The merge commit itself has no run of its own."
+    },
+    {
+      "sha": "6a8c1498bac62dbb7f4f39b907a1901d0f00bb22",
+      "short": "6a8c149",
+      "subject": "Release Train 4 — Sales Pipeline and Showroom Management (FBL-100)",
+      "code_bearing": true,
+      "run": null,
+      "note": "The Release Train 4 branch head as first submitted, carrying migration 064 and the Sales package. Its CI run 33409799429 was green 4/4 — genuine evidence, and NOT acceptance: the architect kept PR #16 in draft and returned RT4-C1, seven corrections, which the next commit carries."
+    },
+    {
+      "sha": "ecbe3321bc46c1d5a8766ea06c180da9ccad8b75",
+      "short": "ecbe332",
+      "subject": "RT4-C1: Sales and Showroom finish-line closure — seven corrections",
+      "code_bearing": true,
+      "run": null,
+      "note": "The RT4-C1 corrections, in migration 064 and the Sales code, UI and tests only: atomic converging intake, one audited owner with replayable commands, one active visit enforced at both layers with the appointment kept in the same transaction, a rooftop-filtered chooser with five demonstration facts and non-leaking refusals, the removal of won/sold in favour of one idempotent desking handoff, one reconciled manager view, and a UI that types no identifiers. Migrations 000–063 are byte-for-byte unchanged: `git diff f2a4f60 HEAD -- migrations/` is one line, `A migrations/064_sales_pipeline_showroom.sql`."
+    },
+    {
+      "sha": "9b2e93a3c282ad3bad99674485c41d9b3b115e1b",
+      "short": "9b2e93a",
+      "subject": "RT4-C1: the sales journey, walked in a browser by two people",
+      "code_bearing": false,
+      "run": null,
+      "note": "Evidence only, under docs/. The RT4-C1 outcome-7 journey: thirty-nine stages walked through the shipped console by two separate signed-in identities, a salesperson and a sales manager, with no identifier typed anywhere."
     }
   ]
 }

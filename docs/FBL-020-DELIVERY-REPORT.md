@@ -236,7 +236,7 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 14 CODE-BEARING COMMITS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 15 CODE-BEARING COMMITS
 EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
@@ -1361,6 +1361,15 @@ a transaction — one implementation of the rules, no second one to drift. It ex
 outcome 3 requires the arrival and the kept booking to commit together, and the
 alternative was Release Train 4 writing `appointments` behind the service that owns them.
 Migration `063` is byte-for-byte unchanged.
+
+**The journey outcome 7 asks for is recorded in
+`docs/evidence/RT4-OWNER-JOURNEY.json`** — thirty-nine stages walked in a browser through
+the shipped console by TWO separate signed-in identities, a salesperson and a sales
+manager, with no identifier typed anywhere. It holds the refusals in the words a user
+actually sees, the same command answered two different ways for two different people, and
+the positive conclusion replayed twice more under request keys the server had never seen —
+both answered `already_there`, and the timeline still held exactly one `desking.ready`
+fact. Two of its entries are labelled as MY OWN probe mistakes rather than removed.
 
 Its batteries are `tests/sales-journey.test.ts`, `tests/sales-floor.test.ts`,
 `tests/sales-authority.test.ts`, `tests/sales-isolation.test.ts` and

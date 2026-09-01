@@ -65,9 +65,7 @@
     },
     {
       "stage": "6a. the handoffs waiting, as a list rather than a text box",
-      "offered": [
-        "Marta Silva · Downtown · handed over 1m ago"
-      ]
+      "offered": ["Marta Silva · Downtown · handed over 1m ago"]
     },
     {
       "stage": "6. the opportunity, received off the list",
@@ -77,10 +75,7 @@
     },
     {
       "stage": "7a. the rooftop-filtered chooser",
-      "offered": [
-        "A1234 · 2003",
-        "B5678 · 2003"
-      ]
+      "offered": ["A1234 · 2003", "B5678 · 2003"]
     },
     {
       "stage": "7. two cars shortlisted, both chosen from the list",
@@ -128,9 +123,7 @@
     },
     {
       "stage": "14a. the eligible managers, as a list",
-      "offered": [
-        "staff e4a0e8d3"
-      ]
+      "offered": ["staff e4a0e8d3"]
     },
     {
       "stage": "14b. the turnover toast",
@@ -160,11 +153,7 @@
     },
     {
       "stage": "18a. who the manager may hand it to",
-      "offered": [
-        "staff 0cd6f632 · 1 open",
-        "staff 91299ef8 · 0 open",
-        "staff e4a0e8d3 · 0 open"
-      ]
+      "offered": ["staff 0cd6f632 · 1 open", "staff 91299ef8 · 0 open", "staff e4a0e8d3 · 0 open"]
     },
     {
       "stage": "18b. the reassignment toast",
@@ -301,7 +290,7 @@
       "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 2 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom Nobody is in the building right now. The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 91299ef8 available — 2 staff 0cd6f632 available 9/1/2026, 12:03:30 PM"
     },
     {
-      "stage": "24. the positive fact, asked for twice more with request keys nobody has seen",
+      "stage": "24a. a write sent WITHOUT the CSRF token — refused, and the refusal says nothing about the deal",
       "replay": {
         "status": 403,
         "body": {
@@ -328,10 +317,11 @@
           "correlationId": "74389259-5914-4742-b7f1-98de3be51caf"
         }
       },
-      "deskingFactsOnTheTimeline": 2
+      "deskingFactsOnTheTimeline": 2,
+      "note": "This was my own probe calling fetch() directly instead of the console helper that carries the token. The refusal is the product behaving correctly, so it stays in the record rather than being tidied out of it."
     },
     {
-      "stage": "24. the positive fact, asked for twice more under request keys nobody has seen",
+      "stage": "24b. WITHDRAWN — my probe sent the wrong field names, and proves nothing",
       "replayWithCurrentVersion": {
         "ok": false,
         "error": "expected_version is required"
@@ -340,15 +330,12 @@
         "ok": false,
         "error": "unknown stage "
       },
-      "deskingFactsBefore": [
-        "desking.ready"
-      ],
-      "deskingFactsAfter": [
-        "desking.ready"
-      ]
+      "deskingFactsBefore": ["desking.ready"],
+      "deskingFactsAfter": ["desking.ready"],
+      "withdrawn": "I sent `stage` where the route takes `to_stage`, and read the version off the wrong object so none was sent. The API refused it on shape, which is not the question I was asking. It is kept, labelled, because the record should show what was actually run."
     },
     {
-      "stage": "24. the positive fact, asked for twice more under request keys nobody has seen",
+      "stage": "24. the positive fact, asked for twice more under request keys the server had never seen",
       "replayHoldingTheCurrentVersion": {
         "ok": true,
         "outcome": "already_there",
@@ -359,14 +346,11 @@
         "outcome": "already_there",
         "stage": "ready_for_desking"
       },
-      "deskingFactsBefore": [
-        "desking.ready"
-      ],
-      "deskingFactsAfter": [
-        "desking.ready"
-      ],
+      "deskingFactsBefore": ["desking.ready"],
+      "deskingFactsAfter": ["desking.ready"],
       "stageAfter": "ready_for_desking",
-      "dispositionAfter": "committed_to_purchase"
+      "dispositionAfter": "committed_to_purchase",
+      "whatThisShows": "Both replays answered `already_there` rather than an error — the second one holding a STALE version, because holding a stale version is the consequence of the first call having succeeded, so the replay answer comes before the version check. The timeline still held exactly ONE `desking.ready` fact afterwards."
     }
   ],
   "nav": [
@@ -387,21 +371,15 @@
   "finishedAt": "recorded-by-clock-free-harness",
   "identities": {
     "salesperson": {
-      "roles": [
-        "salesperson"
-      ],
+      "roles": ["salesperson"],
       "userLink": "0cd6f632"
     },
     "manager": {
-      "roles": [
-        "sales_manager"
-      ],
+      "roles": ["sales_manager"],
       "userLink": "e4a0e8d3"
     },
     "otherSalesperson": {
-      "roles": [
-        "salesperson"
-      ],
+      "roles": ["salesperson"],
       "userLink": "91299ef8",
       "note": "the reassignment target"
     }
