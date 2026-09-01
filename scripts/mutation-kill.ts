@@ -1145,7 +1145,7 @@ export const MUTATIONS: Mutation[] = [
   }`,
     to: '  void input.licenceVerified;',
     testFile: 'tests/sales-journey.test.ts',
-    testName: 'a walk-in is greeted, sold to, demonstrated, negotiated and closed',
+    testName: 'an expected customer arrives, is sold to, and is handed to desking',
   },
   {
     id: 'demonstration_start_not_serialized',
@@ -1154,9 +1154,9 @@ export const MUTATIONS: Mutation[] = [
       'loser is told where it went rather than handed a constraint violation',
     file: 'packages/sales/src/selling.ts',
     from: `  await executor.query(\`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))\`, [
-    \`sales.demonstration:\${input.tenantId}:\${input.stockItemId}\`,
+    issueKey(input.tenantId, input.stockItemId),
   ]);`,
-    to: '  void input.stockItemId;',
+    to: '  void issueKey;',
     testFile: 'tests/sales-floor.test.ts',
     testName: 'the second drive really BLOCKS on the first — proven on pg_locks, not a timer',
   },
@@ -1169,9 +1169,9 @@ export const MUTATIONS: Mutation[] = [
     // This guard appears twice in the file (starting a drive, and ending one).
     // `from` must occur EXACTLY ONCE, so the following line pins which of the
     // two this mutation removes: the one in `endDemonstration`.
-    from: `    if (current.opportunityId !== input.opportunityId) return { outcome: 'not_found' as const };
-    if (current.state !== 'in_progress') {`,
-    to: `    if (current.state !== 'in_progress') {`,
+    from: `  // EXACT PARENT: authorized against one opportunity, acting on its own drive.
+  if (current.opportunityId !== opportunityId) return null;`,
+    to: '  void opportunityId;',
     testFile: 'tests/sales-authority.test.ts',
     testName: 'a child is reachable only through its own parent',
   },
@@ -1190,6 +1190,111 @@ export const MUTATIONS: Mutation[] = [
     to: '      void claimed;',
     testFile: 'tests/sales-floor.test.ts',
     testName: 'an explicit greeter is honoured, and must actually be on the floor',
+  },
+  // ── RT4-C1: the seven corrections' own controls ──────────────────────────
+  // ── NO MUTATION FOR HANDOFF-INTAKE CONVERGENCE, AND THIS IS WHY ──────────
+  //
+  // RT4-C1 outcome 1 requires concurrent receipt of one handoff to converge on
+  // one opportunity without exposing a unique-key error. Two mutations were
+  // tried here and BOTH SURVIVED, which sent me back to read the code rather
+  // than to weaken the test:
+  //
+  //   * removing the advisory lock — the insert's `ON CONFLICT DO NOTHING` and
+  //     the re-select beneath it still converge;
+  //   * removing `ON CONFLICT DO NOTHING` — the lock means the loser never
+  //     reaches the insert at all, because the pre-check under it already
+  //     returned `already_received`.
+  //
+  // `receiveHandoffWithin` has THREE independent guards — the lock plus its
+  // pre-check, the ON CONFLICT clause, and the raced re-select — and each one
+  // alone produces the correct answer. No single contiguous edit breaks the
+  // convergence, so no honest mutation exists for it: a registry entry that can
+  // never kill is worse than none, because it reads as coverage.
+  //
+  // WHAT PROVES THE OUTCOME INSTEAD is `tests/sales-floor.test.ts`'s
+  // "concurrent receipt of one handoff converges on one opportunity", which runs
+  // the race for real and asserts one `received`, one `already_received`, the
+  // same opportunity id in both hands, and exactly one row. The redundancy is
+  // recorded here rather than left for somebody to rediscover.
+  {
+    id: 'checkin_converges_on_the_request_not_the_customer',
+    control:
+      'a customer already in the building is the same arrival whatever request key ' +
+      'asked, so two concurrent check-ins converge on one visit',
+    file: 'packages/sales/src/showroom.ts',
+    from: `  const active = await executor.query(
+    \`SELECT \${VISIT_COLUMNS} FROM showroom_visits
+      WHERE tenant_id = $1 AND party_id = $2 AND state <> 'departed'\`,
+    [input.tenantId, input.partyId],
+  );
+  if (active.rows.length > 0) {`,
+    to: `  const active = await executor.query(
+    \`SELECT \${VISIT_COLUMNS} FROM showroom_visits
+      WHERE tenant_id = $1 AND party_id = $2 AND state <> 'departed'\`,
+    [input.tenantId, input.partyId],
+  );
+  if (false) {`,
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'concurrent check-ins with DIFFERENT request keys converge on one visit',
+  },
+  {
+    id: 'appointment_misuse_admitted',
+    control:
+      'a completed, cancelled or no-show booking is not one anybody can be checked ' +
+      'in against — otherwise the no-show figure is a guess',
+    file: 'packages/sales/src/showroom.ts',
+    from: `    if (state !== 'scheduled' && state !== 'confirmed') {
+      return {
+        outcome: 'invalid',
+        error: \`that appointment is already \${state}, so nobody can be checked in against it\`,
+      };
+    }`,
+    to: '    void state;',
+    testFile: 'tests/sales-showroom-ops.test.ts',
+    testName: 'a booking that moved, was called off, or was missed cannot be kept',
+  },
+  {
+    id: 'desking_move_replays_into_a_second_fact',
+    control:
+      'the positive conclusion is idempotent: replaying it answers with the EXISTING ' +
+      'desking handoff rather than raising a second one',
+    file: 'packages/sales/src/opportunities.ts',
+    from: `    // THE REPLAY ANSWER, before the version check and before the machine.
+    if (current.stage === input.toStage) {`,
+    to: `    // THE REPLAY ANSWER, before the version check and before the machine.
+    if (false) {`,
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the desking fact is raised exactly once, even under a concurrent move',
+  },
+  {
+    id: 'collision_refusal_names_the_other_drive',
+    control:
+      'a collision says which of the caller’s OWN inputs is busy and nothing about ' +
+      'the record that holds it',
+    file: 'packages/sales/src/selling.ts',
+    from: `  if (carOut.rows.length > 0) return { outcome: 'unavailable', conflict: 'vehicle' };`,
+    to: `  if (carOut.rows.length > 0) {
+    return {
+      outcome: 'unavailable',
+      conflict: 'vehicle',
+      demonstrationId: String((carOut.rows[0] as Row).demonstration_id),
+    } as never;
+  }`,
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'one car, two salespeople: the second is refused, and told nothing about the first',
+  },
+  {
+    id: 'selection_history_not_kept',
+    control:
+      'the shortlist keeps the SEQUENCE its status column destroys — the car that was ' +
+      'chosen and then stood down is still on the record',
+    file: 'packages/sales/src/selling.ts',
+    from: `      for (const stood of standDown.rows as Row[]) {
+        await recordVehicleEvent(tx, {`,
+    to: `      for (const stood of [] as Row[]) {
+        await recordVehicleEvent(tx, {`,
+    testFile: 'tests/sales-journey.test.ts',
+    testName: 'an expected customer arrives, is sold to, and is handed to desking',
   },
   {
     id: 'unknown_vocabulary_reaches_the_constraint',
@@ -1226,8 +1331,7 @@ export const MUTATIONS: Mutation[] = [
       'an opportunity may be assigned only to somebody whose bindings reach the ' +
       'rooftop it belongs to',
     file: 'packages/sales/src/opportunities.ts',
-    from: `    const reach = await permittedRooftopIds(input.tenantId, input.toUserLinkId);
-    if (!reach.includes(current.rooftopId)) {
+    from: `    if (!(await reaches(input.tenantId, input.toUserLinkId, current.rooftopId))) {
       return {
         outcome: 'invalid' as const,
         error: 'that employee does not work the rooftop this opportunity belongs to',
@@ -1241,12 +1345,12 @@ export const MUTATIONS: Mutation[] = [
     id: 'finished_opportunity_still_takes_work',
     control: 'a won or lost opportunity is finished, and refuses every further write',
     file: 'packages/sales/src/opportunities.ts',
-    from: `  if (opportunity.stage === 'won' || opportunity.stage === 'lost') {
+    from: `  if (TERMINAL_STAGES.includes(opportunity.stage)) {
     return { ok: false, reason: \`a \${opportunity.stage} opportunity takes no further work\` };
   }`,
-    to: '  void opportunity.stage;',
+    to: '  void TERMINAL_STAGES;',
     testFile: 'tests/sales-journey.test.ts',
-    testName: 'a closed opportunity is closed: terminal states refuse further work',
+    testName: 'a concluded opportunity is concluded: terminal states refuse further work',
   },
   {
     id: 'worker_once_swallows_a_failed_sweep',

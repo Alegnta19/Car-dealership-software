@@ -22,15 +22,15 @@ import { createApp, resetAuthRoutesForTests, resetIdentityCompositionForTests } 
  * RELEASE TRAIN 4 — THE SHOWROOM JOURNEY, through the real HTTP stack against a
  * real database.
  *
- * A customer the BDC already spoke to walks in. One salesperson takes the whole
- * journey: the up rotation gives them the turn, they greet the arrival, receive
- * the opportunity handed over from CRM, shortlist two cars off the real
- * inventory, take one out on a demonstration, record what the customer said,
- * bring a manager in, and close the visit — and the manager's board reflects all
- * of it with no money anywhere in sight.
+ * A customer the BDC already spoke to arrives for their appointment. TWO PEOPLE
+ * work them: a salesperson takes the journey, and a manager does the things
+ * only a manager can — reassignment and the board. Everything is DISCOVERED
+ * rather than typed: the handoff comes off a list, the customer off a search,
+ * the car off a rooftop-filtered chooser, the colleague off a staff list.
  *
- * THE REFUSALS ARE ASSERTED AS HARD AS THE SUCCESSES. A journey that only walks
- * the happy path proves the platform cannot say no.
+ * THE REFUSALS ARE ASSERTED AS HARD AS THE SUCCESSES, and so are the CONVERGENCES:
+ * a retry that arrives with a fresh request key is invisible to the idempotency
+ * layer and must still be safe.
  */
 describe(
   'sales: the showroom journey (RT4)',
@@ -130,6 +130,10 @@ describe(
         name: 'Northside',
         status: 'active',
       });
+      // TWO SEPARATE, ELIGIBLE IDENTITIES. The manager holds only manager
+      // authority and the salespeople only theirs, so an assignment or a
+      // turnover in this journey is a real crossing between two people rather
+      // than one account with every role wearing two hats.
       const manager = await seedActor(env.issuer, { tenantId, roles: [ROLES.SALES_MANAGER] });
       const seller = await seedActor(env.issuer, { tenantId, roles: [ROLES.SALESPERSON] });
       const other = await seedActor(env.issuer, { tenantId, roles: [ROLES.SALESPERSON] });
@@ -156,13 +160,13 @@ describe(
     }
 
     /**
-     * A lead captured by the BDC and handed to sales — the ONLY door into the
-     * pipeline. The journey uses the real CRM surface rather than planting rows,
-     * because the seam between the two trains is part of what is being proven.
+     * A lead captured by the BDC, given an appointment and handed to sales.
+     * Driven through the real CRM surface, because the seam between the two
+     * trains is part of what is being proven.
      */
     async function handOffALead(
       w: World,
-      opts: { rooftopId?: string; email?: string; intakeKey?: string } = {},
+      opts: { rooftopId?: string; email?: string; handTo?: string } = {},
     ): Promise<{
       handoffId: string;
       leadId: string;
@@ -189,7 +193,7 @@ describe(
         '/api/crm/leads',
         {
           location_id: rooftopId,
-          intake_key: opts.intakeKey ?? `web-${randomUUID()}`,
+          intake_key: `web-${randomUUID()}`,
           channel: 'website',
           source_code: 'website',
           customer: {
@@ -215,8 +219,8 @@ describe(
       }
 
       // FBL-100 STARTS AT THE APPOINTMENT. The BDC books it before handing over,
-      // and the showroom's arrival is recorded against that booking rather than
-      // against nothing — which is what makes a kept appointment countable.
+      // and the showroom's check-in is recorded against that booking — which is
+      // what makes a kept appointment countable.
       const starts = new Date(Date.now() + 3_600_000);
       const booked = await call(
         t,
@@ -239,7 +243,7 @@ describe(
         `/api/crm/leads/${leadId}/handoff`,
         {
           expected_version: version,
-          handed_to_user_link_id: w.seller.userLinkId,
+          handed_to_user_link_id: opts.handTo ?? w.seller.userLinkId,
         },
         { 'idempotency-key': randomUUID() },
       );
@@ -295,11 +299,30 @@ describe(
       return Number((r.rows[0] as { n: number }).n);
     }
 
-    test('a walk-in is greeted, sold to, demonstrated, negotiated and closed', async () => {
+    test('an expected customer arrives, is sold to, and is handed to desking', async () => {
       const w = await seedWorld();
       const t = w.seller.token;
+      const lead = await handOffALead(w);
+      const carA = await acquireCar(w, '1HGCM82633A004352', 'A1234');
+      const carB = await acquireCar(w, '2HGCM82633A004353', 'B5678');
 
       // ── the up rotation ───────────────────────────────────────────────────
+      // The manager picks the salesperson off the staff list rather than typing
+      // an id — and the list only offers people whose bindings reach this floor.
+      const staff = await call(
+        w.manager.token,
+        'GET',
+        `/api/sales/find/staff?location_id=${w.rooftopId}`,
+      );
+      assert.equal(staff.status, 200, JSON.stringify(staff.body));
+      const candidates = (staff.body!.staff as ParsedJson[]).map((x) => String(x.userLinkId));
+      assert.ok(candidates.includes(w.seller.userLinkId), 'the salesperson is offered');
+      assert.ok(candidates.includes(w.other.userLinkId), 'so is their colleague');
+      assert.ok(
+        !candidates.includes(w.bdc.userLinkId),
+        'somebody with no sales role is not offered',
+      );
+
       const onFloor = await call(
         w.manager.token,
         'POST',
@@ -308,21 +331,16 @@ describe(
         { 'idempotency-key': randomUUID() },
       );
       assert.equal(onFloor.status, 201, JSON.stringify(onFloor.body));
-      assert.equal(onFloor.body!.entry.status, 'available');
 
-      // Twice on the floor is still ONCE on the floor.
-      const twice = await call(
-        w.manager.token,
-        'POST',
-        '/api/sales/floor',
-        { location_id: w.rooftopId, user_link_id: w.seller.userLinkId },
-        { 'idempotency-key': randomUUID() },
+      // ── the arrival, against a booking picked off a list ──────────────────
+      const expected = await call(t, 'GET', '/api/sales/find/appointments');
+      assert.equal(expected.status, 200, JSON.stringify(expected.body));
+      const mine = (expected.body!.appointments as ParsedJson[]).find(
+        (a) => String(a.appointmentId) === lead.appointmentId,
       );
-      assert.equal(twice.status, 200);
-      assert.equal(twice.body!.outcome, 'already_on_the_floor');
+      assert.ok(mine !== undefined, 'the booking is on the expected list');
+      assert.equal(String(mine!.partyId), lead.partyId);
 
-      // ── the arrival ───────────────────────────────────────────────────────
-      const lead = await handOffALead(w);
       const arrived = await call(
         t,
         'POST',
@@ -335,54 +353,49 @@ describe(
         { 'idempotency-key': randomUUID() },
       );
       assert.equal(arrived.status, 201, JSON.stringify(arrived.body));
-      assert.equal(
-        arrived.body!.visit.appointmentId,
-        lead.appointmentId,
-        'the arrival is against the booking, so a kept appointment is countable',
-      );
       const visitId = String(arrived.body!.visit.visitId);
       assert.equal(arrived.body!.visit.state, 'arrived');
-      assert.equal(arrived.body!.visit.greetedByUserLinkId, null);
+      assert.equal(arrived.body!.appointmentKept, true, 'the booking was marked kept');
 
-      // SOMEBODY ELSE'S BOOKING IS NOT THIS CUSTOMER'S ARRIVAL. Accepting it
-      // would put a kept appointment against a person who never had one.
-      const otherBooking = await handOffALead(w, {
-        email: `booking.${randomUUID()}@example.com`,
-      });
-      const wrongPerson = await call(
+      // THE BOOKING IS KEPT IN THE SAME ACT, and RT3's own record says so.
+      const kept = await query(
+        `SELECT state, completed_at FROM appointments WHERE appointment_id = $1`,
+        [lead.appointmentId],
+      );
+      assert.equal(String((kept.rows[0] as { state: string }).state), 'completed');
+      assert.ok((kept.rows[0] as { completed_at: unknown }).completed_at !== null);
+
+      // …and it has left the expected list, so nobody can be checked in twice
+      // against it.
+      const afterKept = await call(t, 'GET', '/api/sales/find/appointments');
+      assert.ok(
+        !(afterKept.body!.appointments as ParsedJson[]).some(
+          (a) => String(a.appointmentId) === lead.appointmentId,
+        ),
+        'a kept booking is no longer offered',
+      );
+
+      // A SECOND CHECK-IN WITH A DIFFERENT REQUEST KEY CONVERGES. The
+      // idempotency layer has never seen this key, so only the business key can
+      // save it — and it does.
+      const again = await call(
         t,
         'POST',
         '/api/sales/visits',
-        {
-          location_id: w.rooftopId,
-          party_id: lead.partyId,
-          appointment_id: otherBooking.appointmentId,
-        },
+        { location_id: w.rooftopId, party_id: lead.partyId },
         { 'idempotency-key': randomUUID() },
       );
-      assertProblem(wrongPerson, 422, 'invalid_request');
-      assert.match(String(wrongPerson.body!.detail), /somebody else/i);
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal(again.body!.outcome, 'already_here');
+      assert.equal(again.body!.visit.visitId, visitId, 'one visit, not two');
 
-      // …and a booking made at another showroom is not an arrival at this one.
-      const otherLot = await handOffALead(w, {
-        rooftopId: w.secondRooftopId,
-        email: `north.${randomUUID()}@example.com`,
-      });
-      const wrongLotBooking = await call(
-        t,
-        'POST',
-        '/api/sales/visits',
-        {
-          location_id: w.rooftopId,
-          party_id: otherLot.partyId,
-          appointment_id: otherLot.appointmentId,
-        },
-        { 'idempotency-key': randomUUID() },
+      const visitCount = await query(
+        `SELECT COUNT(*)::int AS n FROM showroom_visits WHERE tenant_id = $1`,
+        [w.tenantId],
       );
-      assertProblem(wrongLotBooking, 422, 'invalid_request');
-      assert.match(String(wrongLotBooking.body!.detail), /different rooftop/i);
+      assert.equal(Number((visitCount.rows[0] as { n: number }).n), 1);
 
-      // GREETING TAKES THE TURN. The rotation decides who, not the caller.
+      // ── greeting, then explicit acceptance ────────────────────────────────
       const greeted = await call(t, 'POST', `/api/sales/visits/${visitId}/greet`, {
         expected_version: Number(arrived.body!.visit.authorizationVersion),
       });
@@ -391,24 +404,29 @@ describe(
       assert.equal(greeted.body!.greetedBy, w.seller.userLinkId);
       assert.equal(greeted.body!.fromRotation, true, 'the up system gave the turn');
 
-      // …and that salesperson is now busy, not waiting for another customer.
-      // A FLOOR READ NAMES ITS SHOWROOM. Asking for "the" floor when you can
-      // reach two of them is a question with no answer, and it is refused.
-      const unnamed = await call(w.manager.token, 'GET', '/api/sales/floor');
-      assertProblem(unnamed, 400, 'location_required');
+      const taken = await call(t, 'POST', `/api/sales/visits/${visitId}/acceptance`, {
+        expected_version: Number(greeted.body!.visit.authorizationVersion),
+      });
+      assert.equal(taken.status, 200, JSON.stringify(taken.body));
+      assert.equal(taken.body!.visit.state, 'with_salesperson');
+      assert.equal(taken.body!.visit.acceptedByUserLinkId, w.seller.userLinkId);
 
-      const floor = await call(
-        w.manager.token,
-        'GET',
-        `/api/sales/floor?location_id=${w.rooftopId}`,
-      );
-      assert.equal(floor.status, 200, JSON.stringify(floor.body));
-      const mine = (floor.body!.floor as ParsedJson[]).find(
-        (e) => String(e.userLinkId) === w.seller.userLinkId,
-      );
-      assert.equal(String(mine!.status), 'with_customer');
+      // Replaying the acceptance converges rather than refusing.
+      const takenAgain = await call(t, 'POST', `/api/sales/visits/${visitId}/acceptance`, {
+        expected_version: Number(taken.body!.visit.authorizationVersion),
+      });
+      assert.equal(takenAgain.status, 200);
+      assert.equal(takenAgain.body!.outcome, 'already_accepted');
 
-      // ── the opportunity, received from CRM ────────────────────────────────
+      // ── the opportunity, received off the pending list ────────────────────
+      const pending = await call(t, 'GET', '/api/sales/find/handoffs');
+      assert.equal(pending.status, 200, JSON.stringify(pending.body));
+      const waiting = (pending.body!.handoffs as ParsedJson[]).find(
+        (h) => String(h.handoffId) === lead.handoffId,
+      );
+      assert.ok(waiting !== undefined, 'the handoff is on the pending list');
+      assert.equal(String(waiting!.customerName), 'Marta Silva');
+
       const opp = await call(
         t,
         'POST',
@@ -419,19 +437,45 @@ describe(
       assert.equal(opp.status, 201, JSON.stringify(opp.body));
       const opportunityId = String(opp.body!.opportunity.opportunityId);
       assert.equal(opp.body!.opportunity.stage, 'received');
+      assert.equal(opp.body!.opportunity.origin, 'crm_handoff');
       assert.equal(
         opp.body!.opportunity.partyId,
         lead.partyId,
-        'the customer came from the handoff, not from the request',
+        'the customer came from the frozen snapshot, not from the request',
       );
       assert.equal(opp.body!.opportunity.rooftopId, w.rooftopId);
+      assert.equal(opp.body!.opportunity.leadId, lead.leadId);
+      assert.equal(
+        opp.body!.opportunity.appointmentId,
+        null,
+        'the booking was already kept, so there is no pending appointment to carry',
+      );
+      // ONE AUDITED OWNER, ESTABLISHED AT RECEIPT — the person the CRM handed it
+      // to, because they still work this rooftop.
+      assert.equal(opp.body!.opportunity.ownerUserLinkId, w.seller.userLinkId);
       assert.equal(
         opp.body!.opportunity.dealStatus,
         'NOT_YET_AVAILABLE',
         'no deal exists until FBL-120 desks one',
       );
 
-      // ONE OPPORTUNITY PER HANDOFF, even from a different salesperson.
+      const owners = await query(
+        `SELECT to_user_link_id, reason FROM opportunity_assignments
+          WHERE tenant_id = $1 AND opportunity_id = $2`,
+        [w.tenantId, opportunityId],
+      );
+      assert.equal(owners.rows.length, 1, 'the ownership is on the record, not just in the row');
+
+      // …and it has left the pending list.
+      const afterReceipt = await call(t, 'GET', '/api/sales/find/handoffs');
+      assert.ok(
+        !(afterReceipt.body!.handoffs as ParsedJson[]).some(
+          (h) => String(h.handoffId) === lead.handoffId,
+        ),
+        'a received handoff is no longer waiting',
+      );
+
+      // ONE OPPORTUNITY PER HANDOFF, and a fresh request key does not change it.
       const dup = await call(
         w.other.token,
         'POST',
@@ -443,9 +487,38 @@ describe(
       assert.equal(dup.body!.outcome, 'already_received');
       assert.equal(dup.body!.opportunity.opportunityId, opportunityId);
 
-      // ── the shortlist, off the real inventory ─────────────────────────────
-      const carA = await acquireCar(w, '1HGCM82633A004352', 'A1234');
-      const carB = await acquireCar(w, '2HGCM82633A004353', 'B5678');
+      // ── the shortlist, chosen off a rooftop-filtered list ─────────────────
+      const chooser = await call(t, 'GET', '/api/sales/find/vehicles');
+      assert.equal(chooser.status, 200, JSON.stringify(chooser.body));
+      const offered = (chooser.body!.vehicles as ParsedJson[]).map((v) => String(v.stockItemId));
+      assert.ok(offered.includes(carA) && offered.includes(carB), 'both cars are offered');
+
+      // A CAR AT ANOTHER ROOFTOP IS NOT OFFERED, and is NOT FOUND if named.
+      const elsewhere = await acquireCar(w, '3HGCM82633A004354', 'C9012', w.secondRooftopId);
+      const chooserAgain = await call(
+        t,
+        'GET',
+        `/api/sales/find/vehicles?location_id=${w.rooftopId}`,
+      );
+      assert.ok(
+        !(chooserAgain.body!.vehicles as ParsedJson[]).some(
+          (v) => String(v.stockItemId) === elsewhere,
+        ),
+        'another showroom’s car is not on this list',
+      );
+      const wrongLot = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/vehicles`,
+        { stock_item_id: elsewhere },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(wrongLot.status, 404, JSON.stringify(wrongLot.body));
+      assert.doesNotMatch(
+        JSON.stringify(wrongLot.body),
+        /Northside|C9012/,
+        'the refusal named the other showroom or its stock',
+      );
 
       const shortA = await call(
         t,
@@ -466,19 +539,7 @@ describe(
       assert.equal(shortB.status, 201);
       const shortBId = String(shortB.body!.vehicle.opportunityVehicleId);
 
-      // A CAR AT ANOTHER ROOFTOP IS NOT ON THIS LOT and cannot be shortlisted.
-      const elsewhere = await acquireCar(w, '3HGCM82633A004354', 'C9012', w.secondRooftopId);
-      const wrongLot = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/vehicles`,
-        { stock_item_id: elsewhere },
-        { 'idempotency-key': randomUUID() },
-      );
-      assertProblem(wrongLot, 422, 'invalid_request');
-      assert.match(String(wrongLot.body!.detail), /rooftop/i);
-
-      // ── the demonstration ─────────────────────────────────────────────────
+      // ── the demonstration, as five facts ─────────────────────────────────
       // WITHOUT A LICENCE CHECK, NO CAR LEAVES THE LOT.
       const noLicence = await call(
         t,
@@ -490,7 +551,7 @@ describe(
       assertProblem(noLicence, 422, 'invalid_request');
       assert.match(String(noLicence.body!.detail), /licen/i);
 
-      const drive = await call(
+      const issued = await call(
         t,
         'POST',
         `/api/sales/opportunities/${opportunityId}/demonstrations`,
@@ -502,81 +563,54 @@ describe(
         },
         { 'idempotency-key': randomUUID() },
       );
-      assert.equal(drive.status, 201, JSON.stringify(drive.body));
-      const demonstrationId = String(drive.body!.demonstration.demonstrationId);
-      assert.equal(drive.body!.demonstration.state, 'in_progress');
+      assert.equal(issued.status, 201, JSON.stringify(issued.body));
+      const demonstrationId = String(issued.body!.demonstration.demonstrationId);
+      assert.equal(issued.body!.demonstration.state, 'issued', 'keys out, not yet moving');
 
-      // THE SAME CAR CANNOT BE OUT TWICE. Another customer's opportunity asks
-      // for it and is refused with the demonstration that already has it.
-      const second = await handOffALead(w, { email: `other.${randomUUID()}@example.com` });
-      const secondOpp = await call(
-        w.other.token,
-        'POST',
-        '/api/sales/opportunities',
-        { handoff_id: second.handoffId },
-        { 'idempotency-key': randomUUID() },
-      );
-      assert.equal(secondOpp.status, 201);
-      const secondOppId = String(secondOpp.body!.opportunity.opportunityId);
-      await call(
-        w.other.token,
-        'POST',
-        `/api/sales/opportunities/${secondOppId}/vehicles`,
-        { stock_item_id: carA },
-        { 'idempotency-key': randomUUID() },
-      );
-      const clash = await call(
-        w.other.token,
-        'POST',
-        `/api/sales/opportunities/${secondOppId}/demonstrations`,
-        { stock_item_id: carA, driver_party_id: second.partyId, licence_verified: true },
-        { 'idempotency-key': randomUUID() },
-      );
-      assertProblem(clash, 409, 'vehicle_out');
-      assert.equal(clash.body!.errors.demonstration_id, demonstrationId);
+      const stateUrl = `/api/sales/opportunities/${opportunityId}/demonstrations/${demonstrationId}/state`;
+      const started = await call(t, 'POST', stateUrl, {
+        expected_version: Number(issued.body!.demonstration.authorizationVersion),
+        to_state: 'in_progress',
+      });
+      assert.equal(started.status, 200, JSON.stringify(started.body));
+      assert.equal(started.body!.demonstration.state, 'in_progress');
+      assert.ok(started.body!.demonstration.startedAt !== null, 'the car left at a stated time');
+
+      // A CUSTOMER CANNOT LEAVE WHILE A CAR IS OUT.
+      const tooSoon = await call(t, 'POST', `/api/sales/visits/${visitId}/depart`, {
+        expected_version: Number(taken.body!.visit.authorizationVersion),
+      });
+      assertProblem(tooSoon, 422, 'invalid_request');
+      assert.match(String(tooSoon.body!.detail), /still out/i);
 
       // AN UNKNOWN VERDICT IS THE CALLER'S MISTAKE, not a server failure.
-      const nonsense = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/demonstrations/${demonstrationId}/end`,
-        {
-          expected_version: Number(drive.body!.demonstration.authorizationVersion),
-          state: 'completed',
-          outcome: 'positive',
-        },
-      );
+      const nonsense = await call(t, 'POST', stateUrl, {
+        expected_version: Number(started.body!.demonstration.authorizationVersion),
+        to_state: 'returned',
+        outcome: 'positive',
+      });
       assertProblem(nonsense, 422, 'invalid_request');
 
-      const back = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/demonstrations/${demonstrationId}/end`,
-        {
-          expected_version: Number(drive.body!.demonstration.authorizationVersion),
-          state: 'completed',
-          outcome: 'interested',
-          notes: 'liked the ride, wants the other colour',
-        },
-      );
+      const back = await call(t, 'POST', stateUrl, {
+        expected_version: Number(started.body!.demonstration.authorizationVersion),
+        to_state: 'returned',
+        outcome: 'interested',
+        notes: 'liked the ride, wants the other colour',
+      });
       assert.equal(back.status, 200, JSON.stringify(back.body));
-      assert.equal(back.body!.demonstration.state, 'completed');
+      assert.equal(back.body!.demonstration.state, 'returned');
       assert.equal(back.body!.demonstration.outcome, 'interested');
 
-      // …and the car is available to demonstrate again now it is back.
-      const nowFree = await call(
-        w.other.token,
-        'POST',
-        `/api/sales/opportunities/${secondOppId}/demonstrations`,
-        { stock_item_id: carA, driver_party_id: second.partyId, licence_verified: true },
-        { 'idempotency-key': randomUUID() },
-      );
-      assert.equal(nowFree.status, 201, JSON.stringify(nowFree.body));
+      // Replaying the return converges.
+      const backAgain = await call(t, 'POST', stateUrl, {
+        expected_version: Number(back.body!.demonstration.authorizationVersion),
+        to_state: 'returned',
+        outcome: 'interested',
+      });
+      assert.equal(backAgain.status, 200);
+      assert.equal(backAgain.body!.outcome, 'already_there');
 
-      // ── the selection ─────────────────────────────────────────────────────
-      // The drive already advanced car A's shortlist row to `demonstrated`, so
-      // the versions the caller holds are stale — exactly as a screen's would
-      // be. Re-read before writing, which is what the console does.
+      // ── the selection, with its history kept ─────────────────────────────
       const fresh = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
       const rowsNow = fresh.body!.shortlist as ParsedJson[];
       const versionOf = (id: string): number =>
@@ -587,17 +621,13 @@ describe(
         'driving a car says so on the shortlist without anybody typing it',
       );
 
-      const selected = await call(
+      const selectedB = await call(
         t,
         'POST',
         `/api/sales/opportunities/${opportunityId}/vehicles/${shortBId}/status`,
-        {
-          expected_version: versionOf(shortBId),
-          status: 'selected',
-        },
+        { expected_version: versionOf(shortBId), status: 'selected' },
       );
-      assert.equal(selected.status, 200, JSON.stringify(selected.body));
-      assert.equal(selected.body!.vehicle.status, 'selected');
+      assert.equal(selectedB.status, 200, JSON.stringify(selectedB.body));
 
       // A SECOND SELECTION STANDS THE FIRST ONE DOWN rather than being refused
       // — a customer changing their mind is normal, two selected cars are not.
@@ -605,20 +635,114 @@ describe(
         t,
         'POST',
         `/api/sales/opportunities/${opportunityId}/vehicles/${shortAId}/status`,
-        {
-          expected_version: versionOf(shortAId),
-          status: 'selected',
-        },
+        { expected_version: versionOf(shortAId), status: 'selected' },
       );
       assert.equal(changed.status, 200, JSON.stringify(changed.body));
-      const shortlist = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
-      const selectedRows = (shortlist.body!.shortlist as ParsedJson[]).filter(
+      const shortlistNow = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
+      const selectedRows = (shortlistNow.body!.shortlist as ParsedJson[]).filter(
         (v) => String(v.status) === 'selected',
       );
       assert.equal(selectedRows.length, 1, 'exactly one car is the one they want');
       assert.equal(String(selectedRows[0]!.opportunityVehicleId), shortAId);
 
-      // ── negotiation, and the manager ──────────────────────────────────────
+      // …AND THE SEQUENCE SURVIVED. The current row says `selected`; the history
+      // says a second-choice car was selected first and stood down.
+      const vehicleStory = (shortlistNow.body!.timeline as ParsedJson[])
+        .filter((e) => String(e.kind).startsWith('vehicle.'))
+        .map((e) => String(e.kind));
+      assert.ok(
+        vehicleStory.includes('vehicle.shortlisted'),
+        'the shortlisting is on the timeline',
+      );
+      assert.ok(vehicleStory.includes('vehicle.demonstrated'), 'so is the drive');
+      assert.ok(vehicleStory.includes('vehicle.selected'), 'so is each selection');
+      assert.ok(
+        vehicleStory.includes('vehicle.stood_down'),
+        'and so is the car that lost — which a status column alone cannot say',
+      );
+
+      // ── what is owed next ────────────────────────────────────────────────
+      const logged = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities`,
+        { kind: 'call', direction: 'outbound', subject: 'talked through the warranty' },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(logged.status, 201, JSON.stringify(logged.body));
+
+      const task = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities`,
+        {
+          kind: 'task',
+          subject: 'send the warranty booklet',
+          due_at: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(task.status, 201, JSON.stringify(task.body));
+      const taskId = String(task.body!.activity.activityId);
+
+      // THE EARLIEST OPEN DUE ACTION IS EXPOSED, on the opportunity itself.
+      const withAction = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
+      assert.equal(withAction.body!.opportunity.nextActionId, taskId);
+      assert.equal(withAction.body!.opportunity.nextActionSubject, 'send the warranty booklet');
+      assert.equal((withAction.body!.openActions as ParsedJson[]).length, 1);
+
+      // …and it can be completed.
+      const done = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities/${taskId}/close`,
+        { expected_version: Number(task.body!.activity.authorizationVersion), state: 'completed' },
+      );
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+      assert.equal(done.body!.activity.state, 'completed');
+      const afterDone = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
+      assert.equal(afterDone.body!.opportunity.nextActionId, null, 'nothing is owed now');
+
+      // …or cancelled, which is a different fact and states why.
+      const another = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities`,
+        {
+          kind: 'task',
+          subject: 'chase the part-exchange photos',
+          due_at: new Date(Date.now() + 172_800_000).toISOString(),
+        },
+        { 'idempotency-key': randomUUID() },
+      );
+      const noReason = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities/${String(
+          another.body!.activity.activityId,
+        )}/close`,
+        {
+          expected_version: Number(another.body!.activity.authorizationVersion),
+          state: 'cancelled',
+        },
+      );
+      assertProblem(noReason, 422, 'invalid_request');
+      const cancelled = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/activities/${String(
+          another.body!.activity.activityId,
+        )}/close`,
+        {
+          expected_version: Number(another.body!.activity.authorizationVersion),
+          state: 'cancelled',
+          reason: 'they sent them by email instead',
+        },
+      );
+      assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+      assert.equal(cancelled.body!.activity.state, 'cancelled');
+
+      // ── negotiation, and a real manager ──────────────────────────────────
       const round = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/negotiation`, {
         initiated_by: 'customer',
         summary: 'asked what could be done on the trade',
@@ -632,6 +756,16 @@ describe(
         'NOT_YET_AVAILABLE',
         'a negotiation carries what was SAID; the numbers belong to desking',
       );
+
+      // The manager is picked off the list, not typed.
+      const managers = await call(
+        t,
+        'GET',
+        `/api/sales/find/staff?location_id=${w.rooftopId}&role=manager`,
+      );
+      assert.equal(managers.status, 200, JSON.stringify(managers.body));
+      const managerIds = (managers.body!.staff as ParsedJson[]).map((x) => String(x.userLinkId));
+      assert.deepEqual(managerIds, [w.manager.userLinkId], 'exactly one manager works this floor');
 
       const turnover = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/turnover`, {
         manager_user_link_id: w.manager.userLinkId,
@@ -648,11 +782,60 @@ describe(
       });
       assertProblem(self, 422, 'invalid_request');
 
-      // ── the stage machine ─────────────────────────────────────────────────
+      // ── the manager reassigns it, which only a manager can ───────────────
       const current = await call(t, 'GET', `/api/sales/opportunities/${opportunityId}`);
       let version = Number(current.body!.opportunity.authorizationVersion);
+
+      const notAManager = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/assignment`,
+        { expected_version: version, to_user_link_id: w.other.userLinkId },
+      );
+      assert.equal(notAManager.status, 404, JSON.stringify(notAManager.body));
+
+      const reassigned = await call(
+        w.manager.token,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/assignment`,
+        {
+          expected_version: version,
+          to_user_link_id: w.other.userLinkId,
+          reason: 'reassignment',
+          note: 'their customer from last year',
+        },
+      );
+      assert.equal(reassigned.status, 200, JSON.stringify(reassigned.body));
+      assert.equal(reassigned.body!.opportunity.ownerUserLinkId, w.other.userLinkId);
+      version = Number(reassigned.body!.opportunity.authorizationVersion);
+
+      // REPLAYING IT CONVERGES, on a stale version — because holding a stale
+      // version is the CONSEQUENCE of the first call having succeeded.
+      const replayed = await call(
+        w.manager.token,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/assignment`,
+        { expected_version: version - 1, to_user_link_id: w.other.userLinkId },
+      );
+      assert.equal(replayed.status, 200, JSON.stringify(replayed.body));
+      assert.equal(replayed.body!.outcome, 'already_assigned');
+
+      // THE HISTORY KEPT BOTH OWNERS.
+      const history = await query(
+        `SELECT from_user_link_id, to_user_link_id, reason FROM opportunity_assignments
+          WHERE tenant_id = $1 AND opportunity_id = $2 ORDER BY occurred_at`,
+        [w.tenantId, opportunityId],
+      );
+      assert.equal(history.rows.length, 2, 'receipt and reassignment are both on the record');
+      assert.equal(
+        String((history.rows[1] as { to_user_link_id: string }).to_user_link_id),
+        w.other.userLinkId,
+      );
+
+      // ── the stage machine, ending at desking ─────────────────────────────
+      const t2 = w.other.token;
       for (const stage of ['in_showroom', 'demonstrated', 'negotiating']) {
-        const moved = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
+        const moved = await call(t2, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
           expected_version: version,
           to_stage: stage,
         });
@@ -661,82 +844,136 @@ describe(
         version = Number(moved.body!.opportunity.authorizationVersion);
       }
 
-      // A STALE VERSION LOSES. Two people editing the same record is normal;
-      // one of them silently overwriting the other is not.
-      const stale = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
+      // A STALE VERSION LOSES on a move that is not a replay.
+      const stale = await call(t2, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
         expected_version: version - 1,
-        to_stage: 'received',
+        to_stage: 'follow_up',
       });
       assertProblem(stale, 409, 'version_conflict');
 
-      // A MOVE THE MACHINE DOES NOT ADMIT IS REFUSED, not quietly allowed.
-      const backwards = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
+      // A MOVE THE MACHINE DOES NOT ADMIT IS REFUSED.
+      const backwards = await call(t2, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
         expected_version: version,
         to_stage: 'received',
       });
       assertProblem(backwards, 422, 'invalid_request');
       assert.match(String(backwards.body!.detail), /may move to/);
 
-      // A WIN STATES WHAT IT WAS. 'sold' is the only disposition a win takes.
-      const wrongReason = await call(t, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
-        expected_version: version,
-        to_stage: 'won',
-        disposition: 'lost_to_competitor',
-      });
+      // THERE IS NO `won` STAGE AND NO `sold` DISPOSITION. RT4 cannot sell.
+      const soldAttempt = await call(
+        t2,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/stage`,
+        {
+          expected_version: version,
+          to_stage: 'won',
+          disposition: 'sold',
+        },
+      );
+      assertProblem(soldAttempt, 422, 'invalid_request');
+      assert.match(String(soldAttempt.body!.detail), /unknown stage won/);
+
+      // A positive conclusion needs the positive disposition and nothing else.
+      const wrongReason = await call(
+        t2,
+        'POST',
+        `/api/sales/opportunities/${opportunityId}/stage`,
+        {
+          expected_version: version,
+          to_stage: 'ready_for_desking',
+          disposition: 'lost_to_competitor',
+        },
+      );
       assertProblem(wrongReason, 422, 'invalid_request');
 
-      // ── follow-up, and closing the visit ──────────────────────────────────
-      // What HAPPENED is logged as what it was…
-      const logged = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/activities`,
-        { kind: 'call', direction: 'outbound', subject: 'talked through the warranty' },
-        { 'idempotency-key': randomUUID() },
-      );
-      assert.equal(logged.status, 201, JSON.stringify(logged.body));
-      assert.equal(logged.body!.activity.dueAt, null);
+      const desked = await call(t2, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
+        expected_version: version,
+        to_stage: 'ready_for_desking',
+        disposition: 'committed_to_purchase',
+        note: 'wants to sign on Saturday',
+      });
+      assert.equal(desked.status, 200, JSON.stringify(desked.body));
+      assert.equal(desked.body!.opportunity.stage, 'ready_for_desking');
+      assert.ok(desked.body!.deskingHandoffId !== null, 'the desk was handed the customer');
+      const deskingHandoffId = String(desked.body!.deskingHandoffId);
+      version = Number(desked.body!.opportunity.authorizationVersion);
 
-      // …and a call that already happened cannot also be due later.
-      const confused = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/activities`,
-        {
-          kind: 'call',
-          direction: 'outbound',
-          subject: 'ring them Saturday',
-          due_at: new Date(Date.now() + 86_400_000).toISOString(),
-        },
-        { 'idempotency-key': randomUUID() },
+      // ── EXACTLY ONE FACT, AND NOTHING ELSE ───────────────────────────────
+      const facts = await query(
+        `SELECT desking_handoff_id, stock_item_id, desking_status, outbox_event_id
+           FROM desking_handoffs WHERE tenant_id = $1`,
+        [w.tenantId],
       );
-      assertProblem(confused, 422, 'invalid_request');
+      assert.equal(facts.rows.length, 1, 'exactly one desking handoff');
+      const fact = facts.rows[0] as Record<string, unknown>;
+      assert.equal(String(fact.desking_handoff_id), deskingHandoffId);
+      assert.equal(String(fact.stock_item_id), carA, 'it names the car they committed to');
+      assert.equal(String(fact.desking_status), 'NOT_YET_AVAILABLE');
 
-      // What is still OWED is a task, and it carries the date.
-      const activity = await call(
-        t,
-        'POST',
-        `/api/sales/opportunities/${opportunityId}/activities`,
-        {
-          kind: 'task',
-          subject: 'follow up on the warranty question',
-          due_at: new Date(Date.now() + 86_400_000).toISOString(),
-        },
-        { 'idempotency-key': randomUUID() },
+      const outbox = await query(
+        `SELECT event_id, event_type, payload FROM admin_outbox
+          WHERE tenant_id = $1 AND event_type LIKE 'sales.%'`,
+        [w.tenantId],
       );
-      assert.equal(activity.status, 201, JSON.stringify(activity.body));
-      assert.equal(activity.body!.activity.state, 'open');
-      assert.ok(activity.body!.activity.dueAt !== null);
+      assert.equal(outbox.rows.length, 1, 'exactly one outbox event');
+      const event = outbox.rows[0] as Record<string, unknown>;
+      assert.equal(
+        String(event.event_type),
+        'sales.opportunity.ready_for_appraisal_desking',
+        'the fact is named as the order names it',
+      );
+      assert.equal(String(event.event_id), String(fact.outbox_event_id), 'the pair is traceable');
 
+      // REPLAYING THE MOVE RAISES NOTHING NEW.
+      const replayDesk = await call(t2, 'POST', `/api/sales/opportunities/${opportunityId}/stage`, {
+        expected_version: version,
+        to_stage: 'ready_for_desking',
+        disposition: 'committed_to_purchase',
+      });
+      assert.equal(replayDesk.status, 200, JSON.stringify(replayDesk.body));
+      assert.equal(replayDesk.body!.outcome, 'already_there');
+      assert.equal(replayDesk.body!.deskingHandoffId, deskingHandoffId, 'the same fact');
+      const stillOne = await query(
+        `SELECT (SELECT COUNT(*)::int FROM desking_handoffs WHERE tenant_id = $1) AS facts,
+                (SELECT COUNT(*)::int FROM admin_outbox
+                  WHERE tenant_id = $1 AND event_type LIKE 'sales.%') AS events`,
+        [w.tenantId],
+      );
+      assert.deepEqual(stillOne.rows[0], { facts: 1, events: 1 });
+
+      // NO SALE, NO SOLD INVENTORY, NO DEAL, NO DELIVERY, NO MONEY.
+      const stock = await query(
+        `SELECT lifecycle_state FROM stock_items WHERE stock_item_id = $1`,
+        [carA],
+      );
+      assert.equal(
+        String((stock.rows[0] as { lifecycle_state: string }).lifecycle_state),
+        'acquired',
+        'the car this train handed on is NOT marked sold',
+      );
+      const moneyColumns = await query(
+        `SELECT table_name, column_name FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name IN ('opportunities', 'negotiation_rounds', 'desking_handoffs',
+                               'opportunity_vehicles', 'demonstrations')
+            AND (column_name LIKE '%cents%' OR column_name LIKE '%price%'
+                 OR column_name LIKE '%amount%' OR column_name LIKE '%gross%'
+                 OR column_name LIKE '%commission%' OR column_name LIKE '%revenue%')`,
+      );
+      assert.deepEqual(moneyColumns.rows, [], 'a money column appeared');
+
+      // ── the visit ends, and the salesperson is free ──────────────────────
+      const visitNow = await call(t, 'GET', '/api/sales/visits');
+      const openVisit = (visitNow.body!.visits as ParsedJson[]).find(
+        (v) => String(v.visitId) === visitId,
+      );
       const left = await call(t, 'POST', `/api/sales/visits/${visitId}/depart`, {
-        expected_version: Number(greeted.body!.visit.authorizationVersion),
-        note: 'coming back Saturday with their spouse',
+        expected_version: Number(openVisit!.authorizationVersion),
+        note: 'coming back Saturday to sign',
       });
       assert.equal(left.status, 200, JSON.stringify(left.body));
       assert.equal(left.body!.visit.state, 'departed');
 
-      // THE SALESPERSON GOES BACK ON THE FLOOR IN THE SAME BREATH — a floor
-      // that leaks people is a floor that stops giving out turns.
       const afterFloor = await call(
         w.manager.token,
         'GET',
@@ -747,34 +984,75 @@ describe(
       );
       assert.equal(String(backOn!.status), 'available');
 
-      // ── the manager's board ───────────────────────────────────────────────
+      // ── the manager's one reconciled view ────────────────────────────────
       const board = await call(w.manager.token, 'GET', '/api/sales/board');
       assert.equal(board.status, 200, JSON.stringify(board.body));
-      assert.equal(Number(board.body!.pipeline.open), 2, 'two live opportunities');
-      assert.equal(Number(board.body!.pipeline.negotiating), 1);
-      assert.ok(Number(board.body!.activity.demonstrationsToday) >= 2);
-      assert.equal(Number(board.body!.activity.negotiationRounds), 1);
-      assert.equal(Number(board.body!.activity.turnovers), 1);
+      assert.equal(Number(board.body!.appointments.kept), 1, 'the kept booking is counted');
       assert.equal(Number(board.body!.showroom.departedToday), 1);
       assert.equal(Number(board.body!.floor.available), 1);
+      assert.equal(Number(board.body!.pipeline.readyForDesking), 1);
+      assert.equal(Number(board.body!.pipeline.open), 0);
+      assert.equal(Number(board.body!.vehicles.selected), 0, 'a desked deal is no longer open');
+      assert.equal(Number(board.body!.demonstrations.returnedToday), 1);
+      assert.equal(Number(board.body!.negotiation.roundsToday), 1);
+      assert.equal(Number(board.body!.negotiation.turnovers), 1);
+      assert.equal(Number(board.body!.dispositions.readyForDesking), 1);
+      assert.equal(Number(board.body!.nextActions.open), 0);
 
-      // THE BOARD SAYS THE NUMBER DOES NOT EXIST YET. It does not report zero,
-      // and there is no money field on it for anybody to misread.
-      assert.equal(board.body!.dealStatus, 'NOT_YET_AVAILABLE');
-      assert.equal(board.body!.pricingStatus, 'NOT_YET_AVAILABLE');
-      assert.doesNotMatch(
-        JSON.stringify(board.body),
-        /cents|gross|revenue|commission|price/i,
-        JSON.stringify(board.body),
-      );
+      // EVERY MONEY QUESTION ANSWERS THE SAME WAY.
+      for (const key of [
+        'revenueStatus',
+        'roiStatus',
+        'grossStatus',
+        'commissionStatus',
+        'closeStatus',
+        'pricingStatus',
+        'dealStatus',
+      ]) {
+        assert.equal(board.body![key], 'NOT_YET_AVAILABLE', key);
+      }
+      // …AND EVERY MONEY-NAMED FIELD HOLDS THAT STRING AND NOTHING ELSE.
+      //
+      // The board is REQUIRED to name revenue, ROI, gross, commission, close,
+      // pricing and deal — that is how it says the figures do not exist, rather
+      // than leaving a reader to infer a zero. So the check is not that those
+      // words are absent; it is that no field named after money carries a
+      // VALUE, anywhere in the payload, at any depth.
+      const moneyish = /cents|gross|commission|revenue|price|amount|roi|close/i;
+      const offenders: string[] = [];
+      const walk = (node: unknown, path: string): void => {
+        if (node === null || node === undefined) return;
+        if (Array.isArray(node)) {
+          node.forEach((item, i) => walk(item, `${path}[${i}]`));
+          return;
+        }
+        if (typeof node === 'object') {
+          for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+            const here = path === '' ? k : `${path}.${k}`;
+            if (moneyish.test(k) && v !== 'NOT_YET_AVAILABLE') {
+              offenders.push(`${here}=${JSON.stringify(v)}`);
+            }
+            walk(v, here);
+          }
+        }
+      };
+      walk(board.body, '');
+      assert.deepEqual(offenders, [], 'a money-named field carried a value');
 
-      // ── the trail ─────────────────────────────────────────────────────────
+      // ── the trail ────────────────────────────────────────────────────────
       for (const eventType of [
         'sales.opportunity.received',
+        'sales.opportunity.assigned',
         'sales.opportunity.stage_changed',
+        'sales.visit.arrived',
         'sales.visit.greeted',
+        'sales.visit.accepted',
+        'sales.visit.departed',
+        'sales.demonstration.issued',
         'sales.demonstration.started',
-        'sales.demonstration.ended',
+        'sales.demonstration.returned',
+        'sales.activity.completed',
+        'sales.activity.cancelled',
         'sales.negotiation.round_recorded',
         'sales.turnover.recorded',
       ]) {
@@ -792,7 +1070,108 @@ describe(
       }
     });
 
-    test('a closed opportunity is closed: terminal states refuse further work', async () => {
+    test('a walk-in resolves to the canonical customer, never a second record', async () => {
+      const w = await seedWorld();
+      const t = w.seller.token;
+      const lead = await handOffALead(w, { email: 'marta.known@example.com' });
+
+      // The customer the dealership already knows is FOUND, not retyped.
+      const search = await call(t, 'GET', '/api/sales/find/customers?q=silva');
+      assert.equal(search.status, 200, JSON.stringify(search.body));
+      const known = (search.body!.customers as ParsedJson[]).find(
+        (c) => String(c.partyId) === lead.partyId,
+      );
+      assert.ok(known !== undefined, 'the existing customer is on the list');
+      assert.equal(String(known!.displayName), 'Marta Silva');
+      // The list carries no contact detail — only whether one exists.
+      assert.equal(known!.email, undefined);
+      assert.equal(known!.hasEmail, true);
+
+      // A WALK-IN BY SOMEBODY BRAND NEW creates the canonical record here, where
+      // Release Train 2's duplicate detection can answer.
+      const fresh = await call(
+        t,
+        'POST',
+        '/api/sales/walk-ins',
+        {
+          location_id: w.rooftopId,
+          customer: { given_name: 'Tomas', family_name: 'Novak', email: 'tomas@example.com' },
+        },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(fresh.status, 201, JSON.stringify(fresh.body));
+      assert.equal(fresh.body!.opportunity.origin, 'walk_in');
+      assert.equal(fresh.body!.opportunity.handoffId, null);
+      assert.equal(fresh.body!.opportunity.leadId, null);
+      assert.equal(fresh.body!.customerCreated, true);
+      assert.equal(
+        fresh.body!.opportunity.ownerUserLinkId,
+        w.seller.userLinkId,
+        'whoever took the walk-in owns it',
+      );
+
+      // THE SAME PERSON AGAIN IS NOT A SECOND CUSTOMER. RT2's own detection
+      // answers, and the salesperson is shown who the dealership already has.
+      const dup = await call(
+        t,
+        'POST',
+        '/api/sales/walk-ins',
+        {
+          location_id: w.rooftopId,
+          customer: { given_name: 'Tomas', family_name: 'Novakova', email: 'tomas@example.com' },
+        },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(dup.status, 409, JSON.stringify(dup.body));
+      assert.equal(dup.body!.outcome, 'duplicate');
+      assert.equal(String(dup.body!.candidates[0].matchedOn), 'email');
+      assert.equal(String(dup.body!.candidates[0].displayName), 'Tomas Novak');
+
+      const customers = await query(
+        `SELECT COUNT(*)::int AS n FROM parties
+          WHERE tenant_id = $1 AND email = 'tomas@example.com'`,
+        [w.tenantId],
+      );
+      assert.equal(Number((customers.rows[0] as { n: number }).n), 1, 'one Tomas, not two');
+
+      // A WALK-IN BY A CUSTOMER PICKED FROM THE SEARCH uses their real record.
+      const picked = await call(
+        t,
+        'POST',
+        '/api/sales/walk-ins',
+        { location_id: w.rooftopId, party_id: lead.partyId },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(picked.status, 201, JSON.stringify(picked.body));
+      assert.equal(picked.body!.opportunity.partyId, lead.partyId);
+      assert.equal(picked.body!.customerCreated, false);
+      const walkInId = String(picked.body!.opportunity.opportunityId);
+
+      // …AND A SECOND WALK-IN BY THE SAME PERSON CONVERGES on the open file,
+      // even with a fresh request key the idempotency layer has never seen.
+      const twice = await call(
+        t,
+        'POST',
+        '/api/sales/walk-ins',
+        { location_id: w.rooftopId, party_id: lead.partyId },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(twice.status, 200, JSON.stringify(twice.body));
+      assert.equal(twice.body!.outcome, 'already_open');
+      assert.equal(twice.body!.opportunity.opportunityId, walkInId, 'one open file, not two');
+
+      // NO RAW IDENTIFIER IS ACCEPTED WHERE A SELECTION IS EXPECTED.
+      const typed = await call(
+        t,
+        'POST',
+        '/api/sales/walk-ins',
+        { location_id: w.rooftopId, party_id: 'not-a-uuid' },
+        { 'idempotency-key': randomUUID() },
+      );
+      assertProblem(typed, 400, 'selection_required');
+    });
+
+    test('a concluded opportunity is concluded: terminal states refuse further work', async () => {
       const w = await seedWorld();
       const t = w.seller.token;
       const lead = await handOffALead(w);
@@ -816,7 +1195,14 @@ describe(
       assert.equal(closed.body!.opportunity.disposition, 'lost_to_competitor');
       const version = Number(closed.body!.opportunity.authorizationVersion);
 
-      // A CLOSE WITHOUT A REASON IS NOT A CLOSE — proven on a second one.
+      // A LOST DEAL RAISES NO DESKING FACT.
+      const facts = await query(
+        `SELECT COUNT(*)::int AS n FROM desking_handoffs WHERE tenant_id = $1`,
+        [w.tenantId],
+      );
+      assert.equal(Number((facts.rows[0] as { n: number }).n), 0);
+
+      // A CONCLUSION WITHOUT A REASON IS NOT A CONCLUSION — proven on a second.
       const other = await handOffALead(w, { email: `two.${randomUUID()}@example.com` });
       const opp2 = await call(
         t,
@@ -837,7 +1223,46 @@ describe(
       assertProblem(noReason, 422, 'invalid_request');
       assert.match(String(noReason.body!.detail), /states why/i);
 
-      // EVERY WRITE THROUGH THE CLOSED OPPORTUNITY IS REFUSED. Not the read.
+      // A FOLLOW-UP NEEDS SOMETHING OWED.
+      const noPromise = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${String(opp2.body!.opportunity.opportunityId)}/stage`,
+        {
+          expected_version: Number(opp2.body!.opportunity.authorizationVersion),
+          to_stage: 'follow_up',
+        },
+      );
+      assertProblem(noPromise, 422, 'invalid_request');
+      assert.match(String(noPromise.body!.detail), /owed/i);
+
+      // …and with a due task, it is allowed.
+      const promise = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${String(opp2.body!.opportunity.opportunityId)}/activities`,
+        {
+          kind: 'task',
+          subject: 'ring them Thursday',
+          due_at: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+        { 'idempotency-key': randomUUID() },
+      );
+      assert.equal(promise.status, 201, JSON.stringify(promise.body));
+      const parked = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${String(opp2.body!.opportunity.opportunityId)}/stage`,
+        {
+          expected_version: Number(opp2.body!.opportunity.authorizationVersion),
+          to_stage: 'follow_up',
+        },
+      );
+      assert.equal(parked.status, 200, JSON.stringify(parked.body));
+      assert.equal(parked.body!.opportunity.stage, 'follow_up');
+      assert.equal(parked.body!.opportunity.disposition, null, 'follow-up is not a conclusion');
+
+      // EVERY WRITE THROUGH THE LOST OPPORTUNITY IS REFUSED. Not the read.
       const car = await acquireCar(w, '1HGCM82633A004352', 'A1234');
       const shortlist = await call(
         t,
@@ -847,7 +1272,7 @@ describe(
         { 'idempotency-key': randomUUID() },
       );
       assertProblem(shortlist, 422, 'invalid_request');
-      assert.match(String(shortlist.body!.detail), /lost|finished|closed/i);
+      assert.match(String(shortlist.body!.detail), /lost|finished/i);
 
       const demo = await call(
         t,

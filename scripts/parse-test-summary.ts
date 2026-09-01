@@ -156,6 +156,21 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * IT MOVED 829 → 838 / 83 → 84 UNDER RT4-C1, the seven-outcome correction, which added one
+ * suite — `tests/sales-showroom-ops.test.ts`, holding the three probes for the day a
+ * showroom actually has: bookings that move, are called off or are missed and CANNOT then
+ * be kept; a car that goes out and comes back returned, cancelled or as an exception, with
+ * all five facts on the record; and the manager's board proved to be ONE reconciled view by
+ * checking its counts against the lists they summarise. The floor battery grew by four:
+ * concurrent receipt of one handoff converging on one opportunity, concurrent check-ins
+ * with DIFFERENT request keys converging on one visit, the desking fact raised exactly once
+ * under a concurrent move, and the four backstop keys refused with every service stepped
+ * round. The journey battery grew by one — the walk-in that resolves to the canonical
+ * customer rather than a second record — and its money scan now walks the board at every
+ * depth rather than grepping the payload, because the board is REQUIRED to name revenue,
+ * gross and commission in order to say they do not exist. Measured by the full local run
+ * before being written here.
+ *
  * It moved 807 → 829 / 79 → 83 under RELEASE TRAIN 4 (FBL-100, Sales Pipeline and Showroom
  * Management), which added twenty-two tests across four suites: two in
  * `tests/sales-journey.test.ts` (the whole appointment-to-disposition journey through the
@@ -268,8 +283,8 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 829;
-export const MINIMUM_SUITES = 83;
+export const MINIMUM_TESTS = 838;
+export const MINIMUM_SUITES = 84;
 
 /**
  * The order's own floor.

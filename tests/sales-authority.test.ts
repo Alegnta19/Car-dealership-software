@@ -92,6 +92,7 @@ describe(
       rooftopId: string;
       manager: { userLinkId: string; token: string };
       seller: { userLinkId: string; token: string };
+      otherSeller: { userLinkId: string; token: string };
     }
 
     interface Dealership {
@@ -134,10 +135,16 @@ describe(
           roles: [ROLES.SALESPERSON],
           scope: { level: 'rooftop', id: rooftop.rooftopId },
         });
+        const otherSeller = await seedActor(env.issuer, {
+          tenantId,
+          roles: [ROLES.SALESPERSON],
+          scope: { level: 'rooftop', id: rooftop.rooftopId },
+        });
         rooftops.push({
           rooftopId: rooftop.rooftopId,
           manager: { userLinkId: manager.userLinkId, token: manager.token },
           seller: { userLinkId: seller.userLinkId, token: seller.token },
+          otherSeller: { userLinkId: otherSeller.userLinkId, token: otherSeller.token },
         });
       }
       const principal = await seedActor(env.issuer, {
@@ -302,10 +309,22 @@ describe(
       const stolenDrive = await call(
         t,
         'POST',
-        `/api/sales/opportunities/${mine.opportunityId}/demonstrations/${theirDemonstrationId}/end`,
-        { expected_version: 1, state: 'completed', outcome: 'interested' },
+        `/api/sales/opportunities/${mine.opportunityId}/demonstrations/${theirDemonstrationId}/state`,
+        { expected_version: 1, to_state: 'returned', outcome: 'interested' },
       );
       assert.equal(stolenDrive.status, 404, JSON.stringify(stolenDrive.body));
+
+      // AND THE ROUTE ITSELF IS REAL, so the 404 above is the parent check
+      // refusing rather than a mistyped URL falling through to route-not-found.
+      // A probe that passes because it asked for something that does not exist
+      // proves nothing, and this is the assertion that keeps it honest.
+      const throughTheRightParent = await call(
+        t,
+        'POST',
+        `/api/sales/opportunities/${theirs.opportunityId}/demonstrations/${theirDemonstrationId}/state`,
+        { expected_version: 1, to_state: 'in_progress' },
+      );
+      assert.equal(throughTheRightParent.status, 200, JSON.stringify(throughTheRightParent.body));
 
       // …and the rows are untouched: the refusal was a refusal, not a partial.
       const stillOut = await query(`SELECT state FROM demonstrations WHERE demonstration_id = $1`, [
@@ -593,13 +612,18 @@ describe(
       }
 
       // …and an assignment reason, which is a manager's command.
+      //
+      // AIMED AT SOMEBODY WHO DOES NOT ALREADY OWN IT. Receipt establishes the
+      // owner now, and assigning it to whoever already has it answers
+      // `already_assigned` BEFORE the vocabulary is read — which is right, and
+      // which would make this probe pass for the wrong reason.
       const badReason = await call(
         d.alpha.manager.token,
         'POST',
         `/api/sales/opportunities/${opp.opportunityId}/assignment`,
         {
           expected_version: opp.version,
-          to_user_link_id: d.alpha.seller.userLinkId,
+          to_user_link_id: d.alpha.otherSeller.userLinkId,
           reason: 'felt like it',
         },
       );
@@ -670,7 +694,9 @@ describe(
         `SELECT table_name, column_name FROM information_schema.columns
           WHERE table_schema = 'public'
             AND table_name IN ('opportunities', 'negotiation_rounds', 'opportunity_vehicles',
-                               'demonstrations', 'showroom_visits', 'manager_turnovers')
+                               'demonstrations', 'showroom_visits', 'manager_turnovers',
+                               'desking_handoffs', 'opportunity_vehicle_events',
+                               'demonstration_events')
             AND (column_name LIKE '%cents%' OR column_name LIKE '%price%'
                  OR column_name LIKE '%amount%' OR column_name LIKE '%gross%'
                  OR column_name LIKE '%commission%' OR column_name LIKE '%revenue%')`,
@@ -684,14 +710,28 @@ describe(
       // ── and the constraints are really there, under those names ───────────
       const named = await query(
         `SELECT conname FROM pg_constraint
-          WHERE conname IN ('ck_opportunity_pre_deal', 'ck_negotiation_pre_desking')
+          WHERE conname IN ('ck_opportunity_pre_deal', 'ck_negotiation_pre_desking',
+                            'ck_desking_pre_fbl120')
           ORDER BY conname`,
       );
       assert.deepEqual(
         (named.rows as Array<{ conname: string }>).map((r) => r.conname),
-        ['ck_negotiation_pre_desking', 'ck_opportunity_pre_deal'],
+        ['ck_desking_pre_fbl120', 'ck_negotiation_pre_desking', 'ck_opportunity_pre_deal'],
         'the prohibition is structural, not a comment',
       );
+
+      // ── AND THERE IS NO `won` STAGE OR `sold` DISPOSITION LEFT TO REACH ────
+      //
+      // The order removed the endpoint; this checks the DATABASE removed the
+      // vocabulary, so no future caller — a script, a repair, a service written
+      // next year — can record a sale this platform cannot substantiate.
+      const vocab = await query(
+        `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
+          WHERE conrelid = 'opportunities'::regclass AND contype = 'c'`,
+      );
+      const defs = (vocab.rows as Array<{ def: string }>).map((r) => r.def).join(' ');
+      assert.doesNotMatch(defs, /'won'/, 'a `won` stage is still reachable');
+      assert.doesNotMatch(defs, /'sold'/, 'a `sold` disposition is still reachable');
 
       // ── RT3's own prohibition still holds, untouched by this train ────────
       const rt3 = await query(

@@ -6,20 +6,28 @@
  * it, so this file registers its screens by extending the same ROUTES map the
  * shell renders from — no bundler, no module system, no framework.
  *
+ * NOBODY TYPES AN IDENTIFIER. Every id this surface needs — a handoff, a
+ * customer, an appointment, a car, a colleague — is CHOSEN from a list the
+ * server filtered to what the person's bindings reach. A form asking for a UUID
+ * is not an interface: it is a text box somebody has to copy a database key
+ * into, and it is a way to probe for records that the refusals then have to be
+ * careful not to confirm. `picker()` below is the one primitive that replaces
+ * all of them.
+ *
  * WHAT THE SCREENS ARE FOR, in the order a showroom actually works:
  *
- *   * SHOWROOM — the up-list and who is on the floor, beside the customers
- *     standing in the building right now. This is the screen a manager keeps
- *     open all Saturday, so the only red on it is somebody waiting to be
- *     greeted.
- *   * PIPELINE — every live opportunity, its stage, its owner and its age.
+ *   * SHOWROOM — the up-list, who is expected, who is in the building and how
+ *     long they have been waiting. The screen a manager keeps open all Saturday,
+ *     so the only red on it is somebody who needs seeing to.
+ *   * DEALS — every live opportunity, its stage, its owner, its age and what is
+ *     owed on it next.
  *   * OPPORTUNITY — one customer's whole visit on one timeline: the cars they
- *     looked at, what they drove, what was said, and who else got involved.
+ *     looked at, what they drove, what was said, who else got involved, and the
+ *     one button that hands a committed customer to appraisal and desking.
  *
- * WHAT IS DELIBERATELY NOT HERE: a price, a payment, a gross, a commission.
- * The desking screen is FBL-120 and the deal does not exist yet — so rather
- * than show a zero somebody would read as "we made nothing", these screens say
- * the number is not available and name the release that will bring it.
+ * WHAT IS DELIBERATELY NOT HERE: a price, a payment, a gross, a commission, and
+ * any way to record a sale. This train cannot sell anything — the furthest it
+ * goes is saying a customer is ready to be desked, which is FBL-120's work.
  */
 'use strict';
 
@@ -47,20 +55,6 @@ function salesSince(iso) {
   return Math.round(minutes / 1440) + 'd';
 }
 
-/**
- * A member of staff, as the platform can currently name one.
- *
- * `user_links` carries a provider identity rather than a display name, so there
- * is no real name to print yet. A full UUID in a table column is unreadable, so
- * this prints the short form somebody can match against the audit trail and
- * says plainly when there is nobody — rather than an empty cell, which reads as
- * a rendering fault.
- */
-function salesStaff(userLinkId) {
-  if (!userLinkId) return 'unassigned';
-  return 'staff ' + String(userLinkId).slice(0, 8);
-}
-
 /** "3m ago", but "just now" rather than the nonsense "just now ago". */
 function salesAgo(iso) {
   const since = salesSince(iso);
@@ -75,27 +69,49 @@ function salesAge(hours) {
   return Math.round(hours / 24) + 'd';
 }
 
+/**
+ * A member of staff, as the platform can currently name one.
+ *
+ * `user_links` carries a provider identity rather than a display name, so there
+ * is no real name to print yet. A full UUID in a table column is unreadable, so
+ * this prints the short form somebody can match against the audit trail and
+ * says plainly when there is nobody — rather than an empty cell, which reads as
+ * a rendering fault.
+ */
+function salesStaff(userLinkId) {
+  if (!userLinkId) return 'unassigned';
+  return 'staff ' + String(userLinkId).slice(0, 8);
+}
+
 const STAGE_LABELS = {
   received: 'Received',
   in_showroom: 'In showroom',
   demonstrated: 'Demonstrated',
   negotiating: 'Negotiating',
-  won: 'Sold',
+  follow_up: 'Following up',
+  ready_for_desking: 'Ready to desk',
   lost: 'Lost',
 };
 
 /** Where an opportunity may go from where it is. Mirrors the service exactly. */
 const STAGE_NEXT = {
-  received: ['in_showroom', 'demonstrated', 'negotiating', 'won', 'lost'],
-  in_showroom: ['demonstrated', 'negotiating', 'won', 'lost'],
-  demonstrated: ['negotiating', 'in_showroom', 'won', 'lost'],
-  negotiating: ['demonstrated', 'won', 'lost'],
-  won: [],
+  received: ['in_showroom', 'demonstrated', 'negotiating', 'follow_up', 'lost'],
+  in_showroom: ['demonstrated', 'negotiating', 'follow_up', 'ready_for_desking', 'lost'],
+  demonstrated: ['negotiating', 'in_showroom', 'follow_up', 'ready_for_desking', 'lost'],
+  negotiating: ['demonstrated', 'follow_up', 'ready_for_desking', 'lost'],
+  follow_up: ['in_showroom', 'demonstrated', 'negotiating', 'ready_for_desking', 'lost'],
+  ready_for_desking: [],
   lost: [],
 };
 
-const DISPOSITIONS = [
-  { value: 'sold', label: 'Sold' },
+const TERMINAL_STAGES = ['ready_for_desking', 'lost'];
+
+/**
+ * Why a deal ended. There is NO `sold`, because this train cannot sell: the
+ * positive outcome is a customer committing, whose only effect is to hand them
+ * to appraisal and desking.
+ */
+const LOST_REASONS = [
   { value: 'lost_to_competitor', label: 'Bought elsewhere' },
   { value: 'lost_no_decision', label: 'Did not decide' },
   { value: 'lost_credit', label: 'Could not finance' },
@@ -133,7 +149,7 @@ function visitBadge(state) {
 function notYetAvailable(what, release) {
   return el('div', { class: 'panel muted' }, [
     el('strong', { text: what + ': not available yet. ' }),
-    'These screens carry no figure because the deal is not desked until ' +
+    'These screens carry no figure because nothing is priced or desked until ' +
       release +
       '. Nothing here is zero — it does not exist.',
   ]);
@@ -163,6 +179,67 @@ function rooftopPicker(onChange) {
   return el('label', { class: 'inline' }, ['Showroom ', select]);
 }
 
+/**
+ * THE PRIMITIVE THAT REPLACES EVERY TEXT BOX FOR AN IDENTIFIER.
+ *
+ * Fetches a list from the server, renders it as rows somebody can read and
+ * click, and hands the caller back the chosen record — never a string the user
+ * typed. `search` makes it a live filter for the long lists (customers,
+ * vehicles); without it the list is short enough to just show.
+ *
+ * It says plainly when there is nothing to choose, because an empty list and a
+ * broken screen look identical otherwise.
+ */
+function picker(box, spec) {
+  const holder = el('div', { class: 'picker' }, [el('div', { class: 'muted', text: 'Loading…' })]);
+  box.appendChild(el('label', null, [spec.label]));
+  if (spec.search) {
+    box.appendChild(
+      el('input', {
+        placeholder: spec.searchPlaceholder || 'Type to search',
+        oninput: function (e) {
+          load(e.target.value.trim());
+        },
+      }),
+    );
+  }
+  box.appendChild(holder);
+
+  async function load(query) {
+    holder.textContent = '';
+    holder.appendChild(el('div', { class: 'muted', text: 'Loading…' }));
+    try {
+      const path =
+        spec.path +
+        (query ? (spec.path.indexOf('?') >= 0 ? '&' : '?') + 'q=' + encodeURIComponent(query) : '');
+      const data = await api('GET', path);
+      const rows = data[spec.collection] || [];
+      holder.textContent = '';
+      if (rows.length === 0) {
+        holder.appendChild(el('div', { class: 'muted', text: spec.empty }));
+        return;
+      }
+      rows.forEach(function (row) {
+        holder.appendChild(
+          el('button', {
+            class: 'ghost small pick',
+            text: spec.render(row),
+            onclick: function () {
+              spec.onPick(row);
+            },
+          }),
+        );
+      });
+    } catch (err) {
+      holder.textContent = '';
+      holder.appendChild(el('div', { class: 'error-banner', text: err.message }));
+    }
+  }
+
+  void load('');
+  return holder;
+}
+
 // ── showroom ────────────────────────────────────────────────────────────────
 
 async function renderShowroom(view) {
@@ -180,39 +257,106 @@ async function renderShowroom(view) {
 
   const floor = await api('GET', '/api/sales/floor?location_id=' + salesState.rooftopId);
   const visits = await api('GET', '/api/sales/visits?location_id=' + salesState.rooftopId);
+  const expected = await api(
+    'GET',
+    '/api/sales/find/appointments?location_id=' + salesState.rooftopId,
+  );
 
-  const picker = rooftopPicker(renderApp);
-  if (picker) view.appendChild(el('div', { class: 'toolbar' }, [picker]));
+  const rooftopChooser = rooftopPicker(renderApp);
+  if (rooftopChooser) view.appendChild(el('div', { class: 'toolbar' }, [rooftopChooser]));
 
   view.appendChild(
     el('div', { class: 'cards' }, [
       statCard(board.showroom.waiting, 'Waiting to be greeted'),
       statCard(board.showroom.withSalesperson, 'With a salesperson'),
       statCard(board.floor.available, 'On the floor, free'),
-      statCard(board.activity.demonstrationsInProgress, 'Cars out on drives'),
+      statCard(board.demonstrations.activeNow, 'Cars out on drives'),
+    ]),
+  );
+
+  // ── what a manager has to act on ──────────────────────────────────────────
+  if ((board.exceptions || []).length > 0) {
+    view.appendChild(
+      el('div', { class: 'panel' }, [
+        el('h2', { text: 'Needs attention' }),
+        el(
+          'ul',
+          { class: 'exceptions' },
+          (board.exceptions || []).map(function (x) {
+            return el('li', { class: 'urgent' }, [
+              el('strong', { text: String(x.kind).replace(/_/g, ' ') + ': ' }),
+              x.detail + ' — ' + salesAgo(x.since),
+              x.opportunityId
+                ? el('a', {
+                    class: 'link small',
+                    href: '#/opportunity/' + x.opportunityId,
+                    text: 'Open deal',
+                  })
+                : null,
+            ]);
+          }),
+        ),
+      ]),
+    );
+  }
+
+  // ── who is expected ───────────────────────────────────────────────────────
+  view.appendChild(
+    el('div', { class: 'panel' }, [
+      el('div', { class: 'panel-head' }, [
+        el('h2', { text: 'Expected today' }),
+        el('button', {
+          class: 'ghost',
+          text: 'Somebody walked in',
+          onclick: function () {
+            openWalkIn();
+          },
+        }),
+      ]),
+      (expected.appointments || []).length === 0
+        ? el('p', { class: 'muted', text: 'Nobody is booked in around now.' })
+        : el('table', { class: 'grid' }, [
+            el('thead', null, [
+              el('tr', null, [
+                el('th', { text: 'Customer' }),
+                el('th', { text: 'Due' }),
+                el('th', { text: 'For' }),
+                el('th', { text: '' }),
+              ]),
+            ]),
+            el(
+              'tbody',
+              null,
+              (expected.appointments || []).map(function (a) {
+                return el('tr', null, [
+                  el('td', { text: a.customerName }),
+                  el('td', { text: salesWhen(a.startsAt) }),
+                  el('td', { text: String(a.purpose).replace(/_/g, ' ') }),
+                  el('td', null, [
+                    el('button', {
+                      class: 'small',
+                      text: 'They are here',
+                      onclick: function () {
+                        checkInExpected(a);
+                      },
+                    }),
+                  ]),
+                ]);
+              }),
+            ),
+          ]),
     ]),
   );
 
   // ── who is in the building ────────────────────────────────────────────────
-  const waiting = (visits.visits || []).filter(function (v) {
-    return v.state === 'arrived';
-  });
-  const withUs = (visits.visits || []).filter(function (v) {
-    return v.state !== 'arrived' && v.state !== 'departed';
+  const here = (visits.visits || []).filter(function (v) {
+    return v.state !== 'departed';
   });
 
   view.appendChild(
     el('div', { class: 'panel' }, [
-      el('div', { class: 'panel-head' }, [
-        el('h2', { text: 'In the showroom' }),
-        el('button', {
-          text: 'Record an arrival',
-          onclick: function () {
-            openArrival();
-          },
-        }),
-      ]),
-      waiting.length + withUs.length === 0
+      el('h2', { text: 'In the showroom' }),
+      here.length === 0
         ? el('p', { class: 'muted', text: 'Nobody is in the building right now.' })
         : el('table', { class: 'grid' }, [
             el('thead', null, [
@@ -227,12 +371,14 @@ async function renderShowroom(view) {
             el(
               'tbody',
               null,
-              waiting.concat(withUs).map(function (v) {
+              here.map(function (v) {
                 return el('tr', { class: v.state === 'arrived' ? 'urgent' : '' }, [
                   el('td', { text: v.customerName }),
                   el('td', { text: salesSince(v.arrivedAt) }),
                   el('td', null, [visitBadge(v.state)]),
-                  el('td', { text: salesStaff(v.greetedByUserLinkId) }),
+                  el('td', {
+                    text: salesStaff(v.acceptedByUserLinkId || v.greetedByUserLinkId),
+                  }),
                   el('td', null, [
                     v.state === 'arrived'
                       ? el('button', {
@@ -242,13 +388,23 @@ async function renderShowroom(view) {
                             openGreet(v);
                           },
                         })
-                      : el('button', {
-                          class: 'ghost small',
-                          text: 'They have left',
+                      : null,
+                    v.state === 'greeted'
+                      ? el('button', {
+                          class: 'small',
+                          text: 'I will take them',
                           onclick: function () {
-                            openDepart(v);
+                            acceptVisit(v);
                           },
-                        }),
+                        })
+                      : null,
+                    el('button', {
+                      class: 'ghost small',
+                      text: 'They have left',
+                      onclick: function () {
+                        openDepart(v);
+                      },
+                    }),
                     v.opportunityId
                       ? el('a', {
                           class: 'link small',
@@ -323,59 +479,131 @@ async function renderShowroom(view) {
   );
 }
 
-function openArrival() {
-  modal('Record an arrival', function (box, close) {
-    const form = { party_id: '', opportunity_id: '' };
+/** They turned up for their booking: one click, no identifiers. */
+async function checkInExpected(appointment) {
+  try {
+    const res = await api(
+      'POST',
+      '/api/sales/visits',
+      {
+        location_id: salesState.rooftopId,
+        party_id: appointment.partyId,
+        appointment_id: appointment.appointmentId,
+      },
+      { idempotent: true },
+    );
+    toast(res.appointmentKept ? 'Checked in, booking kept' : 'Checked in');
+    renderApp();
+  } catch (err) {
+    reportError(err);
+  }
+}
+
+/**
+ * SOMEBODY WALKED IN, and the customer is FOUND before they are created.
+ *
+ * Searching first is not politeness, it is the canonical path: a walk-in that
+ * went straight to a create form would open a second record on half the people
+ * who have ever bought here.
+ */
+function openWalkIn(preselected) {
+  modal('Somebody walked in', function (box, close) {
+    const form = { party_id: preselected || null, customer: null };
+
+    async function open() {
+      try {
+        const payload = { location_id: salesState.rooftopId };
+        if (form.party_id) payload.party_id = form.party_id;
+        else payload.customer = form.customer;
+        const res = await api('POST', '/api/sales/walk-ins', payload, { idempotent: true });
+        close();
+        location.hash = '#/opportunity/' + res.opportunity.opportunityId;
+        renderApp();
+      } catch (err) {
+        if (err.status === 409 && err.body && err.body.candidates) {
+          // NOT AN ERROR TO SWALLOW. The dealership already knows somebody with
+          // these details; the salesperson picks the real person rather than
+          // creating a second file on them.
+          box.textContent = '';
+          box.appendChild(el('h3', { text: 'We already know somebody like this' }));
+          box.appendChild(
+            el('p', {
+              class: 'muted',
+              text: 'Pick the person if this is them, so the dealership keeps one record.',
+            }),
+          );
+          err.body.candidates.forEach(function (c) {
+            box.appendChild(
+              el('button', {
+                class: 'ghost small pick',
+                text: c.displayName + ' (matched on ' + c.matchedOn + ')',
+                onclick: function () {
+                  form.party_id = c.partyId;
+                  form.customer = null;
+                  void open();
+                },
+              }),
+            );
+          });
+          box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
+          return;
+        }
+        reportError(err);
+      }
+    }
+
     box.appendChild(
       el('p', {
         class: 'muted',
-        text:
-          'The customer must already exist — sales does not invent a second ' +
-          'record for somebody the dealership already knows.',
+        text: 'Search for them first — most walk-ins are people we already have.',
       }),
     );
-    box.appendChild(
-      el('label', null, [
-        'Customer ID',
-        el('input', {
-          oninput: function (e) {
-            form.party_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
-    box.appendChild(
-      el('label', null, [
-        'Opportunity ID (optional)',
-        el('input', {
-          oninput: function (e) {
-            form.opportunity_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
+    picker(box, {
+      label: 'Find the customer',
+      path: '/api/sales/find/customers',
+      collection: 'customers',
+      search: true,
+      searchPlaceholder: 'Name, email or phone',
+      empty: 'Nobody found. Add them below if they are new to us.',
+      render: function (c) {
+        return (
+          c.displayName + (c.hasEmail ? ' · has email' : '') + (c.hasPhone ? ' · has phone' : '')
+        );
+      },
+      onPick: function (c) {
+        form.party_id = c.partyId;
+        form.customer = null;
+        void open();
+      },
+    });
+
+    box.appendChild(el('h3', { text: 'Or add somebody new' }));
+    const fresh = { given_name: '', family_name: '', email: '', phone: '' };
+    [
+      ['First name', 'given_name'],
+      ['Last name', 'family_name'],
+      ['Email', 'email'],
+      ['Phone', 'phone'],
+    ].forEach(function (pair) {
+      box.appendChild(
+        el('label', null, [
+          pair[0],
+          el('input', {
+            oninput: function (e) {
+              fresh[pair[1]] = e.target.value.trim();
+            },
+          }),
+        ]),
+      );
+    });
     box.appendChild(
       el('div', { class: 'row' }, [
         el('button', {
-          text: 'Record',
-          onclick: async function () {
-            try {
-              await api(
-                'POST',
-                '/api/sales/visits',
-                {
-                  location_id: salesState.rooftopId,
-                  party_id: form.party_id,
-                  opportunity_id: form.opportunity_id || null,
-                },
-                { idempotent: true },
-              );
-              close();
-              toast('Arrival recorded');
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
+          text: 'Add and open a deal',
+          onclick: function () {
+            form.party_id = null;
+            form.customer = fresh;
+            void open();
           },
         }),
         el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
@@ -386,48 +614,67 @@ function openArrival() {
 
 function openGreet(visit) {
   modal('Greet ' + (visit.customerName || 'this customer'), function (box, close) {
-    const form = { greeted_by_user_link_id: '' };
+    async function greet(userLinkId) {
+      try {
+        const res = await api('POST', '/api/sales/visits/' + visit.visitId + '/greet', {
+          expected_version: visit.authorizationVersion,
+          greeted_by_user_link_id: userLinkId || null,
+        });
+        close();
+        toast(res.fromRotation ? 'Next up took the customer' : 'Assigned by name');
+        renderApp();
+      } catch (err) {
+        reportError(err);
+      }
+    }
+
     box.appendChild(
       el('p', {
         class: 'muted',
         text:
-          'Leave the box empty to take the next turn off the floor. Name ' +
-          'somebody only when the customer asked for them — it still costs ' +
-          'that person their turn.',
+          'Take the next turn off the floor, or name somebody the customer asked ' +
+          'for — it costs them their turn either way.',
       }),
-    );
-    box.appendChild(
-      el('label', null, [
-        'Salesperson (optional)',
-        el('input', {
-          oninput: function (e) {
-            form.greeted_by_user_link_id = e.target.value.trim();
-          },
-        }),
-      ]),
     );
     box.appendChild(
       el('div', { class: 'row' }, [
         el('button', {
-          text: 'Greet',
-          onclick: async function () {
-            try {
-              const res = await api('POST', '/api/sales/visits/' + visit.visitId + '/greet', {
-                expected_version: visit.authorizationVersion,
-                greeted_by_user_link_id: form.greeted_by_user_link_id || null,
-              });
-              close();
-              toast(res.fromRotation ? 'Next up took the customer' : 'Assigned by name');
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
+          text: 'Next up',
+          onclick: function () {
+            void greet(null);
           },
         }),
         el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
       ]),
     );
+    picker(box, {
+      label: 'Or somebody they asked for',
+      path: '/api/sales/find/staff?location_id=' + salesState.rooftopId,
+      collection: 'staff',
+      empty: 'Nobody is on this floor.',
+      render: function (s) {
+        return (
+          salesStaff(s.userLinkId) +
+          (s.onFloor ? ' · ' + String(s.floorStatus).replace(/_/g, ' ') : ' · not on the floor')
+        );
+      },
+      onPick: function (s) {
+        void greet(s.userLinkId);
+      },
+    });
   });
+}
+
+async function acceptVisit(visit) {
+  try {
+    await api('POST', '/api/sales/visits/' + visit.visitId + '/acceptance', {
+      expected_version: visit.authorizationVersion,
+    });
+    toast('They are yours');
+    renderApp();
+  } catch (err) {
+    reportError(err);
+  }
 }
 
 function openDepart(visit) {
@@ -470,40 +717,37 @@ function openDepart(visit) {
 
 function openJoinFloor() {
   modal('Put somebody on the floor', function (box, close) {
-    const form = { user_link_id: '' };
-    box.appendChild(
-      el('label', null, [
-        'Salesperson ID',
-        el('input', {
-          oninput: function (e) {
-            form.user_link_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
-    box.appendChild(
-      el('div', { class: 'row' }, [
-        el('button', {
-          text: 'Add to the up-list',
-          onclick: async function () {
-            try {
-              await api(
-                'POST',
-                '/api/sales/floor',
-                { location_id: salesState.rooftopId, user_link_id: form.user_link_id },
-                { idempotent: true },
-              );
-              close();
-              toast('On the floor');
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
-          },
-        }),
-        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
-      ]),
-    );
+    picker(box, {
+      label: 'Who is on',
+      path: '/api/sales/find/staff?location_id=' + salesState.rooftopId,
+      collection: 'staff',
+      empty: 'Nobody at this showroom holds a sales role.',
+      render: function (s) {
+        return (
+          salesStaff(s.userLinkId) +
+          (s.onFloor ? ' · already on' : '') +
+          ' · ' +
+          s.openOpportunities +
+          ' open'
+        );
+      },
+      onPick: async function (s) {
+        try {
+          await api(
+            'POST',
+            '/api/sales/floor',
+            { location_id: salesState.rooftopId, user_link_id: s.userLinkId },
+            { idempotent: true },
+          );
+          close();
+          toast('On the floor');
+          renderApp();
+        } catch (err) {
+          reportError(err);
+        }
+      },
+    });
+    box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
   });
 }
 
@@ -520,7 +764,7 @@ async function releaseSalesperson(userLinkId) {
   }
 }
 
-// ── pipeline ────────────────────────────────────────────────────────────────
+// ── the pipeline ────────────────────────────────────────────────────────────
 
 async function renderSalesPipeline(view) {
   const board = await api('GET', '/api/sales/board');
@@ -530,12 +774,14 @@ async function renderSalesPipeline(view) {
     el('div', { class: 'cards' }, [
       statCard(board.pipeline.open, 'Open deals'),
       statCard(board.pipeline.negotiating, 'Negotiating'),
-      statCard(board.activity.demonstrationsToday, 'Drives today'),
-      statCard(board.activity.turnovers, 'Manager turnovers'),
+      statCard(board.nextActions.overdue, 'Overdue actions'),
+      statCard(board.pipeline.readyForDesking, 'Waiting on the desk'),
     ]),
   );
 
-  view.appendChild(notYetAvailable('Gross, commission and closing ratio', 'FBL-120 (Desking)'));
+  view.appendChild(
+    notYetAvailable('Gross, commission, ROI and closing ratio', 'FBL-120 (Appraisal and desking)'),
+  );
 
   view.appendChild(
     el('div', { class: 'panel' }, [
@@ -562,6 +808,7 @@ async function renderSalesPipeline(view) {
                 el('th', { text: 'Owner' }),
                 el('th', { text: 'Showroom' }),
                 el('th', { text: 'Age' }),
+                el('th', { text: 'Next' }),
                 el('th', { text: '' }),
               ]),
             ]),
@@ -573,8 +820,15 @@ async function renderSalesPipeline(view) {
                   el('td', { text: o.customerName }),
                   el('td', null, [badge(o.stage)]),
                   el('td', { text: salesStaff(o.ownerUserLinkId) }),
-                  el('td', { text: o.rooftopName || '—' }),
+                  el('td', { text: o.rooftopName }),
                   el('td', { text: salesAge(o.ageHours) }),
+                  el('td', {
+                    class:
+                      o.nextActionDueAt && new Date(o.nextActionDueAt) < new Date() ? 'urgent' : '',
+                    text: o.nextActionSubject
+                      ? o.nextActionSubject + ' (' + salesWhen(o.nextActionDueAt) + ')'
+                      : '—',
+                  }),
                   el('td', null, [
                     el('a', {
                       class: 'link small',
@@ -592,48 +846,47 @@ async function renderSalesPipeline(view) {
 
 function openReceiveHandoff() {
   modal('Receive a handoff', function (box, close) {
-    const form = { handoff_id: '' };
     box.appendChild(
       el('p', {
         class: 'muted',
         text:
-          'The handoff carries the customer and the showroom. Sales does not ' +
-          'get to choose either, which is why there is one box here and not four.',
+          'The handoff carries the customer, the showroom and the car they asked ' +
+          'about. Sales does not get to choose any of them, which is why there is ' +
+          'nothing to fill in here.',
       }),
     );
-    box.appendChild(
-      el('label', null, [
-        'Handoff ID',
-        el('input', {
-          oninput: function (e) {
-            form.handoff_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
-    box.appendChild(
-      el('div', { class: 'row' }, [
-        el('button', {
-          text: 'Receive',
-          onclick: async function () {
-            try {
-              const res = await api(
-                'POST',
-                '/api/sales/opportunities',
-                { handoff_id: form.handoff_id },
-                { idempotent: true },
-              );
-              close();
-              location.hash = '#/opportunity/' + res.opportunity.opportunityId;
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
-          },
-        }),
-        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
-      ]),
-    );
+    picker(box, {
+      label: 'Waiting to be received',
+      path: '/api/sales/find/handoffs',
+      collection: 'handoffs',
+      empty: 'Nothing waiting. The BDC hands leads over when they are qualified.',
+      render: function (h) {
+        return (
+          h.customerName +
+          ' · ' +
+          h.rooftopName +
+          ' · handed over ' +
+          salesAgo(h.occurredAt) +
+          (h.appointmentAt ? ' · booked ' + salesWhen(h.appointmentAt) : '')
+        );
+      },
+      onPick: async function (h) {
+        try {
+          const res = await api(
+            'POST',
+            '/api/sales/opportunities',
+            { handoff_id: h.handoffId },
+            { idempotent: true },
+          );
+          close();
+          location.hash = '#/opportunity/' + res.opportunity.opportunityId;
+          renderApp();
+        } catch (err) {
+          reportError(err);
+        }
+      },
+    });
+    box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
   });
 }
 
@@ -647,6 +900,7 @@ async function renderOpportunity(view) {
   }
   const data = await api('GET', '/api/sales/opportunities/' + opportunityId);
   const o = data.opportunity;
+  const finished = TERMINAL_STAGES.indexOf(o.stage) >= 0;
 
   view.appendChild(
     el('div', { class: 'panel' }, [
@@ -667,7 +921,12 @@ async function renderOpportunity(view) {
           ]),
           el('tr', null, [
             el('th', { text: 'Came from' }),
-            el('td', { text: 'BDC handoff ' + (o.handoffId || '').slice(0, 8) }),
+            el('td', {
+              text:
+                o.origin === 'walk_in'
+                  ? 'Walked in'
+                  : 'BDC handoff ' + String(o.handoffId || '').slice(0, 8),
+            }),
           ]),
           el('tr', null, [
             el('th', { text: 'Opened' }),
@@ -676,14 +935,22 @@ async function renderOpportunity(view) {
           o.disposition
             ? el('tr', null, [
                 el('th', { text: 'Outcome' }),
-                el('td', { text: o.disposition.replace(/_/g, ' ') }),
+                el('td', { text: String(o.disposition).replace(/_/g, ' ') }),
               ])
             : null,
         ]),
       ]),
-      o.stage === 'won' || o.stage === 'lost'
+      finished
         ? null
         : el('div', { class: 'row' }, [
+            o.ownerUserLinkId
+              ? null
+              : el('button', {
+                  text: 'I will take this one',
+                  onclick: function () {
+                    acceptOpportunity(o);
+                  },
+                }),
             el('button', {
               class: 'ghost small',
               text: 'Give this deal to somebody',
@@ -692,27 +959,95 @@ async function renderOpportunity(view) {
               },
             }),
           ]),
-      el(
-        'div',
-        { class: 'row' },
-        (STAGE_NEXT[o.stage] || []).map(function (stage) {
-          return el('button', {
-            class: stage === 'won' || stage === 'lost' ? '' : 'ghost',
-            text: STAGE_LABELS[stage] || stage,
-            onclick: function () {
-              openStageMove(o, stage);
-            },
-          });
-        }),
-      ),
+      finished
+        ? null
+        : el(
+            'div',
+            { class: 'row' },
+            (STAGE_NEXT[o.stage] || []).map(function (stage) {
+              return el('button', {
+                class: TERMINAL_STAGES.indexOf(stage) >= 0 ? '' : 'ghost',
+                text: STAGE_LABELS[stage] || stage,
+                onclick: function () {
+                  openStageMove(o, stage);
+                },
+              });
+            }),
+          ),
     ]),
   );
 
-  if (o.stage === 'won' || o.stage === 'lost') {
+  if (o.stage === 'ready_for_desking') {
     view.appendChild(
       el('div', { class: 'panel muted' }, [
-        'This deal is finished. It stays readable, and nothing further can be ' +
-          'written against it.',
+        el('strong', { text: 'Handed to appraisal and desking. ' }),
+        'This customer committed to buying, and that fact has been passed on exactly ' +
+          'once. No price, deal or delivery exists yet — those are FBL-120 and later, ' +
+          'and this deal stays readable while they are built.',
+      ]),
+    );
+  } else if (o.stage === 'lost') {
+    view.appendChild(
+      el('div', { class: 'panel muted' }, [
+        'This deal is closed. It stays readable, and nothing further can be written ' +
+          'against it.',
+      ]),
+    );
+  }
+
+  // ── what is owed next ─────────────────────────────────────────────────────
+  if ((data.openActions || []).length > 0 || !finished) {
+    view.appendChild(
+      el('div', { class: 'panel' }, [
+        el('div', { class: 'panel-head' }, [
+          el('h2', { text: 'Owed next' }),
+          finished
+            ? null
+            : el('button', {
+                class: 'ghost',
+                text: 'Add a task',
+                onclick: function () {
+                  openTask(o);
+                },
+              }),
+        ]),
+        (data.openActions || []).length === 0
+          ? el('p', { class: 'muted', text: 'Nothing owed on this deal.' })
+          : el('table', { class: 'grid' }, [
+              el('thead', null, [
+                el('tr', null, [
+                  el('th', { text: 'What' }),
+                  el('th', { text: 'Due' }),
+                  el('th', { text: '' }),
+                ]),
+              ]),
+              el(
+                'tbody',
+                null,
+                (data.openActions || []).map(function (a) {
+                  return el('tr', { class: a.overdue ? 'urgent' : '' }, [
+                    el('td', { text: a.subject }),
+                    el('td', { text: a.dueAt ? salesWhen(a.dueAt) : '—' }),
+                    el('td', null, [
+                      el('button', {
+                        class: 'small',
+                        text: 'Done',
+                        onclick: function () {
+                          closeAction(o, a, 'completed');
+                        },
+                      }),
+                      el('button', {
+                        class: 'ghost small',
+                        text: 'Call it off',
+                        onclick: function () {
+                          openCancelAction(o, a);
+                        },
+                      }),
+                    ]),
+                  ]);
+                }),
+              ),
+            ]),
       ]),
     );
   }
@@ -722,7 +1057,7 @@ async function renderOpportunity(view) {
     el('div', { class: 'panel' }, [
       el('div', { class: 'panel-head' }, [
         el('h2', { text: 'Cars they are looking at' }),
-        o.stage === 'won' || o.stage === 'lost'
+        finished
           ? null
           : el('button', {
               class: 'ghost',
@@ -748,11 +1083,11 @@ async function renderOpportunity(view) {
               null,
               (data.shortlist || []).map(function (v) {
                 return el('tr', null, [
-                  el('td', { text: v.stockNumber || '—' }),
-                  el('td', { text: v.description || '—' }),
+                  el('td', { text: v.stockNumber }),
+                  el('td', { text: v.description }),
                   el('td', null, [badge(v.status)]),
                   el('td', null, [
-                    o.stage === 'won' || o.stage === 'lost'
+                    finished
                       ? null
                       : el('button', {
                           class: 'ghost small',
@@ -761,7 +1096,7 @@ async function renderOpportunity(view) {
                             openDemonstration(o, v);
                           },
                         }),
-                    o.stage === 'won' || o.stage === 'lost'
+                    finished || v.status === 'selected'
                       ? null
                       : el('button', {
                           class: 'ghost small',
@@ -778,7 +1113,7 @@ async function renderOpportunity(view) {
     ]),
   );
 
-  // ── the car that is out ───────────────────────────────────────────────────
+  // ── the cars that are out ─────────────────────────────────────────────────
   if ((data.outOnDrive || []).length > 0) {
     view.appendChild(
       el('div', { class: 'panel' }, [
@@ -787,7 +1122,8 @@ async function renderOpportunity(view) {
           el('thead', null, [
             el('tr', null, [
               el('th', { text: 'Stock' }),
-              el('th', { text: 'Left at' }),
+              el('th', { text: 'State' }),
+              el('th', { text: 'Since' }),
               el('th', { text: '' }),
             ]),
           ]),
@@ -795,15 +1131,32 @@ async function renderOpportunity(view) {
             'tbody',
             null,
             (data.outOnDrive || []).map(function (drive) {
-              return el('tr', null, [
+              return el('tr', { class: drive.minutesOut > 120 ? 'urgent' : '' }, [
                 el('td', { text: drive.stockNumber }),
-                el('td', { text: salesAgo(drive.startedAt) }),
+                el('td', null, [badge(drive.state)]),
+                el('td', { text: salesAgo(drive.issuedAt) }),
                 el('td', null, [
+                  drive.state === 'issued'
+                    ? el('button', {
+                        class: 'small',
+                        text: 'They have driven off',
+                        onclick: function () {
+                          moveDrive(o, drive, { to_state: 'in_progress' });
+                        },
+                      })
+                    : null,
                   el('button', {
                     class: 'small',
                     text: 'They are back',
                     onclick: function () {
-                      openEndDemonstration(o, drive);
+                      openEndDrive(o, drive);
+                    },
+                  }),
+                  el('button', {
+                    class: 'ghost small',
+                    text: 'Something happened',
+                    onclick: function () {
+                      openDriveException(o, drive);
                     },
                   }),
                 ]),
@@ -820,7 +1173,7 @@ async function renderOpportunity(view) {
     el('div', { class: 'panel' }, [
       el('div', { class: 'panel-head' }, [
         el('h2', { text: 'What has happened' }),
-        o.stage === 'won' || o.stage === 'lost'
+        finished
           ? null
           : el('div', { class: 'row' }, [
               el('button', {
@@ -855,7 +1208,7 @@ async function renderOpportunity(view) {
               return el('li', null, [
                 el('div', { class: 'when', text: salesWhen(entry.at) }),
                 el('div', { class: 'what' }, [
-                  el('strong', { text: entry.kind.replace(/_/g, ' ') + ': ' }),
+                  el('strong', { text: String(entry.kind).replace(/_/g, ' ') + ': ' }),
                   entry.summary || '',
                 ]),
                 el('div', { class: 'who muted', text: entry.detail || '' }),
@@ -866,11 +1219,101 @@ async function renderOpportunity(view) {
   );
 }
 
+async function acceptOpportunity(o) {
+  try {
+    await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/acceptance', {
+      expected_version: o.authorizationVersion,
+    });
+    toast('It is yours');
+    renderApp();
+  } catch (err) {
+    reportError(err);
+  }
+}
+
+function openAssign(o) {
+  modal('Give this deal to somebody', function (box, close) {
+    const form = { reason: 'reassignment', note: '' };
+    box.appendChild(
+      el('label', null, [
+        'Why',
+        el(
+          'select',
+          {
+            onchange: function (e) {
+              form.reason = e.target.value;
+            },
+          },
+          [
+            'reassignment',
+            'manual_assignment',
+            'floor_rotation',
+            'turnover',
+            'manager_override',
+          ].map(function (k) {
+            return el('option', {
+              value: k,
+              text: k.replace(/_/g, ' '),
+              selected: k === 'reassignment' ? 'selected' : null,
+            });
+          }),
+        ),
+      ]),
+    );
+    box.appendChild(
+      el('label', null, [
+        'Note',
+        el('textarea', {
+          rows: '2',
+          oninput: function (e) {
+            form.note = e.target.value;
+          },
+        }),
+      ]),
+    );
+    picker(box, {
+      label: 'Who takes it',
+      path: '/api/sales/find/staff?location_id=' + (salesState.rooftopId || ''),
+      collection: 'staff',
+      empty: 'Nobody at this showroom holds a sales role.',
+      render: function (s) {
+        return salesStaff(s.userLinkId) + ' · ' + s.openOpportunities + ' open';
+      },
+      onPick: async function (s) {
+        try {
+          await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/assignment', {
+            expected_version: o.authorizationVersion,
+            to_user_link_id: s.userLinkId,
+            reason: form.reason,
+            note: form.note || null,
+          });
+          close();
+          toast('Assigned');
+          renderApp();
+        } catch (err) {
+          reportError(err);
+        }
+      },
+    });
+    box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
+  });
+}
+
 function openStageMove(o, stage) {
-  const terminal = stage === 'won' || stage === 'lost';
+  const needsReason = TERMINAL_STAGES.indexOf(stage) >= 0;
+  const positive = stage === 'ready_for_desking';
   modal('Move to ' + (STAGE_LABELS[stage] || stage), function (box, close) {
-    const form = { disposition: stage === 'won' ? 'sold' : '', note: '' };
-    if (terminal) {
+    const form = { disposition: positive ? 'committed_to_purchase' : '', note: '' };
+    if (positive) {
+      box.appendChild(
+        el('p', { class: 'muted' }, [
+          el('strong', { text: 'This hands them to appraisal and desking. ' }),
+          'It records that the customer committed to buying — nothing more. No ' +
+            'price, no deal, no delivery, and no sale: those are FBL-120 and later.',
+        ]),
+      );
+    }
+    if (needsReason && !positive) {
       box.appendChild(
         el('label', null, [
           'Why',
@@ -882,18 +1325,20 @@ function openStageMove(o, stage) {
               },
             },
             [el('option', { value: '', text: 'Choose…' })].concat(
-              DISPOSITIONS.filter(function (d) {
-                return stage === 'won' ? d.value === 'sold' : d.value !== 'sold';
-              }).map(function (d) {
-                return el('option', {
-                  value: d.value,
-                  text: d.label,
-                  selected: form.disposition === d.value ? 'selected' : null,
-                });
+              LOST_REASONS.map(function (d) {
+                return el('option', { value: d.value, text: d.label });
               }),
             ),
           ),
         ]),
+      );
+    }
+    if (stage === 'follow_up') {
+      box.appendChild(
+        el('p', {
+          class: 'muted',
+          text: 'A follow-up needs something owed — add the task that is due first.',
+        }),
       );
     }
     box.appendChild(
@@ -910,7 +1355,7 @@ function openStageMove(o, stage) {
     box.appendChild(
       el('div', { class: 'row' }, [
         el('button', {
-          text: 'Move',
+          text: positive ? 'Hand to desking' : 'Move',
           onclick: async function () {
             try {
               await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/stage', {
@@ -920,7 +1365,7 @@ function openStageMove(o, stage) {
                 note: form.note || null,
               });
               close();
-              toast('Moved to ' + (STAGE_LABELS[stage] || stage));
+              toast(positive ? 'Handed to appraisal and desking' : 'Moved');
               renderApp();
             } catch (err) {
               reportError(err);
@@ -935,45 +1380,40 @@ function openStageMove(o, stage) {
 
 function openShortlist(o) {
   modal('Add a car to the shortlist', function (box, close) {
-    const form = { stock_item_id: '' };
     box.appendChild(
       el('p', {
         class: 'muted',
-        text: 'The car has to be on this showroom’s lot and still in stock.',
+        text: 'Only cars on this showroom’s lot are listed.',
       }),
     );
-    box.appendChild(
-      el('label', null, [
-        'Stock item ID',
-        el('input', {
-          oninput: function (e) {
-            form.stock_item_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
-    box.appendChild(
-      el('div', { class: 'row' }, [
-        el('button', {
-          text: 'Add',
-          onclick: async function () {
-            try {
-              await api(
-                'POST',
-                '/api/sales/opportunities/' + o.opportunityId + '/vehicles',
-                { stock_item_id: form.stock_item_id },
-                { idempotent: true },
-              );
-              close();
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
-          },
-        }),
-        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
-      ]),
-    );
+    picker(box, {
+      label: 'Find a car',
+      path: '/api/sales/find/vehicles',
+      collection: 'vehicles',
+      search: true,
+      searchPlaceholder: 'Stock number, VIN, make or model',
+      empty: 'Nothing in stock matches.',
+      render: function (v) {
+        return (
+          v.stockNumber + ' · ' + v.description + (v.outOnDemonstration ? ' · out on a drive' : '')
+        );
+      },
+      onPick: async function (v) {
+        try {
+          await api(
+            'POST',
+            '/api/sales/opportunities/' + o.opportunityId + '/vehicles',
+            { stock_item_id: v.stockItemId },
+            { idempotent: true },
+          );
+          close();
+          renderApp();
+        } catch (err) {
+          reportError(err);
+        }
+      },
+    });
+    box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
   });
 }
 
@@ -996,26 +1436,15 @@ async function setShortlistStatus(o, vehicle, status) {
 }
 
 function openDemonstration(o, vehicle) {
-  modal('Take ' + (vehicle.stockNumber || 'this car') + ' out', function (box, close) {
-    const form = { driver_party_id: o.partyId, licence_verified: false };
+  modal('Take ' + vehicle.stockNumber + ' out', function (box, close) {
+    const form = { licence_verified: false };
     box.appendChild(
       el('p', {
         class: 'muted',
         text:
-          'A car does not leave the lot until somebody has looked at the ' +
-          'driver’s licence. This box is the record that it happened.',
+          'A car does not leave the lot until somebody has looked at the driver’s ' +
+          'licence. This box is the record that it happened.',
       }),
-    );
-    box.appendChild(
-      el('label', null, [
-        'Driver (customer ID)',
-        el('input', {
-          value: o.partyId,
-          oninput: function (e) {
-            form.driver_party_id = e.target.value.trim();
-          },
-        }),
-      ]),
     );
     box.appendChild(
       el('label', { class: 'check' }, [
@@ -1031,7 +1460,7 @@ function openDemonstration(o, vehicle) {
     box.appendChild(
       el('div', { class: 'row' }, [
         el('button', {
-          text: 'Start the drive',
+          text: 'Issue the keys',
           onclick: async function () {
             try {
               await api(
@@ -1039,13 +1468,13 @@ function openDemonstration(o, vehicle) {
                 '/api/sales/opportunities/' + o.opportunityId + '/demonstrations',
                 {
                   stock_item_id: vehicle.stockItemId,
-                  driver_party_id: form.driver_party_id,
+                  driver_party_id: o.partyId,
                   licence_verified: form.licence_verified,
                 },
                 { idempotent: true },
               );
               close();
-              toast('Out on a drive');
+              toast('Keys issued');
               renderApp();
             } catch (err) {
               reportError(err);
@@ -1058,15 +1487,32 @@ function openDemonstration(o, vehicle) {
   });
 }
 
-function openEndDemonstration(o, drive) {
+async function moveDrive(o, drive, payload) {
+  try {
+    await api(
+      'POST',
+      '/api/sales/opportunities/' +
+        o.opportunityId +
+        '/demonstrations/' +
+        drive.demonstrationId +
+        '/state',
+      Object.assign({ expected_version: drive.authorizationVersion }, payload),
+    );
+    renderApp();
+  } catch (err) {
+    reportError(err);
+  }
+}
+
+function openEndDrive(o, drive) {
   modal('Bring ' + drive.stockNumber + ' back', function (box, close) {
-    const form = { state: 'completed', outcome: 'interested', notes: '' };
+    const form = { to_state: 'returned', outcome: 'interested', notes: '', reason: '' };
     box.appendChild(
       el('p', {
         class: 'muted',
         text:
-          'A finished drive records what the customer thought; an abandoned one ' +
-          'records nothing, because nobody found out.',
+          'A finished drive records what the customer thought. One that never went ' +
+          'out records why instead, because nobody found out.',
       }),
     );
     box.appendChild(
@@ -1076,14 +1522,12 @@ function openEndDemonstration(o, drive) {
           'select',
           {
             onchange: function (e) {
-              form.state = e.target.value;
-              if (form.state === 'abandoned') form.outcome = '';
-              else if (!form.outcome) form.outcome = 'interested';
+              form.to_state = e.target.value;
             },
           },
           [
-            el('option', { value: 'completed', text: 'They drove it' }),
-            el('option', { value: 'abandoned', text: 'Cut short' }),
+            el('option', { value: 'returned', text: 'They drove it and it is back' }),
+            el('option', { value: 'cancelled', text: 'It never went out' }),
           ],
         ),
       ]),
@@ -1108,11 +1552,12 @@ function openEndDemonstration(o, drive) {
     );
     box.appendChild(
       el('label', null, [
-        'Notes',
+        'Notes, or why it was called off',
         el('textarea', {
           rows: '2',
           oninput: function (e) {
             form.notes = e.target.value;
+            form.reason = e.target.value;
           },
         }),
       ]),
@@ -1122,23 +1567,118 @@ function openEndDemonstration(o, drive) {
         el('button', {
           text: 'Back on the lot',
           onclick: async function () {
+            const payload =
+              form.to_state === 'returned'
+                ? { to_state: 'returned', outcome: form.outcome, notes: form.notes || null }
+                : { to_state: 'cancelled', reason: form.reason };
+            await moveDrive(o, drive, payload);
+            close();
+          },
+        }),
+        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
+      ]),
+    );
+  });
+}
+
+function openDriveException(o, drive) {
+  modal('Something happened to ' + drive.stockNumber, function (box, close) {
+    const form = { exception_kind: 'damage', notes: '' };
+    box.appendChild(
+      el('p', {
+        class: 'muted',
+        text:
+          'This frees the car from the active list so the next customer is not ' +
+          'offered it, and puts the deal on the manager’s attention list.',
+      }),
+    );
+    box.appendChild(
+      el('label', null, [
+        'What happened',
+        el(
+          'select',
+          {
+            onchange: function (e) {
+              form.exception_kind = e.target.value;
+            },
+          },
+          ['damage', 'accident', 'not_returned', 'breakdown', 'other'].map(function (k) {
+            return el('option', { value: k, text: k.replace(/_/g, ' ') });
+          }),
+        ),
+      ]),
+    );
+    box.appendChild(
+      el('label', null, [
+        'Details',
+        el('textarea', {
+          rows: '3',
+          oninput: function (e) {
+            form.notes = e.target.value;
+          },
+        }),
+      ]),
+    );
+    box.appendChild(
+      el('div', { class: 'row' }, [
+        el('button', {
+          text: 'Record it',
+          onclick: async function () {
+            await moveDrive(o, drive, {
+              to_state: 'exception',
+              exception_kind: form.exception_kind,
+              notes: form.notes,
+            });
+            close();
+          },
+        }),
+        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
+      ]),
+    );
+  });
+}
+
+function openTask(o) {
+  modal('Add a task', function (box, close) {
+    const form = { subject: '', due_at: '' };
+    box.appendChild(
+      el('label', null, [
+        'What is owed',
+        el('input', {
+          oninput: function (e) {
+            form.subject = e.target.value;
+          },
+        }),
+      ]),
+    );
+    box.appendChild(
+      el('label', null, [
+        'When',
+        el('input', {
+          type: 'datetime-local',
+          oninput: function (e) {
+            form.due_at = e.target.value;
+          },
+        }),
+      ]),
+    );
+    box.appendChild(
+      el('div', { class: 'row' }, [
+        el('button', {
+          text: 'Add',
+          onclick: async function () {
             try {
               await api(
                 'POST',
-                '/api/sales/opportunities/' +
-                  o.opportunityId +
-                  '/demonstrations/' +
-                  drive.demonstrationId +
-                  '/end',
+                '/api/sales/opportunities/' + o.opportunityId + '/activities',
                 {
-                  expected_version: drive.authorizationVersion,
-                  state: form.state,
-                  outcome: form.state === 'abandoned' ? null : form.outcome,
-                  notes: form.notes || null,
+                  kind: 'task',
+                  subject: form.subject,
+                  due_at: form.due_at ? new Date(form.due_at).toISOString() : null,
                 },
+                { idempotent: true },
               );
               close();
-              toast('The car is back');
               renderApp();
             } catch (err) {
               reportError(err);
@@ -1151,54 +1691,29 @@ function openEndDemonstration(o, drive) {
   });
 }
 
-function openAssign(o) {
-  modal('Give this deal to somebody', function (box, close) {
-    const form = { to_user_link_id: '', reason: 'manual_assignment', note: '' };
-    box.appendChild(
-      el('p', {
-        class: 'muted',
-        text: 'They have to work this showroom — the platform checks, it does not assume.',
-      }),
+async function closeAction(o, action, state) {
+  try {
+    await api(
+      'POST',
+      '/api/sales/opportunities/' + o.opportunityId + '/activities/' + action.activityId + '/close',
+      { expected_version: action.authorizationVersion, state: state },
     );
+    renderApp();
+  } catch (err) {
+    reportError(err);
+  }
+}
+
+function openCancelAction(o, action) {
+  modal('Call off: ' + action.subject, function (box, close) {
+    const form = { reason: '' };
     box.appendChild(
       el('label', null, [
-        'Salesperson ID',
-        el('input', {
-          oninput: function (e) {
-            form.to_user_link_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
-    box.appendChild(
-      el('label', null, [
-        'Why',
-        el(
-          'select',
-          {
-            onchange: function (e) {
-              form.reason = e.target.value;
-            },
-          },
-          [
-            'manual_assignment',
-            'reassignment',
-            'floor_rotation',
-            'turnover',
-            'manager_override',
-          ].map(function (k) {
-            return el('option', { value: k, text: k.replace(/_/g, ' ') });
-          }),
-        ),
-      ]),
-    );
-    box.appendChild(
-      el('label', null, [
-        'Note',
+        'Why it no longer applies',
         el('textarea', {
           rows: '2',
           oninput: function (e) {
-            form.note = e.target.value;
+            form.reason = e.target.value;
           },
         }),
       ]),
@@ -1206,17 +1721,23 @@ function openAssign(o) {
     box.appendChild(
       el('div', { class: 'row' }, [
         el('button', {
-          text: 'Assign',
+          text: 'Call it off',
           onclick: async function () {
             try {
-              await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/assignment', {
-                expected_version: o.authorizationVersion,
-                to_user_link_id: form.to_user_link_id,
-                reason: form.reason,
-                note: form.note || null,
-              });
+              await api(
+                'POST',
+                '/api/sales/opportunities/' +
+                  o.opportunityId +
+                  '/activities/' +
+                  action.activityId +
+                  '/close',
+                {
+                  expected_version: action.authorizationVersion,
+                  state: 'cancelled',
+                  reason: form.reason,
+                },
+              );
               close();
-              toast('Assigned');
               renderApp();
             } catch (err) {
               reportError(err);
@@ -1236,6 +1757,12 @@ function openActivity(o) {
     const form = { kind: 'note', direction: '', subject: '', body: '' };
     const COMMUNICATIONS = ['call', 'email', 'sms'];
     box.appendChild(
+      el('p', {
+        class: 'muted',
+        text: 'This records what HAPPENED. Something still owed is a task, above.',
+      }),
+    );
+    box.appendChild(
       el('label', null, [
         'What',
         el(
@@ -1245,14 +1772,14 @@ function openActivity(o) {
               form.kind = e.target.value;
               const isTalk = COMMUNICATIONS.indexOf(form.kind) >= 0;
               form.direction = isTalk ? form.direction || 'outbound' : '';
-              const picker = document.getElementById('sales-activity-direction');
-              if (picker) {
-                picker.value = form.direction;
-                picker.disabled = !isTalk;
+              const dir = document.getElementById('sales-activity-direction');
+              if (dir) {
+                dir.value = form.direction;
+                dir.disabled = !isTalk;
               }
             },
           },
-          ['note', 'call', 'email', 'sms', 'task'].map(function (k) {
+          ['note', 'call', 'email', 'sms'].map(function (k) {
             return el('option', { value: k, text: k });
           }),
         ),
@@ -1341,8 +1868,8 @@ function openNegotiation(o) {
       el('p', {
         class: 'muted',
         text:
-          'What was SAID, not what was offered. The figures belong to desking ' +
-          '(FBL-120), and there is deliberately nowhere to type one here.',
+          'What was SAID, not what was offered. The figures belong to appraisal and ' +
+          'desking (FBL-120), and there is deliberately nowhere to type one here.',
       }),
     );
     box.appendChild(
@@ -1427,17 +1954,7 @@ function openNegotiation(o) {
 
 function openTurnover(o) {
   modal('Bring a manager in', function (box, close) {
-    const form = { manager_user_link_id: '', reason: 'second_voice', note: '' };
-    box.appendChild(
-      el('label', null, [
-        'Manager ID',
-        el('input', {
-          oninput: function (e) {
-            form.manager_user_link_id = e.target.value.trim();
-          },
-        }),
-      ]),
-    );
+    const form = { reason: 'second_voice', note: '' };
     box.appendChild(
       el('label', null, [
         'Why',
@@ -1467,27 +1984,30 @@ function openTurnover(o) {
         }),
       ]),
     );
-    box.appendChild(
-      el('div', { class: 'row' }, [
-        el('button', {
-          text: 'Record the turnover',
-          onclick: async function () {
-            try {
-              await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/turnover', {
-                manager_user_link_id: form.manager_user_link_id,
-                reason: form.reason,
-                note: form.note || null,
-              });
-              close();
-              renderApp();
-            } catch (err) {
-              reportError(err);
-            }
-          },
-        }),
-        el('button', { class: 'ghost', text: 'Cancel', onclick: close }),
-      ]),
-    );
+    picker(box, {
+      label: 'Which manager',
+      path: '/api/sales/find/staff?role=manager&location_id=' + (salesState.rooftopId || ''),
+      collection: 'staff',
+      empty: 'No manager works this showroom.',
+      render: function (s) {
+        return salesStaff(s.userLinkId);
+      },
+      onPick: async function (s) {
+        try {
+          await api('POST', '/api/sales/opportunities/' + o.opportunityId + '/turnover', {
+            manager_user_link_id: s.userLinkId,
+            reason: form.reason,
+            note: form.note || null,
+          });
+          close();
+          toast('A manager has been brought in');
+          renderApp();
+        } catch (err) {
+          reportError(err);
+        }
+      },
+    });
+    box.appendChild(el('button', { class: 'ghost', text: 'Cancel', onclick: close }));
   });
 }
 

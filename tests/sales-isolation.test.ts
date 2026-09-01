@@ -19,11 +19,11 @@ import { ROLES } from '@dealer/contracts';
 import { acquireStock } from '@dealer/inventory';
 import { captureLead, defineLeadSource, handOffLead, transitionLead } from '@dealer/crm';
 import {
+  checkIn,
+  issueDemonstration,
   joinFloor,
   receiveHandoff,
-  recordArrival,
   shortlistVehicle,
-  startDemonstration,
 } from '@dealer/sales';
 
 /**
@@ -65,6 +65,9 @@ describe(
       'opportunity_activities',
       'negotiation_rounds',
       'manager_turnovers',
+      'opportunity_vehicle_events',
+      'demonstration_events',
+      'desking_handoffs',
     ] as const;
 
     interface Dealership {
@@ -232,7 +235,7 @@ describe(
         rooftopId: a.rooftopId,
         userLinkId: admin,
       });
-      const arrived = await recordArrival({
+      const arrived = await checkIn({
         actingUserLinkId: admin,
         tenantId,
         rooftopId: a.rooftopId,
@@ -240,9 +243,9 @@ describe(
         opportunityId,
         appointmentId: null,
       });
-      assert.equal(arrived.outcome, 'arrived', JSON.stringify(arrived));
+      assert.equal(arrived.outcome, 'checked_in', JSON.stringify(arrived));
 
-      const drive = await startDemonstration({
+      const drive = await issueDemonstration({
         actingUserLinkId: admin,
         tenantId,
         opportunityId,
@@ -251,7 +254,7 @@ describe(
         licenceVerified: true,
         visitId: (arrived as { visit: { visitId: string } }).visit.visitId,
       });
-      assert.equal(drive.outcome, 'started', JSON.stringify(drive));
+      assert.equal(drive.outcome, 'issued', JSON.stringify(drive));
 
       return {
         tenantId,

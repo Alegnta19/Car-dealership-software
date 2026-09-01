@@ -39,35 +39,66 @@
 -- Section 1 — THE OPPORTUNITY
 -- ────────────────────────────────────────────────────────────────────────────
 
--- WHAT SALES OWNS. Created from a handoff, and one opportunity per handoff: the
--- CRM hands a lead over exactly once, so sales receives it exactly once.
+-- WHAT SALES OWNS.
+--
+-- TWO DOORS IN, and `origin` says which was used. A CRM HANDOFF is the ordinary
+-- one: the CRM hands a lead over exactly once, so sales receives it exactly
+-- once. A WALK-IN is the other, and refusing to model it would make the
+-- platform refuse the most ordinary thing a showroom does -- somebody arriving
+-- with no prior contact. A walk-in still resolves to a CANONICAL party through
+-- Release Train 2's search-create-deduplicate path; what it lacks is a lead and
+-- a handoff, and those columns are null exactly then.
+--
+-- THE CANONICAL REFERENCES ARE RETAINED, ALL FIVE: party, lead, appointment,
+-- rooftop and stock. Four come from Release Train 3's FROZEN handoff snapshot
+-- rather than from the live lead, because the snapshot is what the CRM
+-- committed to at the moment of the handoff while the lead can still move. The
+-- appointment is resolved canonically from the lead, because 063's snapshot
+-- shape is frozen and does not carry one.
 CREATE TABLE opportunities (
   opportunity_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id               UUID NOT NULL REFERENCES tenants (tenant_id),
   rooftop_id              UUID NOT NULL,
   party_id                UUID NOT NULL,
+  origin                  TEXT NOT NULL
+                            CHECK (origin IN ('crm_handoff', 'walk_in')),
   -- THE SEAM. The handoff this opportunity came from, and the lead behind it.
   -- Both are recorded because the handoff is the EVENT and the lead is the
   -- history; an opportunity that named only one of them could not be traced
-  -- back to the campaign that produced it.
-  handoff_id              UUID NOT NULL,
-  lead_id                 UUID NOT NULL,
+  -- back to the campaign that produced it. Null together, and only for a
+  -- walk-in.
+  handoff_id              UUID,
+  lead_id                 UUID,
+  -- The appointment this customer was expected on, when there was one. Release
+  -- Train 3 owns appointments; this is the canonical reference sales keeps.
+  appointment_id          UUID,
+  -- The car the CRM recorded them as interested in, carried across from the
+  -- frozen snapshot so the shortlist can start where the conversation did.
+  interest_stock_item_id  UUID,
   owner_user_link_id      UUID,
   stage                   TEXT NOT NULL DEFAULT 'received'
                             CHECK (stage IN ('received', 'in_showroom', 'demonstrated',
-                                             'negotiating', 'won', 'lost')),
-  -- Why it ended. Required exactly when it ended, so a close-rate report can be
+                                             'negotiating', 'follow_up',
+                                             'ready_for_desking', 'lost')),
+  -- Why it concluded. Required exactly when it concluded, so a report can be
   -- trusted rather than inferred.
+  --
+  -- THERE IS NO `sold` VALUE, AND THAT IS THE POINT. Release Train 4 cannot
+  -- sell anything: it has no price, no deal record and no delivery. The
+  -- furthest a positive outcome goes is `committed_to_purchase`, whose ONLY
+  -- effect is to hand the customer to appraisal and desking (FBL-120) as one
+  -- idempotent fact. A `sold` value here would be a sale this platform cannot
+  -- substantiate, and a sold-inventory transition it has no authority to make.
   disposition             TEXT
                             CHECK (disposition IS NULL OR disposition IN (
-                              'sold', 'lost_to_competitor', 'lost_no_decision',
-                              'lost_credit', 'lost_no_vehicle', 'customer_unreachable')),
-  -- A SOLD OPPORTUNITY IS NOT A DEAL. FBL-140 writes the deal record; this
-  -- column says only that the customer agreed to buy, and the status below says
-  -- plainly that the money is not here.
+                              'committed_to_purchase', 'lost_to_competitor',
+                              'lost_no_decision', 'lost_credit', 'lost_no_vehicle',
+                              'customer_unreachable')),
+  -- NOT A DEAL, AND IT SAYS SO. FBL-140 writes the deal record; this column
+  -- states plainly that the money is not here.
   deal_status             TEXT NOT NULL DEFAULT 'NOT_YET_AVAILABLE'
                             CHECK (deal_status IN ('NOT_YET_AVAILABLE', 'AVAILABLE')),
-  won_at                  TIMESTAMPTZ,
+  desking_ready_at        TIMESTAMPTZ,
   lost_at                 TIMESTAMPTZ,
   created_by_user_link_id UUID NOT NULL,
   updated_by_user_link_id UUID NOT NULL,
@@ -76,11 +107,18 @@ CREATE TABLE opportunities (
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (tenant_id, opportunity_id),
   -- One opportunity per handoff. The CRM hands a lead over once; sales receives
-  -- it once, and a retried creation converges rather than duplicating.
+  -- it once, and a retried or genuinely concurrent creation CONVERGES on the
+  -- existing row rather than duplicating it or surfacing a key error. Nulls do
+  -- not collide, so walk-ins are unaffected by this key.
   UNIQUE (tenant_id, handoff_id),
-  CHECK ((stage IN ('won', 'lost')) = (disposition IS NOT NULL)),
-  CHECK (stage <> 'won' OR (won_at IS NOT NULL AND disposition = 'sold')),
-  CHECK (stage <> 'lost' OR (lost_at IS NOT NULL AND disposition <> 'sold')),
+  -- An origin is a claim about provenance, and the columns must agree with it.
+  CHECK ((origin = 'crm_handoff') = (handoff_id IS NOT NULL)),
+  CHECK ((handoff_id IS NULL) = (lead_id IS NULL)),
+  CHECK ((stage IN ('ready_for_desking', 'lost')) = (disposition IS NOT NULL)),
+  CHECK (stage <> 'ready_for_desking'
+         OR (desking_ready_at IS NOT NULL AND disposition = 'committed_to_purchase')),
+  CHECK (stage <> 'lost'
+         OR (lost_at IS NOT NULL AND disposition <> 'committed_to_purchase')),
   -- STRUCTURALLY PROHIBITED, exactly as migration 063 prohibits pre-sale
   -- revenue. FBL-140's migration relaxes this when a deal record exists to
   -- point at; until then an opportunity cannot claim one.
@@ -89,6 +127,9 @@ CREATE TABLE opportunities (
   FOREIGN KEY (tenant_id, party_id) REFERENCES parties (tenant_id, party_id),
   FOREIGN KEY (tenant_id, handoff_id) REFERENCES lead_handoffs (tenant_id, handoff_id),
   FOREIGN KEY (tenant_id, lead_id) REFERENCES leads (tenant_id, lead_id),
+  FOREIGN KEY (tenant_id, appointment_id) REFERENCES appointments (tenant_id, appointment_id),
+  FOREIGN KEY (tenant_id, interest_stock_item_id)
+    REFERENCES stock_items (tenant_id, stock_item_id),
   FOREIGN KEY (tenant_id, owner_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, created_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, updated_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
@@ -96,7 +137,13 @@ CREATE TABLE opportunities (
 CREATE INDEX idx_opportunities_rooftop_stage ON opportunities (tenant_id, rooftop_id, stage);
 CREATE INDEX idx_opportunities_owner
   ON opportunities (tenant_id, owner_user_link_id, stage)
-  WHERE stage NOT IN ('won', 'lost');
+  WHERE stage NOT IN ('ready_for_desking', 'lost');
+-- ONE OPEN OPPORTUNITY PER CUSTOMER PER ROOFTOP. A walk-in by somebody sales is
+-- already working is the SAME opportunity, and two concurrent check-ins of one
+-- person must converge on it rather than open a second file on them.
+CREATE UNIQUE INDEX uq_opportunities_open_per_party
+  ON opportunities (tenant_id, rooftop_id, party_id)
+  WHERE stage NOT IN ('ready_for_desking', 'lost');
 
 -- EVERY STAGE MOVE, append-only. The opportunity carries where it is; this
 -- carries the shape of the sales funnel, which a current-stage column cannot.
@@ -191,11 +238,17 @@ CREATE TABLE showroom_visits (
   -- appointments; this records that the customer turned up for one.
   appointment_id          UUID,
   greeted_by_user_link_id UUID,
+  -- WHO TOOK THE CUSTOMER ON, which is not the same as who said hello. Greeting
+  -- is the door; acceptance is a salesperson declaring this is theirs to work,
+  -- and it is a separate act because a manager greets people they will not sell
+  -- to and a salesperson can decline what they were handed.
+  accepted_by_user_link_id UUID,
   state                   TEXT NOT NULL DEFAULT 'arrived'
                             CHECK (state IN ('arrived', 'greeted', 'with_salesperson',
                                              'departed')),
   arrived_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   greeted_at              TIMESTAMPTZ,
+  accepted_at             TIMESTAMPTZ,
   departed_at             TIMESTAMPTZ,
   created_by_user_link_id UUID NOT NULL,
   updated_by_user_link_id UUID NOT NULL,
@@ -205,14 +258,21 @@ CREATE TABLE showroom_visits (
   UNIQUE (tenant_id, visit_id),
   -- One-way stamps: a visit that was greeted keeps the fact after it ends.
   CHECK (greeted_at IS NULL OR greeted_by_user_link_id IS NOT NULL),
+  CHECK ((accepted_at IS NULL) = (accepted_by_user_link_id IS NULL)),
+  -- Acceptance follows greeting, never precedes it.
+  CHECK (accepted_at IS NULL OR greeted_at IS NOT NULL),
+  CHECK (state <> 'with_salesperson' OR accepted_at IS NOT NULL),
   CHECK (state <> 'departed' OR departed_at IS NOT NULL),
   CHECK (state = 'arrived' OR greeted_at IS NOT NULL),
   CHECK (departed_at IS NULL OR departed_at >= arrived_at),
+  CHECK (accepted_at IS NULL OR accepted_at >= arrived_at),
   FOREIGN KEY (tenant_id, rooftop_id) REFERENCES rooftops (tenant_id, rooftop_id),
   FOREIGN KEY (tenant_id, party_id) REFERENCES parties (tenant_id, party_id),
   FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunities (tenant_id, opportunity_id),
   FOREIGN KEY (tenant_id, appointment_id) REFERENCES appointments (tenant_id, appointment_id),
   FOREIGN KEY (tenant_id, greeted_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
+  FOREIGN KEY (tenant_id, accepted_by_user_link_id)
+    REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, created_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, updated_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
 );
@@ -220,16 +280,31 @@ CREATE TABLE showroom_visits (
 CREATE INDEX idx_showroom_visits_open
   ON showroom_visits (tenant_id, rooftop_id, arrived_at)
   WHERE state <> 'departed';
+-- ONE ACTIVE VISIT PER CUSTOMER, AND THE DATABASE DECIDES IT.
+--
+-- A person is in the building or they are not. Two open visits for one customer
+-- is not a busy showroom, it is a board that double-counts them, a wait timer
+-- measuring the wrong arrival, and two salespeople each believing they have
+-- them. The service checks it too, but the service is one caller: a retry that
+-- arrives with a different request key, a second till, a script or a future
+-- integration all reach this table, and this index is what makes the invariant
+-- true for every one of them rather than for the paths somebody remembered.
+CREATE UNIQUE INDEX uq_showroom_visits_one_active
+  ON showroom_visits (tenant_id, party_id) WHERE state <> 'departed';
 
 CREATE TABLE visit_events (
   visit_event_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id               UUID NOT NULL REFERENCES tenants (tenant_id),
   visit_id                UUID NOT NULL,
   event_type              TEXT NOT NULL
-                            CHECK (event_type IN ('arrived', 'greeted', 'assigned',
+                            CHECK (event_type IN ('arrived', 'greeted', 'accepted',
+                                                  'assigned', 'appointment_kept',
+                                                  'demonstration_issued',
                                                   'demonstration_started',
-                                                  'demonstration_ended', 'turned_over',
-                                                  'departed')),
+                                                  'demonstration_returned',
+                                                  'demonstration_cancelled',
+                                                  'demonstration_exception',
+                                                  'turned_over', 'departed')),
   note                    TEXT CHECK (note IS NULL OR length(note) <= 500),
   actor_user_link_id      UUID NOT NULL,
   occurred_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -279,6 +354,37 @@ CREATE TABLE opportunity_vehicles (
 CREATE UNIQUE INDEX uq_opportunity_vehicles_selected
   ON opportunity_vehicles (tenant_id, opportunity_id) WHERE status = 'selected';
 
+-- HOW THE SHORTLIST GOT THERE, append-only.
+--
+-- `opportunity_vehicles.status` is the CURRENT answer and it is corrected in
+-- place, which means the sequence is lost the moment it changes: a customer who
+-- selected one car, drove another and came back to the first leaves a single row
+-- reading `selected`, and the story that a second-choice car won is gone. This
+-- table is that story, and it is what puts vehicle selection on the
+-- opportunity's one timeline instead of leaving the screen to guess.
+CREATE TABLE opportunity_vehicle_events (
+  vehicle_event_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id               UUID NOT NULL REFERENCES tenants (tenant_id),
+  opportunity_id          UUID NOT NULL,
+  opportunity_vehicle_id  UUID NOT NULL,
+  stock_item_id           UUID NOT NULL,
+  event_type              TEXT NOT NULL
+                            CHECK (event_type IN ('shortlisted', 'considering', 'demonstrated',
+                                                  'rejected', 'selected', 'stood_down',
+                                                  'removed')),
+  from_status             TEXT,
+  to_status               TEXT,
+  reason                  TEXT CHECK (reason IS NULL OR length(reason) <= 200),
+  actor_user_link_id      UUID NOT NULL,
+  occurred_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, vehicle_event_id),
+  FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunities (tenant_id, opportunity_id),
+  FOREIGN KEY (tenant_id, stock_item_id) REFERENCES stock_items (tenant_id, stock_item_id),
+  FOREIGN KEY (tenant_id, actor_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
+);
+CREATE INDEX idx_opportunity_vehicle_events_opp
+  ON opportunity_vehicle_events (tenant_id, opportunity_id, occurred_at);
+
 -- THE TEST DRIVE. A real car, a real driver, and the licence check recorded as
 -- a fact rather than assumed: a dealership that cannot show it checked is a
 -- dealership that did not.
@@ -292,12 +398,26 @@ CREATE TABLE demonstrations (
   driver_party_id         UUID NOT NULL,
   accompanied_by_user_link_id UUID NOT NULL,
   licence_verified        BOOLEAN NOT NULL DEFAULT false,
-  state                   TEXT NOT NULL DEFAULT 'in_progress'
-                            CHECK (state IN ('in_progress', 'completed', 'abandoned')),
+  -- THE FIVE FACTS A TEST DRIVE ACTUALLY HAS.
+  --
+  -- `issued` is the keys leaving the cabinet; `in_progress` is the car leaving
+  -- the lot. They are separate because the gap between them is where a licence
+  -- is photocopied and a plate is fitted, and a dealership asked "where is that
+  -- car" needs the difference. `returned` is it back with an answer. `cancelled`
+  -- is it never went, which is not the same as going badly. `exception` is the
+  -- one nobody wants to model and every dealership eventually needs: damage, an
+  -- accident, or a car that is simply not back.
+  state                   TEXT NOT NULL DEFAULT 'issued'
+                            CHECK (state IN ('issued', 'in_progress', 'returned',
+                                             'cancelled', 'exception')),
   outcome                 TEXT
                             CHECK (outcome IS NULL OR outcome IN ('interested', 'not_interested',
                                                                   'wants_alternative')),
-  started_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  exception_kind          TEXT
+                            CHECK (exception_kind IS NULL OR exception_kind IN (
+                              'damage', 'accident', 'not_returned', 'breakdown', 'other')),
+  issued_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at              TIMESTAMPTZ,
   ended_at                TIMESTAMPTZ,
   notes                   TEXT CHECK (notes IS NULL OR length(notes) <= 2000),
   created_by_user_link_id UUID NOT NULL,
@@ -306,12 +426,21 @@ CREATE TABLE demonstrations (
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (tenant_id, demonstration_id),
-  -- A finished drive has an end and an answer; an abandoned one has an end and
-  -- no answer, because nobody found out.
-  CHECK (state <> 'completed' OR (ended_at IS NOT NULL AND outcome IS NOT NULL)),
-  CHECK (state <> 'abandoned' OR ended_at IS NOT NULL),
-  CHECK (state <> 'in_progress' OR (ended_at IS NULL AND outcome IS NULL)),
-  CHECK (ended_at IS NULL OR ended_at >= started_at),
+  -- A RETURNED drive has an end and an answer; a CANCELLED one has an end and no
+  -- answer, because nobody found out; an EXCEPTION has an end, no answer, and
+  -- says what went wrong. Neither of the two ACTIVE states has an end at all.
+  CHECK (state <> 'returned' OR (ended_at IS NOT NULL AND outcome IS NOT NULL)),
+  CHECK (state <> 'cancelled' OR (ended_at IS NOT NULL AND outcome IS NULL)),
+  CHECK (state <> 'exception'
+         OR (ended_at IS NOT NULL AND outcome IS NULL AND exception_kind IS NOT NULL)),
+  CHECK (state IN ('returned', 'cancelled', 'exception')
+         OR (ended_at IS NULL AND outcome IS NULL)),
+  CHECK (exception_kind IS NULL OR state = 'exception'),
+  -- A car that is moving left at a stated time; one that never moved did not.
+  CHECK ((state = 'in_progress') <= (started_at IS NOT NULL)),
+  CHECK (started_at IS NULL OR started_at >= issued_at),
+  CHECK (ended_at IS NULL OR ended_at >= issued_at),
+  CHECK (ended_at IS NULL OR started_at IS NULL OR ended_at >= started_at),
   FOREIGN KEY (tenant_id, rooftop_id) REFERENCES rooftops (tenant_id, rooftop_id),
   FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunities (tenant_id, opportunity_id),
   FOREIGN KEY (tenant_id, stock_item_id) REFERENCES stock_items (tenant_id, stock_item_id),
@@ -322,12 +451,60 @@ CREATE TABLE demonstrations (
   FOREIGN KEY (tenant_id, created_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, updated_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
 );
--- ONE CAR OUT AT A TIME. A stock item cannot be on two test drives at once,
--- and the partial index says so rather than a comment hoping somebody checks.
+-- THE INCOMPATIBLE ACTIVE-DEMONSTRATION COMBINATIONS, STATED AND ENFORCED.
+--
+-- A demonstration is ACTIVE from the moment the keys are issued until the car is
+-- back, cancelled or written up as an exception -- `issued` OR `in_progress`,
+-- because a car whose keys are out is not available whatever the odometer says.
+--
+-- Each rule below is one PHYSICAL thing that can only be in one place at a time,
+-- which is why the database and not a service is the right place to say it:
+--
+--   1. THE CAR. One stock item, one active demonstration. This is the rule a
+--      showroom breaks most often and notices last.
+--   2. THE DRIVER. One person cannot be driving two cars. Two active drives for
+--      one customer means somebody typed the wrong car and nobody will know
+--      which record is the real one.
+--   3. THE SALESPERSON RIDING ALONG. One employee cannot accompany two drives.
+--      An unaccompanied drive is a different decision, made deliberately; being
+--      recorded on two at once is a mistake.
+--
+-- The services check all three too, so the caller gets a sentence rather than a
+-- constraint name -- but the services are one caller and these indexes are the
+-- invariant.
 CREATE UNIQUE INDEX uq_demonstrations_vehicle_out
-  ON demonstrations (tenant_id, stock_item_id) WHERE state = 'in_progress';
+  ON demonstrations (tenant_id, stock_item_id)
+  WHERE state IN ('issued', 'in_progress');
+CREATE UNIQUE INDEX uq_demonstrations_driver_out
+  ON demonstrations (tenant_id, driver_party_id)
+  WHERE state IN ('issued', 'in_progress');
+CREATE UNIQUE INDEX uq_demonstrations_escort_out
+  ON demonstrations (tenant_id, accompanied_by_user_link_id)
+  WHERE state IN ('issued', 'in_progress');
 CREATE INDEX idx_demonstrations_opportunity
-  ON demonstrations (tenant_id, opportunity_id, started_at);
+  ON demonstrations (tenant_id, opportunity_id, issued_at);
+
+-- WHAT HAPPENED TO THE CAR, append-only. The demonstration carries where it is;
+-- this carries how it got there, which is what an insurer asks for.
+CREATE TABLE demonstration_events (
+  demonstration_event_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id               UUID NOT NULL REFERENCES tenants (tenant_id),
+  demonstration_id        UUID NOT NULL,
+  event_type              TEXT NOT NULL
+                            CHECK (event_type IN ('issued', 'started', 'returned',
+                                                  'cancelled', 'exception')),
+  outcome                 TEXT,
+  exception_kind          TEXT,
+  note                    TEXT CHECK (note IS NULL OR length(note) <= 500),
+  actor_user_link_id      UUID NOT NULL,
+  occurred_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, demonstration_event_id),
+  FOREIGN KEY (tenant_id, demonstration_id)
+    REFERENCES demonstrations (tenant_id, demonstration_id),
+  FOREIGN KEY (tenant_id, actor_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
+);
+CREATE INDEX idx_demonstration_events_demo
+  ON demonstration_events (tenant_id, demonstration_id, occurred_at);
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- Section 4 — FOLLOW-UP, NEGOTIATION AND MANAGER OVERSIGHT
@@ -352,6 +529,9 @@ CREATE TABLE opportunity_activities (
                             CHECK (state IN ('open', 'completed', 'cancelled')),
   due_at                  TIMESTAMPTZ,
   completed_at            TIMESTAMPTZ,
+  cancelled_at            TIMESTAMPTZ,
+  cancelled_reason        TEXT CHECK (cancelled_reason IS NULL OR length(cancelled_reason) <= 200),
+  outcome_note            TEXT CHECK (outcome_note IS NULL OR length(outcome_note) <= 500),
   created_by_user_link_id UUID NOT NULL,
   updated_by_user_link_id UUID NOT NULL,
   authorization_version   BIGINT NOT NULL DEFAULT 1,
@@ -361,12 +541,22 @@ CREATE TABLE opportunity_activities (
   CHECK ((kind IN ('call', 'email', 'sms')) = (direction IS NOT NULL)),
   CHECK (kind IN ('task', 'appointment_followup') OR due_at IS NULL),
   CHECK (state <> 'completed' OR completed_at IS NOT NULL),
+  -- A cancelled action says when and why; an open one has neither stamp.
+  CHECK (state <> 'cancelled' OR cancelled_at IS NOT NULL),
+  CHECK (state = 'cancelled' OR (cancelled_at IS NULL AND cancelled_reason IS NULL)),
+  CHECK (state = 'completed' OR completed_at IS NULL),
   FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunities (tenant_id, opportunity_id),
   FOREIGN KEY (tenant_id, created_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id),
   FOREIGN KEY (tenant_id, updated_by_user_link_id) REFERENCES user_links (tenant_id, user_link_id)
 );
 CREATE INDEX idx_opportunity_activities_opp
   ON opportunity_activities (tenant_id, opportunity_id, created_at);
+-- THE NEXT ACTION, answered by an index rather than by sorting in a process.
+-- "What is the earliest thing still owed on this deal" is the question a
+-- salesperson opens the screen to ask, and a board asks it once per row.
+CREATE INDEX idx_opportunity_activities_due
+  ON opportunity_activities (tenant_id, opportunity_id, due_at)
+  WHERE state = 'open' AND due_at IS NOT NULL;
 
 -- THE NEGOTIATION, WITHOUT THE NUMBERS. Append-only rounds recording that a
 -- round happened, who moved, whether a manager was brought in and how it ended.
@@ -428,7 +618,61 @@ CREATE INDEX idx_manager_turnovers_opp
   ON manager_turnovers (tenant_id, opportunity_id, occurred_at);
 
 -- ────────────────────────────────────────────────────────────────────────────
--- Section 5 — GRANTS
+-- Section 5 — THE DESKING SEAM, AND THE END OF THIS TRAIN'S AUTHORITY
+--
+-- WHAT A POSITIVE OUTCOME IS ALLOWED TO BE. A customer saying yes on the floor
+-- is not a sale: there is no agreed price, no trade valuation, no finance, no
+-- deal record and no delivery, and every one of those is FBL-120 or later. What
+-- Release Train 4 may do -- the whole of what it may do -- is state the FACT
+-- that this customer is ready to be appraised and desked, exactly once, and
+-- hand it on.
+--
+-- WHY THIS IS A TABLE AND NOT JUST AN OUTBOX ROW. `admin_outbox` is at-least-
+-- once by design and has no business key, so a replay would raise the fact
+-- twice and the desk would open two files. This row IS the fact; its unique key
+-- makes "exactly once" a database guarantee, and the outbox event is written in
+-- the same transaction as the row that permits it. A retry finds the row and
+-- converges.
+--
+-- WHAT IS DELIBERATELY ABSENT: any amount, any price, any vehicle valuation,
+-- any deal or delivery reference. This table records that a conversation
+-- reached a point, not what was agreed -- because nothing was.
+-- ────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE desking_handoffs (
+  desking_handoff_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id               UUID NOT NULL REFERENCES tenants (tenant_id),
+  opportunity_id          UUID NOT NULL,
+  rooftop_id              UUID NOT NULL,
+  party_id                UUID NOT NULL,
+  -- The car they committed to, when one was selected. Optional because a
+  -- customer can commit to buying before the exact unit is settled.
+  stock_item_id           UUID,
+  handed_by_user_link_id  UUID NOT NULL,
+  -- The outbox event this row permitted, so the fact and its delivery are one
+  -- traceable pair rather than two hopeful halves.
+  outbox_event_id         UUID NOT NULL,
+  -- FBL-120 has not been built. Saying so is the honest alternative to leaving a
+  -- reader to assume the desk has already seen this.
+  desking_status          TEXT NOT NULL DEFAULT 'NOT_YET_AVAILABLE'
+                            CHECK (desking_status IN ('NOT_YET_AVAILABLE', 'AVAILABLE')),
+  occurred_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (tenant_id, desking_handoff_id),
+  -- EXACTLY ONE PER OPPORTUNITY. This is the whole idempotence guarantee.
+  UNIQUE (tenant_id, opportunity_id),
+  CONSTRAINT ck_desking_pre_fbl120 CHECK (desking_status = 'NOT_YET_AVAILABLE'),
+  FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunities (tenant_id, opportunity_id),
+  FOREIGN KEY (tenant_id, rooftop_id) REFERENCES rooftops (tenant_id, rooftop_id),
+  FOREIGN KEY (tenant_id, party_id) REFERENCES parties (tenant_id, party_id),
+  FOREIGN KEY (tenant_id, stock_item_id) REFERENCES stock_items (tenant_id, stock_item_id),
+  FOREIGN KEY (tenant_id, handed_by_user_link_id)
+    REFERENCES user_links (tenant_id, user_link_id)
+);
+CREATE INDEX idx_desking_handoffs_rooftop
+  ON desking_handoffs (tenant_id, rooftop_id, occurred_at);
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- Section 6 — GRANTS
 --
 -- The same rule the earlier trains applied: the runtime may correct current
 -- state and may only ADD to history. DELETE is granted to exactly one table —
@@ -442,13 +686,14 @@ GRANT SELECT, INSERT, UPDATE ON
 
 GRANT SELECT, INSERT ON
   opportunity_stage_events, opportunity_assignments, visit_events,
+  opportunity_vehicle_events, demonstration_events, desking_handoffs,
   negotiation_rounds, manager_turnovers
   TO dealership_runtime;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON opportunity_vehicles TO dealership_runtime;
 
 -- ────────────────────────────────────────────────────────────────────────────
--- Section 6 — THE RESOURCE REGISTRY
+-- Section 7 — THE RESOURCE REGISTRY
 --
 -- Three new rooftop-owned resources: an opportunity, a showroom visit and a
 -- demonstration. Everything hanging off them — stage moves, assignments,
@@ -644,7 +889,7 @@ REVOKE ALL ON FUNCTION resource_org_leaf_visible(text, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION resource_org_leaf_visible(text, uuid) TO dealership_runtime;
 
 -- ────────────────────────────────────────────────────────────────────────────
--- Section 7 — DENY-BY-DEFAULT ROW SECURITY
+-- Section 8 — DENY-BY-DEFAULT ROW SECURITY
 -- ────────────────────────────────────────────────────────────────────────────
 
 ALTER TABLE opportunities             ENABLE ROW LEVEL SECURITY;
@@ -658,8 +903,21 @@ ALTER TABLE demonstrations            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE opportunity_activities    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE negotiation_rounds        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE manager_turnovers         ENABLE ROW LEVEL SECURITY;
+-- The three tables RT4-C1 adds, secured exactly as the rest of this train's are.
+ALTER TABLE opportunity_vehicle_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE demonstration_events      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE desking_handoffs          ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY rls_opportunities_tenant ON opportunities
+  FOR ALL TO dealership_runtime
+  USING (tenant_id = app_tenant_ctx()) WITH CHECK (tenant_id = app_tenant_ctx());
+CREATE POLICY rls_opportunity_vehicle_events_tenant ON opportunity_vehicle_events
+  FOR ALL TO dealership_runtime
+  USING (tenant_id = app_tenant_ctx()) WITH CHECK (tenant_id = app_tenant_ctx());
+CREATE POLICY rls_demonstration_events_tenant ON demonstration_events
+  FOR ALL TO dealership_runtime
+  USING (tenant_id = app_tenant_ctx()) WITH CHECK (tenant_id = app_tenant_ctx());
+CREATE POLICY rls_desking_handoffs_tenant ON desking_handoffs
   FOR ALL TO dealership_runtime
   USING (tenant_id = app_tenant_ctx()) WITH CHECK (tenant_id = app_tenant_ctx());
 CREATE POLICY rls_opportunity_stage_events_tenant ON opportunity_stage_events

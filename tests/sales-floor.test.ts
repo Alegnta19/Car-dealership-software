@@ -18,14 +18,17 @@ import { ROLES } from '@dealer/contracts';
 import { createParty, acquireStock } from '@dealer/inventory';
 import { captureLead, defineLeadSource, handOffLead, transitionLead } from '@dealer/crm';
 import {
+  checkIn,
   greetVisit,
+  issueDemonstration,
+  issueDemonstrationWithin,
   joinFloor,
-  releaseToFloor,
   listFloor,
+  moveOpportunityStage,
   receiveHandoff,
-  recordArrival,
-  startDemonstration,
-  startDemonstrationWithin,
+  releaseToFloor,
+  setVehicleStatus,
+  shortlistVehicle,
 } from '@dealer/sales';
 
 /**
@@ -115,7 +118,7 @@ describe(
     }
 
     async function arrive(f: Floor, partyId: string): Promise<{ id: string; version: number }> {
-      const arrived = await recordArrival({
+      const arrived = await checkIn({
         actingUserLinkId: f.manager,
         tenantId: f.tenantId,
         rooftopId: f.rooftopId,
@@ -123,9 +126,61 @@ describe(
         opportunityId: null,
         appointmentId: null,
       });
-      assert.equal(arrived.outcome, 'arrived', JSON.stringify(arrived));
+      assert.equal(arrived.outcome, 'checked_in', JSON.stringify(arrived));
       const visit = (arrived as { visit: { visitId: string; authorizationVersion: number } }).visit;
       return { id: visit.visitId, version: visit.authorizationVersion };
+    }
+
+    /**
+     * ONE LEAD, CAPTURED AND HANDED OFF, and nothing received yet — the state
+     * the intake race starts from. Built through Release Train 3's own
+     * services, so the frozen snapshot the receipt reads is a real one.
+     */
+    async function handOffOneLead(f: Floor, partyId: string, key: string): Promise<string> {
+      const source = await defineLeadSource({
+        actingUserLinkId: f.manager,
+        tenantId: f.tenantId,
+        sourceCode: 'walk_in',
+        displayName: 'Walk in',
+        channel: 'walk_in',
+        medium: 'direct',
+      });
+      assert.ok(
+        source.outcome === 'saved' || source.outcome === 'duplicate',
+        JSON.stringify(source),
+      );
+      const captured = await captureLead({
+        actingUserLinkId: f.manager,
+        tenantId: f.tenantId,
+        rooftopId: f.rooftopId,
+        intakeKey: key,
+        channel: 'manual',
+        sourceCode: 'walk_in',
+        partyId,
+      });
+      assert.equal(captured.outcome, 'created', JSON.stringify(captured));
+      const lead = (captured as { lead: { leadId: string; authorizationVersion: number } }).lead;
+      let version = lead.authorizationVersion;
+      for (const state of ['working', 'qualified'] as const) {
+        const moved = await transitionLead({
+          actingUserLinkId: f.manager,
+          tenantId: f.tenantId,
+          leadId: lead.leadId,
+          toState: state,
+          expectedVersion: version,
+        });
+        assert.equal(moved.outcome, 'moved', JSON.stringify(moved));
+        version = (moved as { lead: { authorizationVersion: number } }).lead.authorizationVersion;
+      }
+      const handed = await handOffLead({
+        actingUserLinkId: f.manager,
+        tenantId: f.tenantId,
+        leadId: lead.leadId,
+        expectedVersion: version,
+        handedToUserLinkId: f.sellers[0]!,
+      });
+      assert.equal(handed.outcome, 'handed_off', JSON.stringify(handed));
+      return (handed as { handoffId: string }).handoffId;
     }
 
     /** VINs handed out one at a time, so two probes never collide on one car. */
@@ -134,6 +189,14 @@ describe(
       '2HGCM82633A004353',
       '3HGCM82633A004354',
       '5HGCM82633A004356',
+      '6HGCM82633A004357',
+      '7HGCM82633A004358',
+      '8HGCM82633A004359',
+      '9HGCM82633A004360',
+      '1JGCM82633A004361',
+      '2JGCM82633A004362',
+      '3JGCM82633A004363',
+      '4JGCM82633A004364',
     ];
 
     /**
@@ -145,7 +208,27 @@ describe(
     async function oneCarTwoBuyers(
       f: Floor,
       vin: string,
-    ): Promise<{ stockItemId: string; opportunityIds: string[] }> {
+    ): Promise<{ stockItemId: string; opportunityIds: string[]; partyIds: string[] }> {
+      // ITS OWN CUSTOMERS, ONE PAIR PER CALL. `uq_opportunities_open_per_party`
+      // allows one OPEN opportunity per customer per rooftop, so a fixture that
+      // reused the world's two people would collide with the constraint the
+      // second time it ran — which is the constraint being right, not the
+      // fixture being unlucky.
+      const buyers: string[] = [];
+      for (let i = 0; i < 2; i += 1) {
+        const made = await createParty({
+          actingUserLinkId: f.manager,
+          tenantId: f.tenantId,
+          partyType: 'person',
+          details: {
+            givenName: 'Buyer',
+            familyName: `Of${vin.slice(-4)}${i}`,
+            email: `buyer.${vin.slice(-4).toLowerCase()}.${i}@example.com`,
+          },
+        });
+        assert.equal(made.outcome, 'created', JSON.stringify(made));
+        buyers.push((made as { party: { partyId: string } }).party.partyId);
+      }
       const source = await defineLeadSource({
         actingUserLinkId: f.manager,
         tenantId: f.tenantId,
@@ -186,7 +269,7 @@ describe(
           intakeKey: `floor-${vin}-${i}`,
           channel: 'manual',
           sourceCode: 'walk_in',
-          partyId: f.parties[i]!,
+          partyId: buyers[i]!,
         });
         assert.equal(captured.outcome, 'created', JSON.stringify(captured));
         const lead = (captured as { lead: { leadId: string; authorizationVersion: number } }).lead;
@@ -220,8 +303,287 @@ describe(
           (received as { opportunity: { opportunityId: string } }).opportunity.opportunityId,
         );
       }
-      return { stockItemId, opportunityIds };
+      return { stockItemId, opportunityIds, partyIds: buyers };
     }
+
+    test('concurrent receipt of one handoff converges on one opportunity', async () => {
+      const f = await seedFloor(2, 2);
+      const handoffId = await handOffOneLead(f, f.parties[0]!, 'race-1');
+
+      // TWO GENUINELY CONCURRENT RECEIPTS. A provider that delivers its webhook
+      // twice, or a person double-clicking, or a retry racing the original —
+      // this is what all three look like at the service.
+      const [a, b] = await Promise.all([
+        receiveHandoff({
+          actingUserLinkId: f.sellers[0]!,
+          tenantId: f.tenantId,
+          handoffId,
+        }),
+        receiveHandoff({
+          actingUserLinkId: f.sellers[1]!,
+          tenantId: f.tenantId,
+          handoffId,
+        }),
+      ]);
+
+      // ONE RECEIVES, ONE CONVERGES, AND NEITHER SEES A KEY ERROR. The unique
+      // key already made two opportunities impossible; what the advisory lock
+      // adds is that the loser is told the truth instead of being handed a
+      // constraint violation as a 500 — which a retrying provider would simply
+      // retry again.
+      const outcomes = [a.outcome, b.outcome].sort();
+      assert.deepEqual(
+        outcomes,
+        ['already_received', 'received'],
+        `one handoff, one opportunity — got ${JSON.stringify([a, b])}`,
+      );
+      const ids = [a, b].map(
+        (x) => (x as { opportunity: { opportunityId: string } }).opportunity.opportunityId,
+      );
+      assert.equal(ids[0], ids[1], 'both callers hold the same opportunity');
+
+      const rows = await query(
+        `SELECT COUNT(*)::int AS n FROM opportunities WHERE tenant_id = $1 AND handoff_id = $2`,
+        [f.tenantId, handoffId],
+      );
+      assert.equal(Number((rows.rows[0] as { n: number }).n), 1);
+
+      // …AND THE CANONICAL REFERENCES CAME FROM THE FROZEN SNAPSHOT.
+      const stored = await query(
+        `SELECT o.origin, o.party_id, o.lead_id, o.rooftop_id,
+                h.handed_snapshot->>'party_id' AS snap_party,
+                h.handed_snapshot->>'lead_id' AS snap_lead,
+                h.handed_snapshot->>'rooftop_id' AS snap_rooftop
+           FROM opportunities o
+           JOIN lead_handoffs h ON h.tenant_id = o.tenant_id AND h.handoff_id = o.handoff_id
+          WHERE o.tenant_id = $1 AND o.handoff_id = $2`,
+        [f.tenantId, handoffId],
+      );
+      const row = stored.rows[0] as Record<string, string>;
+      assert.equal(String(row.origin), 'crm_handoff');
+      assert.equal(String(row.party_id), String(row.snap_party), 'the customer is the frozen one');
+      assert.equal(String(row.lead_id), String(row.snap_lead), 'so is the lead');
+      assert.equal(String(row.rooftop_id), String(row.snap_rooftop), 'so is the rooftop');
+    });
+
+    test('concurrent check-ins with DIFFERENT request keys converge on one visit', async () => {
+      const f = await seedFloor(2, 1);
+
+      // THE IDEMPOTENCY LAYER CANNOT SAVE THIS. Two honest requests with two
+      // honest keys — a receptionist at the desk and a salesperson on a tablet
+      // — are the same arrival, and only the BUSINESS key can merge them.
+      const [a, b] = await Promise.all([
+        checkIn({
+          actingUserLinkId: f.sellers[0]!,
+          tenantId: f.tenantId,
+          rooftopId: f.rooftopId,
+          partyId: f.parties[0]!,
+          opportunityId: null,
+          appointmentId: null,
+        }),
+        checkIn({
+          actingUserLinkId: f.sellers[1]!,
+          tenantId: f.tenantId,
+          rooftopId: f.rooftopId,
+          partyId: f.parties[0]!,
+          opportunityId: null,
+          appointmentId: null,
+        }),
+      ]);
+
+      const outcomes = [a.outcome, b.outcome].sort();
+      assert.deepEqual(
+        outcomes,
+        ['already_here', 'checked_in'],
+        `one customer, one visit — got ${JSON.stringify([a, b])}`,
+      );
+      const ids = [a, b].map((x) => (x as { visit: { visitId: string } }).visit.visitId);
+      assert.equal(ids[0], ids[1], 'both callers hold the same visit');
+
+      const rows = await query(
+        `SELECT COUNT(*)::int AS n FROM showroom_visits
+          WHERE tenant_id = $1 AND party_id = $2 AND state <> 'departed'`,
+        [f.tenantId, f.parties[0]!],
+      );
+      assert.equal(Number((rows.rows[0] as { n: number }).n), 1);
+    });
+
+    test('the desking fact is raised exactly once, even under a concurrent move', async () => {
+      const f = await seedFloor(2, 2);
+      const world = await oneCarTwoBuyers(f, VINS.shift()!);
+      const opportunityId = world.opportunityIds[0]!;
+
+      // A car they committed to, so the fact has something to name.
+      const shortlisted = await shortlistVehicle({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        stockItemId: world.stockItemId,
+      });
+      assert.equal(shortlisted.outcome, 'added', JSON.stringify(shortlisted));
+      const chosen = await setVehicleStatus({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        opportunityVehicleId: (shortlisted as { vehicle: { opportunityVehicleId: string } }).vehicle
+          .opportunityVehicleId,
+        expectedVersion: 1,
+        status: 'selected',
+      });
+      assert.equal(chosen.outcome, 'updated', JSON.stringify(chosen));
+
+      const staged = await moveOpportunityStage({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        toStage: 'negotiating',
+        expectedVersion: 1,
+      });
+      assert.equal(staged.outcome, 'moved', JSON.stringify(staged));
+      const version = (staged as { opportunity: { authorizationVersion: number } }).opportunity
+        .authorizationVersion;
+
+      // TWO CONCURRENT POSITIVE CONCLUSIONS. One wins on the version; the other
+      // must not produce a second file on the desk.
+      const [a, b] = await Promise.all([
+        moveOpportunityStage({
+          actingUserLinkId: f.sellers[0]!,
+          tenantId: f.tenantId,
+          opportunityId,
+          toStage: 'ready_for_desking',
+          expectedVersion: version,
+          disposition: 'committed_to_purchase',
+        }),
+        moveOpportunityStage({
+          actingUserLinkId: f.sellers[1]!,
+          tenantId: f.tenantId,
+          opportunityId,
+          toStage: 'ready_for_desking',
+          expectedVersion: version,
+          disposition: 'committed_to_purchase',
+        }),
+      ]);
+
+      // Whatever order they landed in, the outcomes are one success and one
+      // non-success — never two successes.
+      const moved = [a, b].filter((x) => x.outcome === 'moved');
+      assert.equal(moved.length, 1, `two conclusions succeeded — ${JSON.stringify([a, b])}`);
+      const other = [a, b].find((x) => x.outcome !== 'moved');
+      assert.ok(
+        other !== undefined &&
+          (other.outcome === 'version_conflict' || other.outcome === 'already_there'),
+        `the loser answered ${JSON.stringify(other)}`,
+      );
+
+      // EXACTLY ONE FACT AND EXACTLY ONE EVENT, whichever way the race went.
+      const counts = await query(
+        `SELECT (SELECT COUNT(*)::int FROM desking_handoffs WHERE tenant_id = $1) AS facts,
+                (SELECT COUNT(*)::int FROM admin_outbox
+                  WHERE tenant_id = $1
+                    AND event_type = 'sales.opportunity.ready_for_appraisal_desking') AS events`,
+        [f.tenantId],
+      );
+      assert.deepEqual(counts.rows[0], { facts: 1, events: 1 });
+
+      // …AND A LATER REPLAY STILL RAISES NOTHING, so the guarantee is not an
+      // artefact of the two calls having overlapped.
+      const replay = await moveOpportunityStage({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        toStage: 'ready_for_desking',
+        expectedVersion: version + 1,
+        disposition: 'committed_to_purchase',
+      });
+      assert.equal(replay.outcome, 'already_there', JSON.stringify(replay));
+      const after = await query(
+        `SELECT (SELECT COUNT(*)::int FROM desking_handoffs WHERE tenant_id = $1) AS facts,
+                (SELECT COUNT(*)::int FROM admin_outbox
+                  WHERE tenant_id = $1
+                    AND event_type = 'sales.opportunity.ready_for_appraisal_desking') AS events`,
+        [f.tenantId],
+      );
+      assert.deepEqual(after.rows[0], { facts: 1, events: 1 });
+
+      // NO SOLD INVENTORY. The car this train handed on is untouched.
+      const stock = await query(
+        `SELECT lifecycle_state FROM stock_items WHERE stock_item_id = $1`,
+        [world.stockItemId],
+      );
+      assert.equal(
+        String((stock.rows[0] as { lifecycle_state: string }).lifecycle_state),
+        'acquired',
+      );
+    });
+
+    test('the database itself refuses a second desking handoff, service stepped round', async () => {
+      const f = await seedFloor(2, 2);
+      const world = await oneCarTwoBuyers(f, VINS.shift()!);
+      const opportunityId = world.opportunityIds[0]!;
+
+      const staged = await moveOpportunityStage({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        toStage: 'negotiating',
+        expectedVersion: 1,
+      });
+      assert.equal(staged.outcome, 'moved', JSON.stringify(staged));
+      const desked = await moveOpportunityStage({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId,
+        toStage: 'ready_for_desking',
+        expectedVersion: (staged as { opportunity: { authorizationVersion: number } }).opportunity
+          .authorizationVersion,
+        disposition: 'committed_to_purchase',
+      });
+      assert.equal(desked.outcome, 'moved', JSON.stringify(desked));
+
+      // THE SERVICE'S REPLAY ANSWER IS NOT THE LAST LINE OF DEFENCE.
+      //
+      // `moveOpportunityStage` returns `already_there` before it writes anything,
+      // so the service path never reaches this key — which means the key is only
+      // testable by stepping round the service, exactly as
+      // `uq_demonstrations_vehicle_out` is. A worker, a repair script or a
+      // service written next year reaches this table with no such short-circuit,
+      // and `UNIQUE (tenant_id, opportunity_id)` is what makes "exactly one file
+      // on the desk" true for them too.
+      const opportunity = await query(
+        `SELECT rooftop_id, party_id FROM opportunities WHERE opportunity_id = $1`,
+        [opportunityId],
+      );
+      const row = opportunity.rows[0] as { rooftop_id: string; party_id: string };
+      const event = await query(`SELECT event_id FROM admin_outbox WHERE tenant_id = $1 LIMIT 1`, [
+        f.tenantId,
+      ]);
+      await assert.rejects(
+        () =>
+          fixtureAuthorizationStateWrite(
+            'adversarial-bypass-attempt',
+            `INSERT INTO desking_handoffs
+               (tenant_id, opportunity_id, rooftop_id, party_id,
+                handed_by_user_link_id, outbox_event_id)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              f.tenantId,
+              opportunityId,
+              row.rooftop_id,
+              row.party_id,
+              f.sellers[0]!,
+              String((event.rows[0] as { event_id: string }).event_id),
+            ],
+          ),
+        /desking_handoffs_tenant_id_opportunity_id_key/,
+        'the database let one customer be handed to the desk twice',
+      );
+
+      const facts = await query(
+        `SELECT COUNT(*)::int AS n FROM desking_handoffs WHERE tenant_id = $1`,
+        [f.tenantId],
+      );
+      assert.equal(Number((facts.rows[0] as { n: number }).n), 1);
+    });
 
     test('a caller who does not work a showroom cannot touch its floor, service-direct', async () => {
       // THE SERVICES ARE NOT ONLY REACHED THROUGH HTTP. A worker, a script or a
@@ -246,7 +608,7 @@ describe(
         'a manager from another dealership seeded this up-list',
       );
 
-      const wrongArrival = await recordArrival({
+      const wrongArrival = await checkIn({
         actingUserLinkId: home.manager,
         tenantId: away.tenantId,
         rooftopId: away.rooftopId,
@@ -274,7 +636,7 @@ describe(
         userLinkId: away.sellers[0]!,
       });
       assert.equal(ownFloor.outcome, 'joined', JSON.stringify(ownFloor));
-      const ownArrival = await recordArrival({
+      const ownArrival = await checkIn({
         actingUserLinkId: away.manager,
         tenantId: away.tenantId,
         rooftopId: away.rooftopId,
@@ -282,7 +644,7 @@ describe(
         opportunityId: null,
         appointmentId: null,
       });
-      assert.equal(ownArrival.outcome, 'arrived', JSON.stringify(ownArrival));
+      assert.equal(ownArrival.outcome, 'checked_in', JSON.stringify(ownArrival));
 
       // Taking somebody off the floor is the same authority as putting them on.
       const wrongRelease = await releaseToFloor({
@@ -427,7 +789,7 @@ describe(
       assert.match(String((absent as { error: string }).error), /floor/i);
     });
 
-    test('one car, two salespeople: the second is refused, and told which drive has it', async () => {
+    test('one car, two salespeople: the second is refused, and told nothing about the first', async () => {
       const f = await seedFloor(2, 2);
 
       // Two opportunities at the same rooftop, and one car both want.
@@ -435,21 +797,21 @@ describe(
 
       // BOTH DRIVES ARE STARTED AT ONCE. One car cannot be in two places.
       const [one, two] = await Promise.all([
-        startDemonstration({
+        issueDemonstration({
           actingUserLinkId: f.sellers[0]!,
           tenantId: f.tenantId,
           opportunityId: world.opportunityIds[0]!,
           stockItemId: world.stockItemId,
-          driverPartyId: f.parties[0]!,
+          driverPartyId: world.partyIds[0]!,
           licenceVerified: true,
           visitId: null,
         }),
-        startDemonstration({
+        issueDemonstration({
           actingUserLinkId: f.sellers[1]!,
           tenantId: f.tenantId,
           opportunityId: world.opportunityIds[1]!,
           stockItemId: world.stockItemId,
-          driverPartyId: f.parties[1]!,
+          driverPartyId: world.partyIds[1]!,
           licenceVerified: true,
           visitId: null,
         }),
@@ -458,77 +820,210 @@ describe(
       const results = [one.outcome, two.outcome].sort();
       assert.deepEqual(
         results,
-        ['started', 'vehicle_out'],
+        ['issued', 'unavailable'],
         `one car, one drive — got ${JSON.stringify([one, two])}`,
       );
 
       const out = await query(
         `SELECT COUNT(*)::int AS n FROM demonstrations
-          WHERE tenant_id = $1 AND stock_item_id = $2 AND state = 'in_progress'`,
+          WHERE tenant_id = $1 AND stock_item_id = $2
+            AND state IN ('issued', 'in_progress')`,
         [f.tenantId, world.stockItemId],
       );
       assert.equal(Number((out.rows[0] as { n: number }).n), 1);
 
-      // THE REFUSAL NAMES THE DRIVE THAT HAS THE CAR, so the salesperson can go
-      // and find it rather than guess.
-      const refused = one.outcome === 'vehicle_out' ? one : two;
-      const started = one.outcome === 'started' ? one : two;
-      assert.equal(
-        (refused as { demonstrationId: string }).demonstrationId,
-        (started as { demonstration: { demonstrationId: string } }).demonstration.demonstrationId,
+      // THE REFUSAL DOES NOT LEAK, and this is the assertion that pins it.
+      //
+      // The loser learns which of their OWN inputs is busy — the vehicle — and
+      // nothing whatever about the record that holds it. An earlier revision of
+      // this train returned the winning demonstration's id so the salesperson
+      // "could go and find it"; that id belongs to another customer's drive,
+      // possibly at another salesperson's desk, and handing it over on a
+      // refusal is exactly the leak RT4-C1 closed. The refusal payload is
+      // checked field by field rather than by eye.
+      const refused = one.outcome === 'unavailable' ? one : two;
+      const issued = one.outcome === 'issued' ? one : two;
+      assert.deepEqual(
+        refused,
+        { outcome: 'unavailable', conflict: 'vehicle' },
+        'the refusal carried something beyond which input was busy',
+      );
+      const winningId = (issued as { demonstration: { demonstrationId: string } }).demonstration
+        .demonstrationId;
+      assert.doesNotMatch(
+        JSON.stringify(refused),
+        new RegExp(winningId),
+        'the refusal named the other demonstration',
+      );
+      assert.doesNotMatch(
+        JSON.stringify(refused),
+        new RegExp(
+          world.partyIds[0]! + '|' + world.partyIds[1]! + '|' + f.sellers[0]! + '|' + f.sellers[1]!,
+        ),
+        'the refusal named a customer or an employee',
       );
     });
 
-    test('the database itself refuses a second drive, with the service out of the way', async () => {
+    test('the other two incompatible combinations are refused as neutrally', async () => {
       const f = await seedFloor(2, 2);
       const world = await oneCarTwoBuyers(f, VINS.shift()!);
-      const started = await startDemonstration({
+      const second = await oneCarTwoBuyers(f, VINS.shift()!);
+
+      const first = await issueDemonstration({
         actingUserLinkId: f.sellers[0]!,
         tenantId: f.tenantId,
         opportunityId: world.opportunityIds[0]!,
         stockItemId: world.stockItemId,
-        driverPartyId: f.parties[0]!,
+        driverPartyId: world.partyIds[0]!,
         licenceVerified: true,
+        accompaniedByUserLinkId: f.sellers[0]!,
         visitId: null,
       });
-      assert.equal(started.outcome, 'started', JSON.stringify(started));
+      assert.equal(first.outcome, 'issued', JSON.stringify(first));
 
-      // THE ADVISORY LOCK IS NOT THE LAST LINE OF DEFENCE, and this proves it.
+      // THE DRIVER. One person cannot be driving two cars — a second active
+      // drive for the same customer means somebody typed the wrong car, and
+      // nobody would know afterwards which record was the real one.
+      const sameDriver = await issueDemonstration({
+        actingUserLinkId: f.sellers[1]!,
+        tenantId: f.tenantId,
+        opportunityId: world.opportunityIds[0]!,
+        stockItemId: second.stockItemId,
+        driverPartyId: world.partyIds[0]!,
+        licenceVerified: true,
+        accompaniedByUserLinkId: f.sellers[1]!,
+        visitId: null,
+      });
+      assert.deepEqual(sameDriver, { outcome: 'unavailable', conflict: 'driver' });
+
+      // THE SALESPERSON RIDING ALONG. One employee cannot accompany two drives.
+      const sameEscort = await issueDemonstration({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId: second.opportunityIds[1]!,
+        stockItemId: second.stockItemId,
+        driverPartyId: second.partyIds[1]!,
+        licenceVerified: true,
+        accompaniedByUserLinkId: f.sellers[0]!,
+        visitId: null,
+      });
+      assert.deepEqual(sameEscort, { outcome: 'unavailable', conflict: 'escort' });
+
+      // CONTROL: a different car, a different driver and a different escort all
+      // succeed, so the two refusals were about the collisions and not about the
+      // command being broken.
+      const clean = await issueDemonstration({
+        actingUserLinkId: f.sellers[1]!,
+        tenantId: f.tenantId,
+        opportunityId: second.opportunityIds[1]!,
+        stockItemId: second.stockItemId,
+        driverPartyId: second.partyIds[1]!,
+        licenceVerified: true,
+        accompaniedByUserLinkId: f.sellers[1]!,
+        visitId: null,
+      });
+      assert.equal(clean.outcome, 'issued', JSON.stringify(clean));
+
+      // …and exactly two cars are out, not three.
+      const active = await query(
+        `SELECT COUNT(*)::int AS n FROM demonstrations
+          WHERE tenant_id = $1 AND state IN ('issued', 'in_progress')`,
+        [f.tenantId],
+      );
+      assert.equal(Number((active.rows[0] as { n: number }).n), 2);
+    });
+
+    test('the backstop keys refuse duplicates with every service stepped round', async () => {
+      const f = await seedFloor(2, 2);
+      const world = await oneCarTwoBuyers(f, VINS.shift()!);
+
+      // ── the four keys, and why they are only testable from here ───────────
       //
-      // The lock lives in the service, so a future caller reaching the table by
-      // another route — a script, a repair, a second service written next year
-      // — would go straight past it. `uq_demonstrations_vehicle_out` is what
-      // makes one car in two places IMPOSSIBLE rather than merely serialized,
-      // and the only way to test a backstop is to step round the thing in
-      // front of it, which is what this deliberate bypass does.
+      // Each of these is checked by its service FIRST, so a caller coming
+      // through `/api/sales` never reaches the key: the service answers with a
+      // sentence instead. That is the right order for a person — and it means
+      // the keys themselves can only be exercised by stepping ROUND the
+      // services, which is what a worker, a repair script or a service written
+      // next year would effectively do. Each bypass below is declared as the
+      // adversary it stands in for.
+      const visit = await checkIn({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        rooftopId: f.rooftopId,
+        partyId: world.partyIds[0]!,
+        opportunityId: null,
+        appointmentId: null,
+      });
+      assert.equal(visit.outcome, 'checked_in', JSON.stringify(visit));
+
+      // 1. ONE ACTIVE VISIT PER CUSTOMER.
       await assert.rejects(
         () =>
           fixtureAuthorizationStateWrite(
             'adversarial-bypass-attempt',
-            `INSERT INTO demonstrations
-               (tenant_id, rooftop_id, opportunity_id, stock_item_id, driver_party_id,
-                accompanied_by_user_link_id, licence_verified,
-                created_by_user_link_id, updated_by_user_link_id)
-             VALUES ($1, $2, $3, $4, $5, $6, true, $6, $6)`,
-            [
-              f.tenantId,
-              f.rooftopId,
-              world.opportunityIds[1]!,
-              world.stockItemId,
-              f.parties[1]!,
-              f.sellers[1]!,
-            ],
+            `INSERT INTO showroom_visits
+               (tenant_id, rooftop_id, party_id, created_by_user_link_id,
+                updated_by_user_link_id)
+             VALUES ($1, $2, $3, $4, $4)`,
+            [f.tenantId, f.rooftopId, world.partyIds[0]!, f.sellers[0]!],
           ),
+        /uq_showroom_visits_one_active/,
+        'the database let one customer hold two open visits',
+      );
+
+      const issued = await issueDemonstration({
+        actingUserLinkId: f.sellers[0]!,
+        tenantId: f.tenantId,
+        opportunityId: world.opportunityIds[0]!,
+        stockItemId: world.stockItemId,
+        driverPartyId: world.partyIds[0]!,
+        licenceVerified: true,
+        accompaniedByUserLinkId: f.sellers[0]!,
+        visitId: null,
+      });
+      assert.equal(issued.outcome, 'issued', JSON.stringify(issued));
+
+      const second = await oneCarTwoBuyers(f, VINS.shift()!);
+      const raw = (stockItemId: string, driverPartyId: string, escort: string): Promise<unknown> =>
+        fixtureAuthorizationStateWrite(
+          'adversarial-bypass-attempt',
+          `INSERT INTO demonstrations
+             (tenant_id, rooftop_id, opportunity_id, stock_item_id, driver_party_id,
+              accompanied_by_user_link_id, licence_verified, state,
+              created_by_user_link_id, updated_by_user_link_id)
+           VALUES ($1, $2, $3, $4, $5, $6, true, 'issued', $6, $6)`,
+          [f.tenantId, f.rooftopId, second.opportunityIds[0]!, stockItemId, driverPartyId, escort],
+        );
+
+      // 2. ONE ACTIVE DRIVE PER CAR.
+      await assert.rejects(
+        () => raw(world.stockItemId, second.partyIds[0]!, f.sellers[1]!),
         /uq_demonstrations_vehicle_out/,
         'the database let one car go out on two drives at once',
       );
 
-      const out = await query(
-        `SELECT COUNT(*)::int AS n FROM demonstrations
-          WHERE tenant_id = $1 AND stock_item_id = $2 AND state = 'in_progress'`,
-        [f.tenantId, world.stockItemId],
+      // 3. ONE ACTIVE DRIVE PER DRIVER.
+      await assert.rejects(
+        () => raw(second.stockItemId, world.partyIds[0]!, f.sellers[1]!),
+        /uq_demonstrations_driver_out/,
+        'the database let one person drive two cars at once',
       );
-      assert.equal(Number((out.rows[0] as { n: number }).n), 1);
+
+      // 4. ONE ACTIVE DRIVE PER ACCOMPANYING SALESPERSON.
+      await assert.rejects(
+        () => raw(second.stockItemId, second.partyIds[0]!, f.sellers[0]!),
+        /uq_demonstrations_escort_out/,
+        'the database let one employee ride along on two drives at once',
+      );
+
+      // …AND EXACTLY WHAT SHOULD BE THERE IS THERE.
+      const counts = await query(
+        `SELECT (SELECT COUNT(*)::int FROM showroom_visits WHERE tenant_id = $1) AS visits,
+                (SELECT COUNT(*)::int FROM demonstrations
+                  WHERE tenant_id = $1 AND state IN ('issued', 'in_progress')) AS active`,
+        [f.tenantId],
+      );
+      assert.deepEqual(counts.rows[0], { visits: 1, active: 1 });
     });
 
     test('the second drive really BLOCKS on the first — proven on pg_locks, not a timer', async () => {
@@ -547,24 +1042,24 @@ describe(
       try {
         await holder.query('BEGIN');
         await holder.query(`SELECT set_config('app.tenant_id', $1, true)`, [f.tenantId]);
-        const first = await startDemonstrationWithin(holder, {
+        const first = await issueDemonstrationWithin(holder, {
           actingUserLinkId: f.sellers[0]!,
           tenantId: f.tenantId,
           opportunityId: world.opportunityIds[0]!,
           stockItemId: world.stockItemId,
-          driverPartyId: f.parties[0]!,
+          driverPartyId: world.partyIds[0]!,
           licenceVerified: true,
           visitId: null,
         });
-        assert.equal(first.outcome, 'started', JSON.stringify(first));
+        assert.equal(first.outcome, 'issued', JSON.stringify(first));
 
         // The second attempt runs on its own connection while the first is held.
-        const contender = startDemonstration({
+        const contender = issueDemonstration({
           actingUserLinkId: f.sellers[1]!,
           tenantId: f.tenantId,
           opportunityId: world.opportunityIds[1]!,
           stockItemId: world.stockItemId,
-          driverPartyId: f.parties[1]!,
+          driverPartyId: world.partyIds[1]!,
           licenceVerified: true,
           visitId: null,
         }).finally(() => release.fire());
@@ -589,7 +1084,7 @@ describe(
         // Now let the first one commit; the second must find the car taken.
         await holder.query('COMMIT');
         const second = await contender;
-        assert.equal(second.outcome, 'vehicle_out', JSON.stringify(second));
+        assert.deepEqual(second, { outcome: 'unavailable', conflict: 'vehicle' });
       } finally {
         try {
           await holder.query('ROLLBACK');

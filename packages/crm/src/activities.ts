@@ -549,7 +549,34 @@ export async function setAppointmentState(input: {
   state: AppointmentState;
   reason?: string | null | undefined;
 }): Promise<AppointmentMoveOutcome> {
-  return withTenantTransaction(input.tenantId, async (tx) => {
+  return withTenantTransaction(input.tenantId, (tx) => setAppointmentStateWithin(tx, input));
+}
+
+/**
+ * The same move, inside the CALLER'S transaction.
+ *
+ * The `X` / `XWithin` pair every other service in this package already comes in,
+ * added here for the same reason the others have it: a caller whose own work
+ * must commit WITH the appointment move rather than beside it. Release Train
+ * 4's showroom check-in is that caller — validating a booking and marking it
+ * kept has to be one atomic act, or a crash between them leaves a customer
+ * standing in the building against an appointment that still says `scheduled`.
+ *
+ * `setAppointmentState` above is now this function wrapped in a transaction, so
+ * there is exactly one implementation of the rules and no second one to drift.
+ */
+export async function setAppointmentStateWithin(
+  executor: Executor,
+  input: {
+    actingUserLinkId: string;
+    tenantId: string;
+    appointmentId: string;
+    expectedVersion: number;
+    state: AppointmentState;
+    reason?: string | null | undefined;
+  },
+): Promise<AppointmentMoveOutcome> {
+  return (async (tx: Executor) => {
     const actor = await requireActor(tx, input.actingUserLinkId);
     const existing = await tx.query(
       `SELECT ${APPOINTMENT_COLUMNS} FROM appointments
@@ -613,5 +640,5 @@ export async function setAppointmentState(input: {
       details: { lead_id: appointment.leadId, state: input.state },
     });
     return { outcome: 'moved' as const, appointment, mutation };
-  });
+  })(executor);
 }

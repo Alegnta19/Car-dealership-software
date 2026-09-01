@@ -654,7 +654,7 @@
           "required": true,
           "variants": [
             {
-              "sha256": "41175a23729861546b33fb1f130a0db4f574a843224d8500c36d3959c2dbb74e",
+              "sha256": "d390a60dfd8d305616050a749561e234e37973a58201c841918dc010f9b69345",
               "note": "the committed RELEASE TRAIN 4 sales-pipeline-and-showroom migration, carried unmutated while a 057 control body is probed"
             }
           ]

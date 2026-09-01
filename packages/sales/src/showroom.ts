@@ -1,23 +1,31 @@
 /**
- * RELEASE TRAIN 4 — THE SHOWROOM FLOOR.
+ * RELEASE TRAIN 4 — THE SHOWROOM FLOOR, AND THE PEOPLE STANDING ON IT.
  *
- * TWO THINGS LIVE HERE and they are one subject: who is up next, and what
- * happened to the person who walked in.
+ * ONE PERSON IS IN THE BUILDING OR THEY ARE NOT. A customer has at most one
+ * active visit, and that is enforced in TWO places on purpose: the service says
+ * it so the caller gets a sentence and a converged answer, and
+ * `uq_showroom_visits_one_active` says it so a retry with a different request
+ * key, a second till, a script or a future integration cannot get round it. Two
+ * open visits is not a busy showroom — it is a board that double-counts a
+ * customer, a wait timer measuring the wrong arrival, and two salespeople each
+ * believing they have them.
  *
- *   * THE ROTATION IS A RECORD, NOT A HABIT. Which salesperson takes the next
- *     customer is the single most argued-about fact on a showroom floor, and a
- *     platform that leaves it to whoever reaches the door first has taken a
- *     side. Taking a turn advances the queue under a lock, so two receptionists
- *     greeting two customers at the same moment cannot hand both to the same
- *     person — or skip somebody's turn.
- *   * A VISIT IS A LIFECYCLE, and its stamps are one-way. A visit that was
- *     greeted keeps that fact after the customer leaves, because "how long did
- *     they wait" is a question somebody asks the next morning.
+ * CHECK-IN CONVERGES RATHER THAN COLLIDES. Repeated check-ins and genuinely
+ * concurrent ones — including ones carrying DIFFERENT request keys, which the
+ * idempotency layer cannot merge because it has never seen them before — all
+ * end on the same visit. The business key is the customer, not the request.
  *
- * A WALK-IN NEEDS NO OPPORTUNITY. Most people who come through the door have
- * never been a lead, and requiring an opportunity first would make the platform
- * refuse the most ordinary thing a showroom does. The visit can be attached to
- * one later, when there is one.
+ * AN APPOINTMENT IS VALIDATED AND MARKED KEPT ATOMICALLY. Release Train 3 owns
+ * appointments, so the marking goes through RT3's own service inside THIS
+ * transaction: a crash between "they arrived" and "the booking was kept" would
+ * otherwise leave a customer in the building against an appointment that still
+ * says scheduled, and the kept-appointment figures a dealership manages by
+ * would quietly under-count.
+ *
+ * GREETING AND ACCEPTANCE ARE DIFFERENT ACTS. Greeting is the door, and the up
+ * rotation decides who does it. Acceptance is a salesperson saying this one is
+ * mine to work — which a manager greeting somebody they will not sell to does
+ * not do, and which a salesperson may decline.
  */
 import { withTenantTransaction, type Executor } from '@dealer/database';
 import {
@@ -26,12 +34,13 @@ import {
   requireActor,
   type MutationResult,
 } from '@dealer/identity-access';
+import { setAppointmentStateWithin } from '@dealer/crm';
 
 interface Row {
   [key: string]: unknown;
 }
 
-// ── the floor rotation ──────────────────────────────────────────────────────
+// ── the up rotation ─────────────────────────────────────────────────────────
 
 export type RotationStatus = 'available' | 'with_customer' | 'unavailable';
 
@@ -45,8 +54,8 @@ export interface RotationEntry {
   readonly authorizationVersion: number;
 }
 
-const ROTATION_COLUMNS = `rotation_id, rooftop_id, user_link_id, position, status, last_taken_at,
-       authorization_version`;
+const ROTATION_COLUMNS = `rotation_id, rooftop_id, user_link_id, position, status,
+       last_taken_at, authorization_version`;
 
 function mapRotation(row: Row): RotationEntry {
   return {
@@ -67,26 +76,14 @@ export type RotationOutcome =
   | { outcome: 'invalid'; error: string };
 
 /**
- * Puts a salesperson on the floor, at the back of the queue.
- *
- * They must be able to REACH the rooftop — the same rule opportunity assignment
- * follows. Somebody in the rotation for a store they cannot see would be handed
- * customers the policy engine then tells them do not exist.
- */
-/**
  * DOES THIS PERSON WORK THIS SHOWROOM?
  *
- * Three commands on this surface — putting somebody on the floor, taking them
- * off it, and recording an arrival — CREATE a row rather than acting on one, so
- * their actions name no `resourceType` and the policy engine has nothing to
- * resolve. The rooftop arrives as a plain field in the request body, and a
- * field in a request body is a claim, not an authorization: without this check
- * a manager at one store could seed the up-list at another store, or plant a
- * walk-in on somebody else's showroom board.
- *
- * The engine still decides WHETHER this actor may run the command at all. This
- * decides WHERE, from the same effective bindings the engine reads, so the two
- * cannot disagree.
+ * The commands that CREATE a row — joining the floor, leaving it, checking a
+ * customer in — name no `resourceType`, so the policy engine has nothing to
+ * resolve and the rooftop arrives as a plain field. A field in a request body
+ * is a claim, not an authorization. The engine still decides WHETHER this actor
+ * may run the command; this decides WHERE, from the same effective bindings the
+ * engine reads, so the two cannot disagree.
  */
 async function reaches(tenantId: string, userLinkId: string, rooftopId: string): Promise<boolean> {
   const permitted = await permittedRooftopIds(tenantId, userLinkId);
@@ -157,7 +154,7 @@ export async function listFloor(tenantId: string, rooftopId: string): Promise<Ro
     const found = await tx.query(
       `SELECT ${ROTATION_COLUMNS} FROM floor_rotations
         WHERE tenant_id = $1 AND rooftop_id = $2
-        ORDER BY status <> 'available', position`,
+        ORDER BY position`,
       [tenantId, rooftopId],
     );
     return (found.rows as Row[]).map(mapRotation);
@@ -279,6 +276,25 @@ export async function releaseToFloor(input: {
   });
 }
 
+/** Frees whoever was with this visit, if the floor still has them busy. */
+async function releaseWithin(
+  executor: Executor,
+  tenantId: string,
+  rooftopId: string,
+  userLinkId: string | null,
+  actor: string,
+): Promise<void> {
+  if (userLinkId === null) return;
+  await executor.query(
+    `UPDATE floor_rotations
+        SET status = 'available', updated_by_user_link_id = $4, updated_at = NOW(),
+            authorization_version = authorization_version + 1
+      WHERE tenant_id = $1 AND rooftop_id = $2 AND user_link_id = $3
+        AND status = 'with_customer'`,
+    [tenantId, rooftopId, userLinkId, actor],
+  );
+}
+
 // ── the visit ───────────────────────────────────────────────────────────────
 
 export type VisitState = 'arrived' | 'greeted' | 'with_salesperson' | 'departed';
@@ -290,43 +306,78 @@ export interface VisitView {
   readonly opportunityId: string | null;
   readonly appointmentId: string | null;
   readonly greetedByUserLinkId: string | null;
+  readonly acceptedByUserLinkId: string | null;
   readonly state: VisitState;
   readonly arrivedAt: string;
   readonly greetedAt: string | null;
+  readonly acceptedAt: string | null;
   readonly departedAt: string | null;
   readonly authorizationVersion: number;
 }
 
 const VISIT_COLUMNS = `visit_id, rooftop_id, party_id, opportunity_id, appointment_id,
-       greeted_by_user_link_id, state, arrived_at, greeted_at, departed_at,
-       authorization_version`;
+       greeted_by_user_link_id, accepted_by_user_link_id, state, arrived_at, greeted_at,
+       accepted_at, departed_at, authorization_version`;
 
 export function mapVisit(row: Row): VisitView {
   const iso = (v: unknown): string | null =>
-    v === null ? null : new Date(v as string).toISOString();
+    v === null || v === undefined ? null : new Date(v as string).toISOString();
+  const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
   return {
     visitId: String(row.visit_id),
     rooftopId: String(row.rooftop_id),
     partyId: String(row.party_id),
-    opportunityId: row.opportunity_id === null ? null : String(row.opportunity_id),
-    appointmentId: row.appointment_id === null ? null : String(row.appointment_id),
-    greetedByUserLinkId:
-      row.greeted_by_user_link_id === null ? null : String(row.greeted_by_user_link_id),
+    opportunityId: str(row.opportunity_id),
+    appointmentId: str(row.appointment_id),
+    greetedByUserLinkId: str(row.greeted_by_user_link_id),
+    acceptedByUserLinkId: str(row.accepted_by_user_link_id),
     state: String(row.state) as VisitState,
     arrivedAt: new Date(row.arrived_at as string).toISOString(),
     greetedAt: iso(row.greeted_at),
+    acceptedAt: iso(row.accepted_at),
     departedAt: iso(row.departed_at),
     authorizationVersion: Number(row.authorization_version),
   };
 }
 
-export type ArrivalOutcome =
-  | { outcome: 'arrived'; visit: VisitView; mutation: MutationResult }
+export type CheckInOutcome =
+  | {
+      outcome: 'checked_in';
+      visit: VisitView;
+      appointmentKept: boolean;
+      mutation: MutationResult;
+    }
+  | { outcome: 'already_here'; visit: VisitView; appointmentKept: boolean }
   | { outcome: 'not_found' }
   | { outcome: 'invalid'; error: string };
 
-/** Somebody walked in. Nothing else is required yet — not even a reason. */
-export async function recordArrivalWithin(
+/** The advisory-lock key a check-in serializes on. Derived, never supplied. */
+function checkInKey(tenantId: string, partyId: string): string {
+  return `sales.showroom.checkin:${tenantId}:${partyId}`;
+}
+
+/**
+ * A CUSTOMER IS IN THE BUILDING.
+ *
+ * ── converging, and why the request key is not enough ──────────────────────
+ *
+ * The idempotency layer merges two requests carrying the SAME key. It cannot
+ * merge two carrying different ones — a receptionist checking somebody in at
+ * the desk while a salesperson does the same on a tablet are two honest
+ * requests with two honest keys, and both are the same arrival. So the
+ * convergence is on the BUSINESS key: this customer, active. The advisory lock
+ * serializes the racing pair and the unique index holds for any caller that
+ * never took it.
+ *
+ * ── the appointment, validated and marked kept in one act ──────────────────
+ *
+ * A booking that was completed, cancelled or marked a no-show is not a booking
+ * this arrival can be against, and saying so is the point: a no-show that can
+ * be checked in an hour later makes the no-show figure a guess. A valid one is
+ * marked kept through Release Train 3's own service inside this transaction, so
+ * the arrival and the kept booking commit together or not at all.
+ */
+export async function checkInWithin(
   executor: Executor,
   input: {
     actingUserLinkId: string;
@@ -336,35 +387,64 @@ export async function recordArrivalWithin(
     opportunityId?: string | null | undefined;
     appointmentId?: string | null | undefined;
   },
-): Promise<ArrivalOutcome> {
+): Promise<CheckInOutcome> {
   const actor = await requireActor(executor, input.actingUserLinkId);
   if (!(await reaches(input.tenantId, actor, input.rooftopId))) {
     return { outcome: 'invalid', error: 'you do not work at that rooftop' };
   }
 
-  // An attached opportunity must belong to THIS rooftop, or the floor board
-  // would show a customer standing in a showroom their record is not in.
+  await executor.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+    checkInKey(input.tenantId, input.partyId),
+  ]);
+
+  // ONE ACTIVE VISIT. A customer already in the building is the SAME arrival,
+  // whatever request key asked, and the answer is that visit.
+  const active = await executor.query(
+    `SELECT ${VISIT_COLUMNS} FROM showroom_visits
+      WHERE tenant_id = $1 AND party_id = $2 AND state <> 'departed'`,
+    [input.tenantId, input.partyId],
+  );
+  if (active.rows.length > 0) {
+    const visit = mapVisit(active.rows[0] as Row);
+    return {
+      outcome: 'already_here',
+      visit,
+      appointmentKept: visit.appointmentId !== null,
+    };
+  }
+
+  const party = await executor.query(
+    `SELECT status FROM parties WHERE tenant_id = $1 AND party_id = $2`,
+    [input.tenantId, input.partyId],
+  );
+  if (party.rows.length === 0) return { outcome: 'not_found' };
+
+  // An attached opportunity must belong to THIS rooftop and THIS customer, or
+  // the floor board would show somebody standing in a showroom their record is
+  // not in, against a deal that is not theirs.
   if (input.opportunityId != null) {
     const owner = await executor.query(
-      `SELECT rooftop_id FROM opportunities WHERE tenant_id = $1 AND opportunity_id = $2`,
+      `SELECT rooftop_id, party_id FROM opportunities
+        WHERE tenant_id = $1 AND opportunity_id = $2`,
       [input.tenantId, input.opportunityId],
     );
     if (owner.rows.length === 0) return { outcome: 'not_found' };
-    if (String((owner.rows[0] as Row).rooftop_id) !== input.rooftopId) {
+    const row = owner.rows[0] as Row;
+    if (String(row.rooftop_id) !== input.rooftopId) {
       return { outcome: 'invalid', error: 'that opportunity belongs to a different rooftop' };
+    }
+    if (String(row.party_id) !== input.partyId) {
+      return { outcome: 'invalid', error: 'that opportunity belongs to a different customer' };
     }
   }
 
-  // AN APPOINTMENT IS A CLAIM ABOUT WHO WAS EXPECTED AND WHERE. Accepting the
-  // id unchecked would let one customer's arrival be recorded against another
-  // customer's booking, at another rooftop — and the CRM's kept-appointment
-  // figures are computed from exactly this link, so a wrong one is not a
-  // cosmetic error. The appointment must be at THIS rooftop and belong to THIS
-  // customer; anything else is a caller's mistake, not an arrival.
+  // ── the appointment ──────────────────────────────────────────────────────
+  let appointmentKept = false;
   if (input.appointmentId != null) {
     const booked = await executor.query(
-      `SELECT rooftop_id, party_id, state FROM appointments
-        WHERE tenant_id = $1 AND appointment_id = $2`,
+      `SELECT rooftop_id, party_id, state, authorization_version FROM appointments
+        WHERE tenant_id = $1 AND appointment_id = $2
+        FOR UPDATE`,
       [input.tenantId, input.appointmentId],
     );
     if (booked.rows.length === 0) return { outcome: 'not_found' };
@@ -375,9 +455,27 @@ export async function recordArrivalWithin(
     if (String(appointment.party_id) !== input.partyId) {
       return { outcome: 'invalid', error: 'that appointment was booked for somebody else' };
     }
-    if (String(appointment.state) === 'cancelled') {
-      return { outcome: 'invalid', error: 'that appointment was cancelled' };
+    const state = String(appointment.state);
+    if (state !== 'scheduled' && state !== 'confirmed') {
+      return {
+        outcome: 'invalid',
+        error: `that appointment is already ${state}, so nobody can be checked in against it`,
+      };
     }
+    const kept = await setAppointmentStateWithin(executor, {
+      actingUserLinkId: actor,
+      tenantId: input.tenantId,
+      appointmentId: input.appointmentId,
+      expectedVersion: Number(appointment.authorization_version),
+      state: 'completed',
+    });
+    if (kept.outcome !== 'moved') {
+      return {
+        outcome: 'invalid',
+        error: 'that appointment could not be marked kept, so the arrival was not recorded',
+      };
+    }
+    appointmentKept = true;
   }
 
   const written = await executor.query(
@@ -401,6 +499,13 @@ export async function recordArrivalWithin(
      VALUES ($1, $2, 'arrived', $3)`,
     [input.tenantId, visit.visitId, actor],
   );
+  if (appointmentKept) {
+    await executor.query(
+      `INSERT INTO visit_events (tenant_id, visit_id, event_type, note, actor_user_link_id)
+       VALUES ($1, $2, 'appointment_kept', 'they turned up for their booking', $3)`,
+      [input.tenantId, visit.visitId, actor],
+    );
+  }
   const mutation = await recordMutation(executor, {
     tenantId: input.tenantId,
     entityType: 'showroom_visit',
@@ -408,20 +513,24 @@ export async function recordArrivalWithin(
     eventType: 'sales.visit.arrived',
     actingUserLinkId: actor,
     authorizationVersion: visit.authorizationVersion,
-    details: { rooftop_id: input.rooftopId, had_appointment: input.appointmentId != null },
+    details: {
+      rooftop_id: input.rooftopId,
+      opportunity_id: visit.opportunityId,
+      appointment_kept: appointmentKept,
+    },
   });
-  return { outcome: 'arrived', visit, mutation };
+  return { outcome: 'checked_in', visit, appointmentKept, mutation };
 }
 
-export async function recordArrival(input: {
+export async function checkIn(input: {
   actingUserLinkId: string;
   tenantId: string;
   rooftopId: string;
   partyId: string;
   opportunityId?: string | null | undefined;
   appointmentId?: string | null | undefined;
-}): Promise<ArrivalOutcome> {
-  return withTenantTransaction(input.tenantId, (tx) => recordArrivalWithin(tx, input));
+}): Promise<CheckInOutcome> {
+  return withTenantTransaction(input.tenantId, (tx) => checkInWithin(tx, input));
 }
 
 export type GreetOutcome =
@@ -445,8 +554,10 @@ export type GreetOutcome =
  * a customer without advancing the queue — and the second one is how the same
  * salesperson ends up taking every walk-in of the afternoon.
  *
- * A named salesperson skips the rotation, which a manager sometimes must do;
- * that it was an override rather than a turn is recorded either way.
+ * A named salesperson skips the rotation, which a manager sometimes must do,
+ * and must still be ON the floor and free: being allowed to work a rooftop is
+ * not the same as standing on it, and an override that skipped the rotation
+ * write would leave the up-list believing that person was still available.
  */
 export async function greetVisit(input: {
   actingUserLinkId: string;
@@ -478,14 +589,9 @@ export async function greetVisit(input: {
       if (greeter === null) return { outcome: 'nobody_available' as const };
       fromRotation = true;
     } else {
-      const reach = await permittedRooftopIds(input.tenantId, greeter);
-      if (!reach.includes(current.rooftopId)) {
+      if (!(await reaches(input.tenantId, greeter, current.rooftopId))) {
         return { outcome: 'invalid' as const, error: 'that employee does not work this rooftop' };
       }
-      // BEING ALLOWED TO WORK THIS FLOOR IS NOT THE SAME AS BEING ON IT. A
-      // manager naming somebody who went home hands a customer to an empty
-      // desk; and if the override skipped the rotation write, the up-list would
-      // still think that person was free and give them a second walk-in.
       const claimed = await claimNamedTurnWithin(
         tx,
         input.tenantId,
@@ -543,16 +649,103 @@ export async function greetVisit(input: {
   });
 }
 
-export type VisitCloseOutcome =
-  | { outcome: 'departed'; visit: VisitView; mutation: MutationResult }
+export type VisitAcceptOutcome =
+  | { outcome: 'accepted'; visit: VisitView; mutation: MutationResult }
+  | { outcome: 'already_accepted'; visit: VisitView }
   | { outcome: 'version_conflict'; currentVersion: number }
   | { outcome: 'not_found' }
   | { outcome: 'invalid'; error: string };
 
 /**
- * The customer left. The salesperson who had them goes back on the floor in the
- * same transaction, because a rotation that only advances is a rotation that
- * empties.
+ * THE SALESPERSON TAKES THE CUSTOMER ON, explicitly and in their own name.
+ *
+ * Greeting is the door and a manager can do it. This is the separate act of a
+ * salesperson saying "this one is mine to work", which is what the floor board
+ * means by `with_salesperson` and what a customer means when they ask who they
+ * are dealing with. Replaying it converges rather than refusing.
+ */
+export async function acceptVisit(input: {
+  actingUserLinkId: string;
+  tenantId: string;
+  visitId: string;
+  expectedVersion: number;
+}): Promise<VisitAcceptOutcome> {
+  return withTenantTransaction(input.tenantId, async (tx) => {
+    const actor = await requireActor(tx, input.actingUserLinkId);
+    const existing = await tx.query(
+      `SELECT ${VISIT_COLUMNS} FROM showroom_visits
+        WHERE tenant_id = $1 AND visit_id = $2 FOR UPDATE`,
+      [input.tenantId, input.visitId],
+    );
+    if (existing.rows.length === 0) return { outcome: 'not_found' as const };
+    const current = mapVisit(existing.rows[0] as Row);
+    if (current.acceptedByUserLinkId === actor) {
+      return { outcome: 'already_accepted' as const, visit: current };
+    }
+    if (current.state === 'departed') {
+      return { outcome: 'invalid' as const, error: 'that customer has already left' };
+    }
+    if (current.state === 'arrived') {
+      return {
+        outcome: 'invalid' as const,
+        error: 'greet the customer before taking them on',
+      };
+    }
+    if (current.acceptedByUserLinkId !== null) {
+      return {
+        outcome: 'invalid' as const,
+        error: 'another salesperson has already taken this customer on',
+      };
+    }
+    if (current.authorizationVersion !== input.expectedVersion) {
+      return { outcome: 'version_conflict' as const, currentVersion: current.authorizationVersion };
+    }
+    if (!(await reaches(input.tenantId, actor, current.rooftopId))) {
+      return { outcome: 'not_found' as const };
+    }
+
+    const written = await tx.query(
+      `UPDATE showroom_visits
+          SET state = 'with_salesperson', accepted_at = NOW(), accepted_by_user_link_id = $3,
+              updated_by_user_link_id = $3, updated_at = NOW(),
+              authorization_version = authorization_version + 1
+        WHERE tenant_id = $1 AND visit_id = $2 AND authorization_version = $4
+        RETURNING ${VISIT_COLUMNS}`,
+      [input.tenantId, input.visitId, actor, input.expectedVersion],
+    );
+    if (written.rows.length === 0) {
+      return { outcome: 'version_conflict' as const, currentVersion: current.authorizationVersion };
+    }
+    const visit = mapVisit(written.rows[0] as Row);
+    await tx.query(
+      `INSERT INTO visit_events (tenant_id, visit_id, event_type, note, actor_user_link_id)
+       VALUES ($1, $2, 'accepted', 'took the customer on', $3)`,
+      [input.tenantId, input.visitId, actor],
+    );
+    const mutation = await recordMutation(tx, {
+      tenantId: input.tenantId,
+      entityType: 'showroom_visit',
+      entityId: visit.visitId,
+      eventType: 'sales.visit.accepted',
+      actingUserLinkId: actor,
+      authorizationVersion: visit.authorizationVersion,
+      details: { accepted_by: actor },
+    });
+    return { outcome: 'accepted' as const, visit, mutation };
+  });
+}
+
+export type VisitCloseOutcome =
+  | { outcome: 'departed'; visit: VisitView; mutation: MutationResult }
+  | { outcome: 'already_departed'; visit: VisitView }
+  | { outcome: 'version_conflict'; currentVersion: number }
+  | { outcome: 'not_found' }
+  | { outcome: 'invalid'; error: string };
+
+/**
+ * THE CUSTOMER HAS GONE, and whoever was with them goes back on the floor in
+ * the same transaction. A floor that leaks people is a floor that stops giving
+ * out turns.
  */
 export async function departVisit(input: {
   actingUserLinkId: string;
@@ -571,11 +764,28 @@ export async function departVisit(input: {
     if (existing.rows.length === 0) return { outcome: 'not_found' as const };
     const current = mapVisit(existing.rows[0] as Row);
     if (current.state === 'departed') {
-      return { outcome: 'invalid' as const, error: 'this visit already ended' };
+      return { outcome: 'already_departed' as const, visit: current };
     }
     if (current.authorizationVersion !== input.expectedVersion) {
       return { outcome: 'version_conflict' as const, currentVersion: current.authorizationVersion };
     }
+
+    // A CAR CANNOT STILL BE OUT. Letting a customer "leave" while a
+    // demonstration is active would close the visit that explains where the
+    // vehicle went.
+    const out = await tx.query(
+      `SELECT 1 FROM demonstrations
+        WHERE tenant_id = $1 AND visit_id = $2 AND state IN ('issued', 'in_progress')
+        LIMIT 1`,
+      [input.tenantId, input.visitId],
+    );
+    if (out.rows.length > 0) {
+      return {
+        outcome: 'invalid' as const,
+        error: 'a car is still out on this visit — close the demonstration first',
+      };
+    }
+
     const written = await tx.query(
       `UPDATE showroom_visits
           SET state = 'departed', departed_at = NOW(),
@@ -594,16 +804,13 @@ export async function departVisit(input: {
        VALUES ($1, $2, 'departed', $3, $4)`,
       [input.tenantId, input.visitId, input.note ?? null, actor],
     );
-    if (current.greetedByUserLinkId !== null) {
-      await tx.query(
-        `UPDATE floor_rotations
-            SET status = 'available', updated_by_user_link_id = $4, updated_at = NOW(),
-                authorization_version = authorization_version + 1
-          WHERE tenant_id = $1 AND rooftop_id = $2 AND user_link_id = $3
-            AND status = 'with_customer'`,
-        [input.tenantId, current.rooftopId, current.greetedByUserLinkId, actor],
-      );
-    }
+    await releaseWithin(
+      tx,
+      input.tenantId,
+      visit.rooftopId,
+      visit.acceptedByUserLinkId ?? visit.greetedByUserLinkId,
+      actor,
+    );
     const mutation = await recordMutation(tx, {
       tenantId: input.tenantId,
       entityType: 'showroom_visit',
