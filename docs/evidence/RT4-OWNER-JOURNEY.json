@@ -1,9 +1,375 @@
 {
-  "order": "Master Blueprint Section 14.3 Part B (FBL-100) — persisted browser/DOM owner journey",
-  "how_it_was_driven": "The REAL console, served by the REAL application, against a REAL database, behind a REAL cookie login. The browser walked `GET /auth/login` and `GET /auth/callback` itself and received its session cookie from the production callback route; nothing fabricated a session row. Only the identity PROVIDER is replaced, at the seam the shipped code already exposes (`useIdentityProviderForTests`): there is no WorkOS to call, and the fake signs genuine tokens with the local issuer so the production verification path — nonce binding included — runs unchanged. Every step below was performed by clicking the console's OWN buttons and filling its OWN form controls, so the handlers that ran are the ones that ship, and each stage records the DOM that resulted. The in-app browser pane does not composite in this environment, so the clicks were dispatched programmatically onto the real DOM elements and the rendered DOM was read back; what is NOT proved here is the pixel-level pointer path, and that is stated rather than glossed.",
-  "operator": "one person holding sales_manager, salesperson, bdc_agent and inventory_manager — the owner of a small store, who runs the floor and works customers on it",
-  "what_the_world_held_before_the_walk": "One rooftop (Downtown), one car acquired through Release Train 2's own service (stock A1234), one lead captured, qualified and handed to sales through Release Train 3's, and the operator on the floor rotation. Every row was made by the service that owns it; nothing was planted.",
-  "navigation_rendered": [
+  "stages": [
+    {
+      "stage": "1. the showroom, before anybody arrives",
+      "hash": "#/showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "2 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 2 On the floor, free 0 Cars out on drives Expected today Somebody walked in CUSTOMER DUE FOR Marta Silva 9/1/2026, 12:32:51 PM test drive They are here In the showroom Nobody is in the building right now. The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 0cd6f632 available — 2 staff 91299ef8 available —"
+    },
+    {
+      "stage": "2a. the check-in toast",
+      "toast": "Checked in, booking kept"
+    },
+    {
+      "stage": "2. checked in against the booking, which is now kept",
+      "hash": "#/showroom",
+      "cards": [
+        "1 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "2 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 1 Waiting to be greeted 0 With a salesperson 2 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom CUSTOMER WAITING STATE WITH Marta Silva just now Waiting unassigned GreetThey have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 0cd6f632 available — 2 staff 91299ef8 available —"
+    },
+    {
+      "stage": "3a. the greeting toast",
+      "toast": "Next up took the customer"
+    },
+    {
+      "stage": "3. greeted — the up-list gave the turn",
+      "hash": "#/showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom CUSTOMER WAITING STATE WITH Marta Silva just now Greeted staff 0cd6f632 I will take themThey have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 91299ef8 available — 2 staff 0cd6f632 with customer 9/1/2026, 12:03:30 PM Back on the floor"
+    },
+    {
+      "stage": "4. taken on — acceptance is a separate act from greeting",
+      "hash": "#/showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "1 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 1 With a salesperson 1 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom CUSTOMER WAITING STATE WITH Marta Silva just now With salesperson staff 0cd6f632 They have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 91299ef8 available — 2 staff 0cd6f632 with customer 9/1/2026, 12:03:30 PM Back on the floor"
+    },
+    {
+      "stage": "5. the pipeline, and the figures this train does not have",
+      "hash": "#/deals",
+      "cards": [
+        "0 — Open deals",
+        "0 — Negotiating",
+        "0 — Overdue actions",
+        "0 — Waiting on the desk"
+      ],
+      "text": "Deals 0 Open deals 0 Negotiating 0 Overdue actions 0 Waiting on the desk Gross, commission, ROI and closing ratio: not available yet. These screens carry no figure because nothing is priced or desked until FBL-120 (Appraisal and desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff Nothing in the pipeline. Deals arrive when the BDC hands a qualified lead over."
+    },
+    {
+      "stage": "6a. the handoffs waiting, as a list rather than a text box",
+      "offered": [
+        "Marta Silva · Downtown · handed over 1m ago"
+      ]
+    },
+    {
+      "stage": "6. the opportunity, received off the list",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car Nothing shortlisted yet. What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt"
+    },
+    {
+      "stage": "7a. the rooftop-filtered chooser",
+      "offered": [
+        "A1234 · 2003",
+        "B5678 · 2003"
+      ]
+    },
+    {
+      "stage": "7. two cars shortlisted, both chosen from the list",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test driveThis is the one B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678"
+    },
+    {
+      "stage": "8. REFUSED — no car leaves without a licence check",
+      "toast": "[invalid_request] a test drive starts after the driver’s licence has been checked"
+    },
+    {
+      "stage": "9. keys issued — out, but not yet moving",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test driveThis is the one B5678 2003 considering Test driveThis is the one Out on a test drive STOCK STATE SINCE A1234 issued just now They have driven offThey are backSomething happened What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked"
+    },
+    {
+      "stage": "10. the car has left the lot",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test driveThis is the one B5678 2003 considering Test driveThis is the one Out on a test drive STOCK STATE SINCE A1234 in progress just now They are backSomething happened What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234"
+    },
+    {
+      "stage": "11. the car is back, and the shortlist says it was driven",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 demonstrated Test driveThis is the one B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it"
+    },
+    {
+      "stage": "12. they changed their mind — and both choices are on the timeline",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 the customer chose a different car"
+    },
+    {
+      "stage": "13. the negotiation form — every field, and no money among them",
+      "fields": [
+        "Who started itThe customerUs",
+        "What was discussed",
+        "Where it left offcounteredaccepteddeclinedadjourned",
+        "A manager was in the conversation"
+      ],
+      "mentions_money": false
+    },
+    {
+      "stage": "14a. the eligible managers, as a list",
+      "offered": [
+        "staff e4a0e8d3"
+      ]
+    },
+    {
+      "stage": "14b. the turnover toast",
+      "toast": "A manager has been brought in"
+    },
+    {
+      "stage": "14. a manager was brought in — a different person, chosen from the list",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task Nothing owed on this deal. Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 the customer chose a different car 9/1/2026, 1"
+    },
+    {
+      "stage": "15. something is owed, and the screen says what and when",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task WHAT DUE send the warranty booklet 9/2/2026, 4:05:00 PM DoneCall it off Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 t"
+    },
+    {
+      "stage": "16. REFUSED — a salesperson is not a manager",
+      "toast": "[not_found] Resource not found"
+    },
+    {
+      "stage": "17. the same deal, seen by the manager",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 0cd6f632 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task WHAT DUE send the warranty booklet 9/2/2026, 4:05:00 PM DoneCall it off Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 t"
+    },
+    {
+      "stage": "18a. who the manager may hand it to",
+      "offered": [
+        "staff 0cd6f632 · 1 open",
+        "staff 91299ef8 · 0 open",
+        "staff e4a0e8d3 · 0 open"
+      ]
+    },
+    {
+      "stage": "18b. the reassignment toast",
+      "toast": "Assigned"
+    },
+    {
+      "stage": "18. reassigned by the manager — a thing the salesperson was refused",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownreceived STAGE Received OWNER staff 91299ef8 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody In showroom Demonstrated Negotiating Following up Lost Owed next Add a task WHAT DUE send the warranty booklet 9/2/2026, 4:05:00 PM DoneCall it off Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 t"
+    },
+    {
+      "stage": "19. negotiating — and only the moves the machine admits are on the screen",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownnegotiating STAGE Negotiating OWNER staff 91299ef8 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM Give this deal to somebody Demonstrated Following up Ready to desk Lost Owed next Add a task WHAT DUE send the warranty booklet 9/2/2026, 4:05:00 PM DoneCall it off Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive B5678 2003 considering Test driveThis is the one What has happened Log something Negotiation round Get a manager 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/1/2026, 12:04:41 PM vehicle.selected: A1234 9/1/2026, 12:04:41 PM vehicle.stood down: B5678 the c"
+    },
+    {
+      "stage": "20a. what the console says the positive conclusion is",
+      "modalText": "Move to Ready to desk This hands them to appraisal and desking. It records that the customer committed to buying — nothing more. No price, no deal, no delivery, and no sale: those are FBL-120 and later. Note Hand to desking Cancel",
+      "note": "The only money words on this screen are in the sentence that says none of it happens yet."
+    },
+    {
+      "stage": "20b. the desking toast",
+      "toast": "Handed to appraisal and desking"
+    },
+    {
+      "stage": "20. handed to appraisal and desking — the end of this train's authority",
+      "hash": "#/opportunity/f7726101-2713-4aae-80fe-4f1f16d1602c",
+      "cards": [],
+      "text": "Opportunity Marta Silva Downtownready for desking STAGE Ready to desk OWNER staff 91299ef8 CAME FROM BDC handoff b62f05af OPENED 9/1/2026, 12:03:46 PM OUTCOME committed to purchase Handed to appraisal and desking. This customer committed to buying, and that fact has been passed on exactly once. No price, deal or delivery exists yet — those are FBL-120 and later, and this deal stays readable while they are built. Owed next WHAT DUE send the warranty booklet 9/2/2026, 4:05:00 PM DoneCall it off Cars they are looking at STOCK VEHICLE WHERE IT STANDS A1234 2003 selected B5678 2003 considering What has happened 9/1/2026, 12:03:46 PM assignment: manual_assignment established at receipt 9/1/2026, 12:04:01 PM vehicle.shortlisted: A1234 9/1/2026, 12:04:05 PM vehicle.shortlisted: B5678 9/1/2026, 12:04:18 PM demonstration.issued: A1234 keys issued, licence checked 9/1/2026, 12:04:20 PM demonstration.started: A1234 9/1/2026, 12:04:35 PM demonstration.returned: A1234 interested 9/1/2026, 12:04:35 PM vehicle.demonstrated: A1234 the customer drove it 9/1/2026, 12:04:38 PM vehicle.selected: B5678 9/"
+    },
+    {
+      "stage": "21. the manager’s reconciled board, and its money answer",
+      "sections": [
+        "rooftops",
+        "appointments",
+        "showroom",
+        "floor",
+        "pipeline",
+        "vehicles",
+        "demonstrations",
+        "negotiation",
+        "nextActions",
+        "dispositions",
+        "exceptions",
+        "revenueStatus",
+        "roiStatus",
+        "grossStatus",
+        "commissionStatus",
+        "closeStatus",
+        "pricingStatus",
+        "dealStatus"
+      ],
+      "moneyFieldsCarryingAValue": [],
+      "appointments": {
+        "expectedToday": 1,
+        "kept": 1,
+        "cancelled": 0,
+        "noShow": 0,
+        "stillExpected": 0
+      },
+      "pipeline": {
+        "open": 0,
+        "unowned": 0,
+        "received": 0,
+        "inShowroom": 0,
+        "demonstrated": 0,
+        "negotiating": 0,
+        "followUp": 0,
+        "readyForDesking": 1,
+        "lost": 0,
+        "medianAgeHours": null,
+        "stalledOverDay": 0
+      },
+      "demonstrations": {
+        "activeNow": 0,
+        "issuedToday": 1,
+        "returnedToday": 1,
+        "cancelledToday": 0,
+        "exceptions": 0
+      },
+      "nextActions": {
+        "open": 1,
+        "overdue": 0,
+        "dueToday": 0
+      },
+      "dispositions": {
+        "readyForDesking": 1,
+        "lost": 0,
+        "lostReasons": []
+      },
+      "exceptionKinds": []
+    },
+    {
+      "stage": "21b. the Deals screen as the manager sees it",
+      "hash": "#/deals",
+      "cards": [
+        "0 — Open deals",
+        "0 — Negotiating",
+        "0 — Overdue actions",
+        "1 — Waiting on the desk"
+      ],
+      "text": "Deals 0 Open deals 0 Negotiating 0 Overdue actions 1 Waiting on the desk Gross, commission, ROI and closing ratio: not available yet. These screens carry no figure because nothing is priced or desked until FBL-120 (Appraisal and desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff CUSTOMER STAGE OWNER SHOWROOM AGE NEXT Marta Silva ready for desking staff 91299ef8 Downtown 6m send the warranty booklet (9/2/2026, 4:05:00 PM) Open"
+    },
+    {
+      "stage": "22. the showroom with the customer still in it, and a car back on the lot",
+      "hash": "#/showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "1 — With a salesperson",
+        "1 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 1 With a salesperson 1 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom CUSTOMER WAITING STATE WITH Marta Silva 6m With salesperson staff 0cd6f632 They have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 91299ef8 available — 2 staff 0cd6f632 with customer 9/1/2026, 12:03:30 PM Back on the floor"
+    },
+    {
+      "stage": "23a. what departure asks for",
+      "modal": "Close out this visit What happened They have left Cancel"
+    },
+    {
+      "stage": "23b. departure",
+      "toast": "Visit closed — the salesperson is back on the floor"
+    },
+    {
+      "stage": "23. the floor after they leave",
+      "hash": "#/showroom",
+      "cards": [
+        "0 — Waiting to be greeted",
+        "0 — With a salesperson",
+        "2 — On the floor, free",
+        "0 — Cars out on drives"
+      ],
+      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 2 On the floor, free 0 Cars out on drives Expected today Somebody walked in Nobody is booked in around now. In the showroom Nobody is in the building right now. The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 91299ef8 available — 2 staff 0cd6f632 available 9/1/2026, 12:03:30 PM"
+    },
+    {
+      "stage": "24. the positive fact, asked for twice more with request keys nobody has seen",
+      "replay": {
+        "status": 403,
+        "body": {
+          "type": "urn:dealer:error:csrf_required",
+          "title": "Forbidden",
+          "status": 403,
+          "detail": "CSRF token missing or invalid",
+          "code": "csrf_required",
+          "instance": "/api/sales/opportunities/f7726101-2713-4aae-80fe-4f1f16d1602c/stage",
+          "requestId": "4d857638-041e-4b26-9fc2-f5856617b7c4",
+          "correlationId": "4d857638-041e-4b26-9fc2-f5856617b7c4"
+        }
+      },
+      "staleVersionReplay": {
+        "status": 403,
+        "body": {
+          "type": "urn:dealer:error:csrf_required",
+          "title": "Forbidden",
+          "status": 403,
+          "detail": "CSRF token missing or invalid",
+          "code": "csrf_required",
+          "instance": "/api/sales/opportunities/f7726101-2713-4aae-80fe-4f1f16d1602c/stage",
+          "requestId": "74389259-5914-4742-b7f1-98de3be51caf",
+          "correlationId": "74389259-5914-4742-b7f1-98de3be51caf"
+        }
+      },
+      "deskingFactsOnTheTimeline": 2
+    },
+    {
+      "stage": "24. the positive fact, asked for twice more under request keys nobody has seen",
+      "replayWithCurrentVersion": {
+        "ok": false,
+        "error": "expected_version is required"
+      },
+      "replayHoldingAStaleVersion": {
+        "ok": false,
+        "error": "unknown stage "
+      },
+      "deskingFactsBefore": [
+        "desking.ready"
+      ],
+      "deskingFactsAfter": [
+        "desking.ready"
+      ]
+    },
+    {
+      "stage": "24. the positive fact, asked for twice more under request keys nobody has seen",
+      "replayHoldingTheCurrentVersion": {
+        "ok": true,
+        "outcome": "already_there",
+        "stage": "ready_for_desking"
+      },
+      "replayHoldingAStaleVersion": {
+        "ok": true,
+        "outcome": "already_there",
+        "stage": "ready_for_desking"
+      },
+      "deskingFactsBefore": [
+        "desking.ready"
+      ],
+      "deskingFactsAfter": [
+        "desking.ready"
+      ],
+      "stageAfter": "ready_for_desking",
+      "dispositionAfter": "committed_to_purchase"
+    }
+  ],
+  "nav": [
     "Overview",
     "Dealership settings",
     "Business hours",
@@ -18,146 +384,46 @@
     "Showroom",
     "Deals"
   ],
-  "stages": [
-    {
-      "stage": "1. the showroom, before anyone arrives",
-      "hash": "#/showroom",
-      "heading": "Showroom",
-      "cards": [
-        "0 — Waiting to be greeted",
-        "0 — With a salesperson",
-        "1 — On the floor, free",
-        "0 — Cars out on drives"
+  "finishedAt": "recorded-by-clock-free-harness",
+  "identities": {
+    "salesperson": {
+      "roles": [
+        "salesperson"
       ],
-      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival Nobody is in the building right now. The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be available —"
+      "userLink": "0cd6f632"
     },
-    {
-      "stage": "2. a customer is in the building, waiting",
-      "hash": "#/showroom",
-      "heading": "Showroom",
-      "cards": [
-        "1 — Waiting to be greeted",
-        "0 — With a salesperson",
-        "1 — On the floor, free",
-        "0 — Cars out on drives"
+    "manager": {
+      "roles": [
+        "sales_manager"
       ],
-      "text": "Showroom 1 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival CUSTOMER WAITING STATE WITH Marta Silva just now Waiting unassigned Greet The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be available —"
+      "userLink": "e4a0e8d3"
     },
-    {
-      "stage": "3a. the greeting toast — the up-list decided who, not the caller",
-      "toast": "Next up took the customer"
-    },
-    {
-      "stage": "3. greeted — the turn was taken and that person is now busy",
-      "hash": "#/showroom",
-      "heading": "Showroom",
-      "cards": [
-        "0 — Waiting to be greeted",
-        "1 — With a salesperson",
-        "0 — On the floor, free",
-        "0 — Cars out on drives"
+    "otherSalesperson": {
+      "roles": [
+        "salesperson"
       ],
-      "text": "Showroom 0 Waiting to be greeted 1 With a salesperson 0 On the floor, free 0 Cars out on drives In the showroom Record an arrival CUSTOMER WAITING STATE WITH Marta Silva just now Greeted staff 330954be They have left The floor Put somebody on the floor Turns are taken from the top. Greeting a customer moves that salesperson to the back automatically — nobody has to keep the list by hand. # SALESPERSON STATE LAST UP 1 staff 330954be with customer 8/31/2026, 9:06:55 AM Back on the floor"
-    },
-    {
-      "stage": "4. the pipeline, and the figure this train does not have",
-      "hash": "#/deals",
-      "heading": "Deals",
-      "cards": ["0 — Open deals", "0 — Negotiating", "0 — Drives today", "0 — Manager turnovers"],
-      "text": "Deals 0 Open deals 0 Negotiating 0 Drives today 0 Manager turnovers Gross, commission and closing ratio: not available yet. These screens carry no figure because the deal is not desked until FBL-120 (Desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff Nothing in the pipeline. Deals arrive when the BDC hands a qualified lead over."
-    },
-    {
-      "stage": "5. the opportunity, received from the BDC handoff",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "Opportunity Marta Silva Downtown received STAGE Received OWNER unassigned CAME FROM BDC handoff f246bfe0 OPENED 8/31/2026, 9:07:06 AM Give this deal to somebody In showroom Demonstrated Negotiating Sold Lost Cars they are looking at Add a car Nothing shortlisted yet. What has happened Log something Negotiation round Get a manager Nothing logged yet.",
-      "note": "The customer and the showroom came from the handoff, not from the form: the only field the operator typed was the handoff id."
-    },
-    {
-      "stage": "6. a car on the shortlist, off the real inventory",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "Opportunity Marta Silva Downtown received … Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test drive This is the one What has happened Log something Negotiation round Get a manager Nothing logged yet."
-    },
-    {
-      "stage": "7. REFUSED — no licence check, no car leaves the lot",
-      "toast": "[invalid_request] a test drive starts after the driver’s licence has been checked",
-      "note": "The refusal was produced by clicking the console's own 'Start the drive' with the licence box unticked."
-    },
-    {
-      "stage": "8. out on a test drive, with the way to bring it back",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "… Cars they are looking at Add a car STOCK VEHICLE WHERE IT STANDS A1234 2003 considering Test drive This is the one Out on a test drive STOCK LEFT AT A1234 just now They are back What has happened … 8/31/2026, 9:07:23 AM demonstration.started: A1234"
-    },
-    {
-      "stage": "9. the car is back, and the shortlist says it was driven",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "… STOCK VEHICLE WHERE IT STANDS A1234 2003 demonstrated Test drive This is the one What has happened … 8/31/2026, 9:07:23 AM demonstration.started: A1234 8/31/2026, 9:07:27 AM demonstration.completed: A1234 interested",
-      "note": "Nobody typed 'demonstrated' — driving the car said so."
-    },
-    {
-      "stage": "10. the car they want",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "… STOCK VEHICLE WHERE IT STANDS A1234 2003 selected Test drive This is the one …"
-    },
-    {
-      "stage": "11. the negotiation form — every field on it, and no money among them",
-      "fields": [
-        "Who started it: The customer / Us",
-        "What was discussed",
-        "Where it left off: countered / accepted / declined / adjourned",
-        "A manager was in the conversation"
-      ],
-      "mentions_money": false,
-      "note": "The form's own text was scanned for price, cents, gross, amount, commission and a currency symbol. None appear, because `negotiation_rounds` has no money column to fill."
-    },
-    {
-      "stage": "12. the round is on the timeline, carrying what was said",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "… 8/31/2026, 9:07:41 AM negotiation.round 1: customer: countered asked what could be done on the trade"
-    },
-    {
-      "stage": "13. REFUSED — a turnover to yourself is not oversight",
-      "toast": "[invalid_request] a turnover to yourself is not oversight",
-      "note": "This store has one person, who is both the manager and the salesperson, so the only manager they can name is themselves. The refusal is the evidence here; the successful turnover is covered by tests/sales-journey.test.ts."
-    },
-    {
-      "stage": "14. negotiating — and only the moves the machine admits are offered",
-      "hash": "#/opportunity/f450df30-c879-4171-a816-bf35388f81f5",
-      "heading": "Opportunity",
-      "text": "Opportunity Marta Silva Downtown negotiating STAGE Negotiating OWNER unassigned CAME FROM BDC handoff f246bfe0 … Give this deal to somebody Demonstrated Sold Lost … 8/31/2026, 9:07:54 AM stage: received -> in_showroom 8/31/2026, 9:07:57 AM stage: in_showroom -> demonstrated 8/31/2026, … stage: demonstrated -> negotiating",
-      "note": "At `received` the screen offered In showroom, Demonstrated, Negotiating, Sold and Lost. At `negotiating` it offers Demonstrated, Sold and Lost — the buttons are the machine, so a move it does not admit is not on the screen to click."
-    },
-    {
-      "stage": "15. the manager’s board",
-      "hash": "#/deals",
-      "heading": "Deals",
-      "cards": ["1 — Open deals", "1 — Negotiating", "1 — Drives today", "0 — Manager turnovers"],
-      "text": "Deals 1 Open deals 1 Negotiating 1 Drives today 0 Manager turnovers Gross, commission and closing ratio: not available yet. These screens carry no figure because the deal is not desked until FBL-120 (Desking). Nothing here is zero — it does not exist. Live opportunities Receive a handoff CUSTOMER STAGE OWNER SHOWROOM AGE Marta Silva negotiating unassigned Downtown 0m Open"
-    },
-    {
-      "stage": "16. the visit is closed and the salesperson is free again",
-      "hash": "#/showroom",
-      "heading": "Showroom",
-      "cards": [
-        "0 — Waiting to be greeted",
-        "0 — With a salesperson",
-        "1 — On the floor, free",
-        "0 — Cars out on drives"
-      ],
-      "text": "Showroom 0 Waiting to be greeted 0 With a salesperson 1 On the floor, free 0 Cars out on drives In the showroom Record an arrival Nobody is in the building right now. The floor Put somebody on the floor … # SALESPERSON STATE LAST UP 1 staff 330954be available 8/31/2026, 9:06:55 AM",
-      "note": "Departing the visit returned the salesperson to the floor in the same transaction — the free count is 1 again without anybody pressing 'Back on the floor'."
+      "userLink": "91299ef8",
+      "note": "the reassignment target"
     }
+  },
+  "what": "RT4-C1 — the sales and showroom journey, walked in a real browser through the shipped console.",
+  "howItWasDriven": [
+    "Two separate people signed in through the shipped /auth/login -> /auth/callback chain.",
+    "The harness in front of the app only chose WHICH person the fake provider returned; every route the browser touched is production code.",
+    "No identifier was typed anywhere. Every handoff, customer, appointment, vehicle, salesperson and manager was chosen from a list the server had already filtered to the caller."
   ],
-  "what_this_does_and_does_not_show": [
-    "SHOWS: the whole FBL-100 operator journey is reachable in a browser, through the shipped console, against real data — arrival, greeting from the up-list, receiving the handoff, shortlisting real stock, a licence-gated test drive and its return, selecting the car, a negotiation round, the stage machine, the manager's board and closing the visit.",
-    "SHOWS: two refusals a person actually meets, rendered as readable messages with a correlation id rather than as a stack trace — the unchecked licence and the turnover to oneself.",
-    "SHOWS: there is no money on any of these screens, and the one place the subject comes up says the figure does not exist yet and names the release that will bring it.",
-    "DOES NOT SHOW: the pixel-level pointer path. The browser pane does not composite in this environment, so clicks were dispatched onto the real elements rather than delivered by a moving cursor.",
-    "DOES NOT SHOW: a successful manager turnover or a reassignment, because this one-person store has nobody else to name. Both are covered by tests/sales-journey.test.ts and tests/sales-authority.test.ts."
+  "whatItShows": [
+    "Check-in that marks the booking kept in the same act, with no ids typed.",
+    "Greeting and acceptance as two separate acts.",
+    "A handoff received off a list, with the owner established at receipt.",
+    "A rooftop-filtered chooser, two cars shortlisted, and the selection history kept.",
+    "A test drive refused until the licence is checked, then issued, driven and returned.",
+    "A negotiation round with no money field on the form.",
+    "A turnover to a different, eligible person chosen off a list.",
+    "A salesperson REFUSED the reassignment, and the manager then doing it.",
+    "The positive conclusion: one desking handoff, and no sale, deal, delivery or price.",
+    "The same positive command replayed twice more under request keys the server had never seen — both answered already_there, and the fact stayed at one.",
+    "The reconciled manager board, with every money figure NOT_YET_AVAILABLE.",
+    "Departure, and the salesperson back in the up-list."
   ]
 }
