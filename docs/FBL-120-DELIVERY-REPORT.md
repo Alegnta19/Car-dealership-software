@@ -138,3 +138,23 @@ because the desk did not exist and pretending otherwise would have been a lie to
 reader of the table. Migration 065 takes the pin off and grants UPDATE on that one column.
 Nothing else in Release Train 4 changed — no opportunity, no visit, no demonstration, no
 rotation — which is the same shape as the single additive seam RT4 added to `@dealer/crm`.
+
+## Closure
+
+**FBL-120 is CLOSED.** PR #17 was merged into `main` at
+`cdefde8b2e151420d71af7bfa339f48b9d13bedd` (parents `eae4454` and `49e261a`) as a true merge
+commit: `git diff 49e261a cdefde8` is empty and both name the tree object
+`2d9adfce77b7f54235c8d7bbea150975d969effa`. The exact tested head `49e261a` carried CI run
+33970083369 (#93), green 4/4 — after `f8669d0`'s own run 33969448701 (#92) failed the quality
+ratchet (four JSON files written by scripts rather than prettier) and the full-history secret
+scan (the isolation battery's throwaway test password), both corrected in `49e261a` and both
+disclosed in the final-state record rather than tidied away.
+
+**Migration `065` is FROZEN** at canonical-LF sha256
+`e20987f966a9e6a6e6a0356caba13f1f0d6d4a87d8b64c4f5d84157a354a9b60`, pinned in
+`architecture/migration-fixture-chains.json` and enforced by the migration ledger's checksum
+refusal. Migrations `000–064` are byte-for-byte as Release Train 4 left them: `git diff
+eae4454 cdefde8 -- migrations/` reports exactly one line, the addition of `065`.
+
+The next phase is FBL-140 — Deal Jacket, Documents and E-Sign Evidence — and its schema begins
+at migration `066`.
