@@ -395,10 +395,13 @@ describe(
     });
 
     test('this phase still cannot create a sale, a deal or a delivery, because there is nowhere to put one', async () => {
+      // `deal_jackets` was on this list when FBL-120 closed; FBL-140 added it by
+      // order (migration 066), and a jacket is still not a sale — the four below
+      // remain nowhere to write.
       const tables = await query(
         `SELECT tablename FROM pg_tables
           WHERE schemaname = 'public'
-            AND tablename IN ('sales', 'deals', 'deliveries', 'deal_jackets', 'sold_inventory')`,
+            AND tablename IN ('sales', 'deals', 'deliveries', 'sold_inventory')`,
         [],
       );
       assert.deepEqual(tables.rows, [], 'the exclusion list is structural, not a convention');

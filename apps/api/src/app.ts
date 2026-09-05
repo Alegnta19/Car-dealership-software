@@ -8,6 +8,9 @@ import inventoryRouter from './routes/inventory';
 import crmRouter from './routes/crm';
 import salesRouter from './routes/sales';
 import deskingRouter from './routes/desking';
+import jacketRouter from './routes/jacket';
+import signRouter from './routes/sign';
+import esignCallbackRouter from './routes/esign-callback';
 import { ValidationError, getConfig } from '@dealer/platform';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 import { requestContext } from './middleware/request-context';
@@ -19,6 +22,9 @@ export function createApp(): Express {
   // Outermost: every subsequent middleware, handler and log line runs inside the
   // request context established here.
   app.use(requestContext);
+  // FBL-140: the e-sign provider's callback is verified over its RAW bytes, so it
+  // is mounted BEFORE the JSON parser and reads the body itself.
+  app.use('/api/jacket/provider', esignCallbackRouter);
   app.use(express.json({ limit: getConfig().jsonBodyLimit }));
 
   // A malformed or oversized body is a client error, not a server fault. Without this
@@ -54,6 +60,12 @@ export function createApp(): Express {
   app.use('/api/crm', crmRouter);
   app.use('/api/sales', salesRouter);
   app.use('/api/desking', deskingRouter);
+  app.use('/api/jacket', jacketRouter);
+  // FBL-140: the CUSTOMER SIGNER'S lane. No staff session, no WorkOS — a lane
+  // token the provider delivered is the only credential, and the page is served
+  // same-origin so the token never crosses to another host.
+  app.use('/sign/api', signRouter);
+  app.use('/sign', express.static(path.join(__dirname, '..', '..', 'web', 'sign')));
 
   // RT1: the staff administration UI — static, dependency-free, served
   // same-origin so the session cookie and CSRF model apply unchanged. The

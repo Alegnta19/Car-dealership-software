@@ -94,7 +94,8 @@
         "@dealer/inventory",
         "@dealer/crm",
         "@dealer/sales",
-        "@dealer/desking"
+        "@dealer/desking",
+        "@dealer/jacket"
       ],
       "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
@@ -114,7 +115,8 @@
         "@dealer/identity-access",
         "@dealer/inventory",
         "@dealer/crm",
-        "@dealer/sales"
+        "@dealer/sales",
+        "@dealer/jacket"
       ],
       "prohibited": [
         "queues, outbox tables and schedulers until FBL-040",
@@ -252,6 +254,29 @@
         "provider SDKs"
       ],
       "database": "owns migration 065 tables",
+      "status": "active"
+    },
+    "@dealer/jacket": {
+      "path": "packages/jacket",
+      "owner": "sales-showroom",
+      "purpose": "Deal jacket, documents and e-sign evidence: the jacket opened from one exact manager-approved desking version through the desking seam, the checklist resolved from versioned effective-dated configuration, the package assembled from canonical records with every figure the approved version's own integer cents, the documents rendered deterministically into content-addressed immutable artifacts, the ceremony binding signers, consent, intent and signatures to exactly one package hash, and the distinct lanes for sales staff, managers, customer signers, the administrator, the provider and the clock. Stops before credit, F&I, funding, title, registration, delivery, sold inventory, payment, accounting and revenue.",
+      "publicEntry": "packages/jacket/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/identity-access",
+        "@dealer/desking"
+      ],
+      "prohibited": [
+        "credit applications, bureau pulls, lender routing or decisions",
+        "F&I menus or contracting, funding, title, registration, delivery, sold inventory",
+        "payment settlement, accounting posting, gross, commission or revenue",
+        "invented legal forms or templates claimed approved without an accountable approver",
+        "HTTP",
+        "provider SDKs"
+      ],
+      "database": "owns migration 066 tables",
       "status": "active"
     }
   }

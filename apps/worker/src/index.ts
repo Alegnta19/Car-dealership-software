@@ -9,6 +9,7 @@
 export {
   ADMIN_OUTBOX_DISPATCH_JOB,
   CAMPAIGN_DISPATCH_JOB,
+  CEREMONY_EXPIRY_JOB,
   LEAD_SLA_SWEEP_JOB,
   LISTING_DISPATCH_JOB,
   LOGIN_TRANSACTION_EXPIRY_JOB,
@@ -18,6 +19,7 @@ export {
   main,
   runAdminOutboxDispatchOnce,
   runAllJobsOnce,
+  runCeremonyExpiryOnce,
   runCampaignDispatchOnce,
   runLeadSlaSweepOnce,
   runListingDispatchOnce,

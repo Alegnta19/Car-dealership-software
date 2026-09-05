@@ -17,7 +17,8 @@
       "@dealer/inventory": ["packages/inventory/src/index.ts"],
       "@dealer/crm": ["packages/crm/src/index.ts"],
       "@dealer/sales": ["packages/sales/src/index.ts"],
-      "@dealer/desking": ["packages/desking/src/index.ts"]
+      "@dealer/desking": ["packages/desking/src/index.ts"],
+      "@dealer/jacket": ["packages/jacket/src/index.ts"]
     },
     "noEmit": true
   },

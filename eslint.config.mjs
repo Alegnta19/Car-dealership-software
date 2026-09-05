@@ -22,7 +22,8 @@ export default tseslint.config(
   {
     // RT1: the static staff UI is BROWSER JavaScript served as-is by the API —
     // no bundler, no Node globals. Declare the environment it actually runs in.
-    files: ['apps/web/public/**/*.js'],
+    // FBL-140: the customer's signing page is the same kind of file, on its own path.
+    files: ['apps/web/public/**/*.js', 'apps/web/sign/**/*.js'],
     languageOptions: {
       sourceType: 'script',
       globals: {
