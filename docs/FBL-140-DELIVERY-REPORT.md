@@ -194,6 +194,21 @@ registry dropped and re-added the key it became the newer index, and the error n
 can refuse it and the answer no longer depends on catalog order. The schema was never wrong; a
 probe that passes only in one creation order was.
 
+**Two findings came from CI, and neither is in this phase's code.** Run 33996033506 (#96) failed
+the full-history secret scan on two WRONG-KEY probes in the callback batteries (words joined to a
+26-character counting string beside the word `key` — the shape gitleaks exists to catch; the probes
+are now plain words and the two historical lines are suppressed by exact fingerprint, as every
+earlier suppression is) and reported one mutation INCONCLUSIVE because a Release Train 4 battery
+was red before its mutation, with no detail recorded. The runner now keeps a red baseline's failing
+assertion. Run 33998624901 (#97) then lost the same test in the complete battery, and the log
+said why: the manager's board counts a no-show against the calendar day it was booked for, in the
+database session's own day (`starts_at::date = NOW()::date`, which is UTC in CI), and the test
+booked the missed appointment one hour ahead — tomorrow, in the last hour of the day. Both runs
+happened to land in that hour. The test now asks the database for an instant it will call today.
+**The board's choice of day — the database's rather than the rooftop's — is a Release Train 4
+matter and is left exactly as it was, for the architect to weigh; this phase changed no product
+code for it.**
+
 ## Verification evidence
 
 - Complete local battery: 961 tests across 100 suites, 0 failed, 0 cancelled, 0 skipped, 0 todo

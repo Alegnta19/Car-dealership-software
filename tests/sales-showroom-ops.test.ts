@@ -142,6 +142,7 @@ describe(
     async function bookAnAppointment(
       w: World,
       email = `person.${randomUUID()}@example.com`,
+      startsAt?: Date,
     ): Promise<{ leadId: string; partyId: string; appointmentId: string; version: number }> {
       const t = w.bdc.token;
       await call(
@@ -173,7 +174,7 @@ describe(
       });
       assert.equal(moved.status, 200, JSON.stringify(moved.body));
 
-      const starts = new Date(Date.now() + 3_600_000);
+      const starts = startsAt ?? new Date(Date.now() + 3_600_000);
       const booked = await call(
         t,
         'POST',
@@ -315,7 +316,22 @@ describe(
       assert.match(String(afterCancel.body!.detail), /already cancelled/i);
 
       // ── NO-SHOW: not keepable either ─────────────────────────────────────
-      const missed = await bookAnAppointment(w, 'missed@example.com');
+      // The board counts a no-show against the day it was BOOKED FOR, in the database's
+      // own day (`starts_at::date = NOW()::date`). One hour ahead is usually today — but
+      // not in the last hour of the day, which is exactly when CI runs 33996033506 and
+      // 33998624901 read 0 here. So ask the database for an instant it will call today.
+      const todayRow = await query(
+        `SELECT to_char(
+                  (CASE WHEN (NOW() + INTERVAL '1 hour')::date = NOW()::date
+                        THEN NOW() + INTERVAL '1 hour'
+                        ELSE NOW() - INTERVAL '1 hour' END) AT TIME ZONE 'UTC',
+                  'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS starts_at`,
+      );
+      const missed = await bookAnAppointment(
+        w,
+        'missed@example.com',
+        new Date(String((todayRow.rows[0] as { starts_at: string }).starts_at)),
+      );
       const noShow = await call(
         w.bdc.token,
         'POST',
