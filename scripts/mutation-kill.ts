@@ -1927,6 +1927,13 @@ function assertIsolation(copy: string): void {
 interface TestRun {
   status: number;
   failed: string[];
+  /**
+   * The first failing test's TAP detail block (its `not ok` line through the closing
+   * `...`), so a red BASELINE can be read from the log instead of guessed at — CI run
+   * 33996033506 reported one battery red before its mutation and this file said only
+   * which test, not why.
+   */
+  detail: string[];
 }
 
 /** Runs one battery inside the copy and returns the names of the tests that failed. */
@@ -1944,11 +1951,19 @@ function runBattery(copy: string, testFile: string): TestRun {
   );
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   const failed: string[] = [];
+  const detail: string[] = [];
+  let capturing = false;
   for (const line of output.split(/\r?\n/)) {
     const m = /^\s*not ok \d+ - (.*)$/.exec(line);
     if (m) failed.push((m[1] as string).trim());
+    if (m && detail.length === 0) capturing = true;
+    if (capturing) {
+      detail.push(line.trimEnd());
+      if (/^\s*\.\.\.\s*$/.test(line) && detail.length > 1) capturing = false;
+      if (detail.length >= 60) capturing = false;
+    }
   }
-  return { status: result.status ?? 1, failed };
+  return { status: result.status ?? 1, failed, detail };
 }
 
 function parseArgs(): { out: string | undefined; log: string | undefined } {
@@ -2050,6 +2065,7 @@ function main(): void {
           : [
               `  baseline_status=${base.status}`,
               `  baseline_failed_tests=${JSON.stringify(base.failed.slice(0, 8))}`,
+              ...base.detail.map((l) => `  baseline_detail| ${l}`),
             ]),
         `  after_status=${after.status} failed_tests=${after.failed.length}`,
         `  dead_tests=${JSON.stringify(after.failed.slice(0, 6))}`,
@@ -2064,6 +2080,7 @@ function main(): void {
         battery: m.testFile,
         baseline_status: base.status,
         baseline_failed_tests: baselineGreen ? [] : base.failed,
+        baseline_failure_detail: baselineGreen ? [] : base.detail,
         expected_dead_test: m.testName,
         baseline_green: baselineGreen,
         after_status: after.status,

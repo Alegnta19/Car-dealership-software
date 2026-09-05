@@ -591,7 +591,7 @@ describe(
       assert.equal(
         verifyProviderSignature(
           body,
-          signProviderBody(['another', 'key', '0123456789abcdef0123456789'].join('-'), body),
+          signProviderBody(['another', 'webhook', 'key', 'entirely'].join('-'), body),
           secret,
         ),
         'invalid',

@@ -236,8 +236,8 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 17 CODE-BEARING COMMITS
-EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 18 CODE-BEARING COMMITS
+EXIST ACROSS R5, R6 AND R7, 5 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
 exactly as disclosed — R5 used three and R6 six — and disclosure does not cure those

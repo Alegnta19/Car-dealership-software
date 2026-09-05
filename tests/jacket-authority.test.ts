@@ -697,7 +697,7 @@ describe(
       );
       const forged = await post(body, {
         'x-esign-signature': signProviderBody(
-          ['not', 'the', 'key', '0123456789abcdef0123456789'].join('-'),
+          ['not', 'the', 'configured', 'webhook', 'key', 'at', 'all'].join('-'),
           body,
         ),
       });

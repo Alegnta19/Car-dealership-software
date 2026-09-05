@@ -524,8 +524,8 @@
   },
   "commit_budget": {
     "allowed": "REMOVED FOR R7 BY FBL-020-R7-A1 §4 (one per order under R5/R6, both ruled violated)",
-    "used": 17,
-    "failed_ci": 4,
+    "used": 18,
+    "failed_ci": 5,
     "verdict": "R5/R6: VIOLATED, exactly as the architect ruled, and disclosure does not cure it. R7: governed by FBL-020-R7-A1 §4 — a reasonable number of honest, forward-moving, disclosed commits, with no numeric budget to violate.",
     "disclosure_does_not_cure_the_violation": true,
     "per_order": {
@@ -591,9 +591,9 @@
       },
       "FBL-140": {
         "allowed": "no numeric budget (FBL-020-R7-A1 §4; the FBL-140 order under Master Blueprint Version 3.1 SO-001 sets none either)",
-        "used": 2,
-        "failed_ci": 0,
-        "verdict": "OPEN — FBL-140 is on its branch: the opening 9f651d9 (never pushed alone, run: null) and the phase commit whose record this is. Its exact-SHA run is obtained at the Draft PR; on merge the branch commits will leave the first-parent line and the merge will be named in their place, exactly as every merge before it was."
+        "used": 3,
+        "failed_ci": 1,
+        "verdict": "OPEN — FBL-140 is on its branch: the opening 9f651d9 (never pushed alone, run: null), the phase 8a3dd6f (whose exact-SHA run 33996033506, #96, FAILED the full-history secret scan and the mutation-kill step, listed above), and the bounded correction whose record this is. On merge the branch commits will leave the first-parent line and the merge will be named in their place, exactly as every merge before it was."
       }
     },
     "note": "Under R5 and R6 each order allowed ONE code-bearing commit plus an optional documentation-only closeout; R5 used three and R6 used six, the architect ruled both violations and ruled that disclosure does not cure them, and those rulings stand unedited in per_order. FBL-020-R7-A1 §4 then removed the one-commit limit for R7: commits are counted and disclosed exactly as before — used counts every code-bearing commit git holds in r5_baseline..evidence_commit plus those above the evidence commit, failed_ci counts recorded non-success runs — but there is no numeric ceiling left to compare against. The R6-era wording of this note, including its account of the nine-commit undercount and the missing §5 text, is preserved in the git history of this file rather than restated here. AFTER THE PR #12 MERGE (FBL-020 ACCEPTED AND CLOSED) the first-parent line this record enumerates changed: the sixteen C1/C2 branch commits sit behind the merge commit’s second parent, so used now counts the nine code-bearing commits of the measured range plus the merge commit caf6339 and the Release Train 1 commit 910155f — eleven — and failed_ci counts the four recorded red runs of the measured range. Nothing was deleted: every previously enumerated commit, subject and run is reachable in this repository’s history and in the git history of this file. AFTER THE PR #13 MERGE (Release Train 1 accepted and closed) the first-parent line moved again: Release Train 1’s four commits sit behind the merge commit 371819c’s second parent, exactly as the C1/C2 commits sit behind caf6339’s. used therefore counts the nine code-bearing commits of the measured range plus the two merge commits and the Release Train 2 commit e77e5cf — twelve — and failed_ci still counts the four recorded red runs of the measured range. Nothing was deleted: every commit named in any earlier revision of this record is reachable in this repository and preserved in this file’s git history. The Release Train 2 typecheck correction is code-bearing (it edits tsconfig.json), so used moves 12 -> 13; 2fc5d28 above is documentation-only and its red run is disclosed without being charged to the budget, exactly as the R7-C1 and R7-C2 documentation closeouts are. RT2-C1 adds ONE code-bearing commit — the bounded correction whose record this is — taking used 13 -> 14. 9606c11 above was already counted as the previous closeout's this_commit and is not counted twice. RT2-C2 adds ONE further code-bearing commit — the resolver-privilege correction whose record this is — taking used 14 -> 15. RELEASE TRAIN 3 adds ONE code-bearing commit — the CRM, BDC and marketing train whose record this is. The count nevertheless FALLS from 15 to 13, and that is not a discount: the Release Train 2 merge collapsed four branch commits into one, exactly as the Release Train 1 merge did before it, so the repository now contains three merges where it once contained a merge and four commits. The budget counts what this repository holds; the commits it replaced are named in the merge entry above and keep their own runs in this file's history. THE RELEASE TRAIN 4 MERGE (PR #16, ce85e67) moves the line again, exactly as the three merges before it did: RT4's three branch commits (6a8c149, ecbe332 and the documentation-only 9b2e93a) sit behind the merge commit's second parent, so used counts the nine code-bearing commits of the measured range plus the four merge commits caf6339, 371819c, 516cc86 and f2a4f60 and the Release Train 4 merge ce85e67 — fourteen, down from fifteen, and that fall is not a discount: the merge collapses two code-bearing branch commits into one, so the repository now holds one commit on this line where it held two. Nothing was deleted: every commit named in any earlier revision of this record is reachable in this repository and preserved in this file's git history, and 6a8c149's own green run 33409799429 and 5063009's green run 33937123573 (#89) are both named above and in the delivery report. FBL-120 OPENS with one code-bearing commit — the governing Version 3.1 order committed into docs/orders/, its facts measured into the requirement map, and the seven Part B rows locked in docs/FBL-120-ACCEPTANCE-ROWS.json before migration 065 existed — taking used 14 -> 15. The documentation-only post-merge closeout eae4454 above is listed with its green run and is not charged, exactly as the earlier documentation closeouts are not. FBL-120 ITSELF adds one further code-bearing commit — migration 065, the desking package, its surface, its console, its eight batteries and its two registries — taking used 15 -> 16. Its opening commit 4ec1280 is listed above with run: null and the reason for the null, because it was never pushed on its own and the phase's single exact-SHA run measures the commit that contains it. FBL-120's CI correction adds one further code-bearing commit — four files formatted, one historical fingerprint suppressed, one live line restructured — taking used 16 -> 17, and failed_ci 4 -> 5 because f8669d0's own run failed and a failure that is disclosed is still a failure. THE FBL-120 MERGE (PR #17, cdefde8) moves the line again, as every merge before it did: the phase's three branch commits sit behind the merge commit's second parent, so used counts the nine code-bearing commits of the measured range plus the six merges caf6339, 371819c, 516cc86, f2a4f60, ce85e67 and cdefde8 — fifteen, down from seventeen, and that fall is not a discount: the merge collapses three code-bearing branch commits into one. failed_ci returns to the four recorded red runs of the measured range, because f8669d0's red run belongs to a commit no longer on this line; it is disclosed in the merge entry and the FBL-120 verdict rather than charged twice or dropped. Nothing was deleted. FBL-140 OPENS with one code-bearing commit — the order committed verbatim into docs/orders/, the eight outcomes locked in docs/FBL-140-ACCEPTANCE-ROWS.json before migration 066 existed, and the gate scripts/check-fbl140-rows.ts — taking used 15 -> 16. FBL-140 ITSELF adds one further code-bearing commit — migration 066, the jacket package, its surfaces, its two lanes that hold no user link, its console and signing page, its nine batteries and its two registry extensions — taking used 16 -> 17. failed_ci stays at 4."
@@ -660,7 +660,7 @@
   ],
   "this_commit": {
     "is_code_bearing": true,
-    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is FBL-140 itself: migration 066, the @dealer/jacket package, the one seam added to @dealer/desking, the staff surface at /api/jacket, the customer signer lane at /sign, the signed provider callback, the worker's ceremony-expiry job, the console screens and the customer signing page, nine batteries, twenty-six runtime mutations, thirteen database controls, and the four-identity journey walked in the shipped console and signing page. It is CODE-BEARING and is counted."
+    "why_it_has_no_sha_here": "A record cannot name the SHA of the commit that contains it. This commit is FBL-140's one CI correction, bounded to what run 33996033506 (#96) refused: the two wrong-key probes in tests/jacket-authority.test.ts and tests/jacket-signing.test.ts are now plain words with no hex run, the two historical lines are suppressed in .gitleaksignore by exact fingerprint, and scripts/mutation-kill.ts now records the first failing assertion of a red baseline (the run reported appointment_misuse_admitted INCONCLUSIVE and could not say why). It is CODE-BEARING and is counted."
   },
   "commits_ahead_of_the_evidence_commit": [
     {
@@ -788,6 +788,41 @@
       "code_bearing": true,
       "run": null,
       "note": "The FBL-140 opening: the architect's order committed verbatim at docs/orders/FBL-140-ORDER.md, its eight locked outcomes quoted from those bytes into docs/FBL-140-ACCEPTANCE-ROWS.json with every row at LOCKED and no test named, and scripts/check-fbl140-rows.ts, which refuses a row that reaches PROVEN without naming a test this repository declares or that is not the order's own words. It adds a script under scripts/, so it is code-bearing. It has no run of its own: it was never pushed alone — the phase's exact-SHA run measures the commit above it, which contains this one."
+    },
+    {
+      "sha": "8a3dd6f02c3db96d590a4cdf07fd33e3fdfe97a0",
+      "short": "8a3dd6f",
+      "subject": "FBL-140 — Deal Jacket, Documents and E-Sign Evidence (migration 066)",
+      "code_bearing": true,
+      "run": {
+        "workflow_path": ".github/workflows/ci.yml",
+        "run_id": 33996033506,
+        "run_number": 96,
+        "run_attempt": 1,
+        "head_sha": "8a3dd6f02c3db96d590a4cdf07fd33e3fdfe97a0",
+        "conclusion": "failure",
+        "jobs_total": 4,
+        "jobs_non_success": 2,
+        "jobs": [
+          {
+            "name": "populated upgrade drill + reconciliation negative controls",
+            "conclusion": "success"
+          },
+          {
+            "name": "container build (digest-pinned base)",
+            "conclusion": "success"
+          },
+          {
+            "name": "typecheck, lint ratchet, build, all tests, scans",
+            "conclusion": "failure"
+          },
+          {
+            "name": "secret scan (genuine full history)",
+            "conclusion": "failure"
+          }
+        ]
+      },
+      "note": "FBL-140 itself — migration 066, the @dealer/jacket package, the one seam added to @dealer/desking, the staff surface at /api/jacket, the customer signer lane at /sign, the signed provider callback, the worker's ceremony-expiry job, the console screens and the customer signing page, nine batteries, twenty-six runtime mutations, thirteen database controls, and the four-identity journey. Its exact-SHA run FAILED on two steps and nothing else: the full-history secret scan (two WRONG-KEY probes in the e-sign callback batteries assembled a counting string of 26 hex characters beside the word `key`, which is the shape gitleaks' generic-api-key rule exists to catch — synthetic values that sign one request in one test process and are accepted by nothing), and the mutation-kill step, where ONE entry, appointment_misuse_admitted (a Release Train 4 control over tests/sales-showroom-ops.test.ts), was INCONCLUSIVE: its battery was red BEFORE the mutation, in the runner's isolated copy, twenty minutes after the same test passed in the same job's complete battery, and the runner recorded only the test's name, not its failure. The upgrade drill and the container build were green. The correction that follows this commit restructures the two probes, suppresses the two historical lines by exact fingerprint, and teaches the runner to keep a red baseline's failure detail so the next such run explains itself."
     }
   ]
 }
