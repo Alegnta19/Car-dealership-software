@@ -67,6 +67,7 @@ import {
 import { createInventoryActionCatalog } from '@dealer/inventory';
 import { createCrmActionCatalog } from '@dealer/crm';
 import { createSalesActionCatalog } from '@dealer/sales';
+import { createDeskingActionCatalog } from '@dealer/desking';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
 import { identityProvider } from '../identity/provider';
 
@@ -141,6 +142,7 @@ export function actionCatalog(): ActionCatalog {
       createInventoryActionCatalog(),
       createCrmActionCatalog(),
       createSalesActionCatalog(),
+      createDeskingActionCatalog(),
     );
   }
   return catalogInstance;
@@ -491,6 +493,15 @@ const RESOURCE_PARAMS: Record<string, string> = {
   opportunity: 'opportunityId',
   showroom_visit: 'visitId',
   demonstration: 'demonstrationId',
+  // ── FBL-120 ──────────────────────────────────────────────────────────────
+  //
+  // Everything hanging off a desk file — its appraisal evidence, its priced
+  // versions — is authorized THROUGH the file, and the appraisal and the
+  // scenario get their own entries because each is acted on by its own
+  // identifier once its parent is behind it in the URL.
+  desking_case: 'deskingCaseId',
+  appraisal: 'appraisalId',
+  desking_scenario: 'scenarioId',
 };
 
 export function requireAction(action: string) {

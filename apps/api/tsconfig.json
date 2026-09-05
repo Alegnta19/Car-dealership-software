@@ -30,7 +30,14 @@
     {
       "path": "../../packages/inventory"
     },
-    { "path": "../../packages/crm" },
-    { "path": "../../packages/sales" }
+    {
+      "path": "../../packages/crm"
+    },
+    {
+      "path": "../../packages/sales"
+    },
+    {
+      "path": "../../packages/desking"
+    }
   ]
 }

@@ -737,6 +737,109 @@ export const CONTROLS: DatabaseControl[] = [
     testFile: 'tests/sales-floor.test.ts',
     testName: 'the backstop keys refuse duplicates with every service stepped round',
   },
+
+  // ── FBL-120: the keys, checks and triggers migration 065 adds ───────────
+  {
+    id: 'desk_file_may_be_opened_twice',
+    section: '065 §1 — FBL-120 Row 1',
+    intent:
+      "a desk file is unique per handed-on fact AND per opportunity. Dropped, one customer's conversation can be desked twice and two managers can approve two different deals on the same car.",
+    drop: 'ALTER TABLE desking_cases DROP CONSTRAINT desking_cases_tenant_id_desking_handoff_id_key, DROP CONSTRAINT desking_cases_tenant_id_opportunity_id_key',
+    restore:
+      'DO $$ BEGIN DELETE FROM desking_cases a USING desking_cases b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.desking_handoff_id = b.desking_handoff_id; ALTER TABLE desking_cases ADD CONSTRAINT desking_cases_tenant_id_desking_handoff_id_key UNIQUE (tenant_id, desking_handoff_id), ADD CONSTRAINT desking_cases_tenant_id_opportunity_id_key UNIQUE (tenant_id, opportunity_id); END $$',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'two_trades_on_one_file',
+    section: '065 §2 — FBL-120 Row 2',
+    intent:
+      'one trade unit per desk file. Dropped, a second appraisal can sit beside the first and no reader can say which one a version was priced against.',
+    drop: 'ALTER TABLE appraisals DROP CONSTRAINT appraisals_tenant_id_desking_case_id_key',
+    restore:
+      'DO $$ BEGIN DELETE FROM appraisals a USING appraisals b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.desking_case_id = b.desking_case_id; ALTER TABLE appraisals ADD CONSTRAINT appraisals_tenant_id_desking_case_id_key UNIQUE (tenant_id, desking_case_id); END $$',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'two_approved_versions_on_one_file',
+    section: '065 §4 — FBL-120 Rows 5 and 6',
+    intent:
+      'ONE current approved version per opportunity. Dropped, two frozen versions of the same deal are both approved and the deal jacket has no single answer to read.',
+    drop: 'DROP INDEX uq_scenario_one_approved_per_case',
+    restore:
+      "DO $$ BEGIN DELETE FROM desking_scenarios WHERE version_no > 50; CREATE UNIQUE INDEX uq_scenario_one_approved_per_case ON desking_scenarios (tenant_id, desking_case_id) WHERE state = 'approved'; END $$",
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'one_version_decided_twice',
+    section: '065 §5 — FBL-120 Row 5',
+    intent:
+      'one decision per version. Dropped, the same version carries an approval and a rejection and the history says both.',
+    drop: 'ALTER TABLE scenario_approvals DROP CONSTRAINT scenario_approvals_tenant_id_scenario_id_key',
+    restore:
+      'DO $$ BEGIN DELETE FROM scenario_approvals a USING scenario_approvals b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.scenario_id = b.scenario_id; ALTER TABLE scenario_approvals ADD CONSTRAINT scenario_approvals_tenant_id_scenario_id_key UNIQUE (tenant_id, scenario_id); END $$',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'rule_intervals_may_overlap',
+    section: '065 §3 — FBL-120 Row 4',
+    intent:
+      'two rules of one kind and code cannot both be in force over one instant. Dropped, the rule book answers twice and cannot say what the tax is.',
+    drop: 'ALTER TABLE desking_rules DROP CONSTRAINT uq_desking_rules_no_overlap',
+    restore:
+      "DO $$ BEGIN DELETE FROM desking_rules a USING desking_rules b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.rule_kind = b.rule_kind AND a.rule_code = b.rule_code AND a.jurisdiction = b.jurisdiction AND COALESCE(a.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) AND tstzrange(a.effective_from, a.effective_to) && tstzrange(b.effective_from, b.effective_to); ALTER TABLE desking_rules ADD CONSTRAINT uq_desking_rules_no_overlap EXCLUDE USING gist (tenant_id WITH =, rule_kind WITH =, rule_code WITH =, jurisdiction WITH =, (COALESCE(rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =, tstzrange(effective_from, effective_to) WITH &&); END $$",
+    testFile: 'tests/desking-rules.test.ts',
+    testName: 'two rules of the same kind and code cannot both be in force over one instant',
+  },
+  {
+    id: 'quotation_absence_may_carry_a_number',
+    section: '065 §2 — FBL-120 Row 2',
+    intent:
+      'a valuation row says a number or says NOT_YET_AVAILABLE, never both and never neither. Dropped, an absence carries a figure and a fabrication reads as a quote.',
+    drop: 'ALTER TABLE appraisal_source_quotations DROP CONSTRAINT ck_quotation_value_iff_quoted',
+    restore:
+      "DO $$ BEGIN DELETE FROM appraisal_source_quotations WHERE provider_code = 'sneaky'; ALTER TABLE appraisal_source_quotations ADD CONSTRAINT ck_quotation_value_iff_quoted CHECK ((availability = 'quoted' AND quoted_value_cents IS NOT NULL AND currency IS NOT NULL AND quoted_at IS NOT NULL) OR (availability = 'NOT_YET_AVAILABLE' AND quoted_value_cents IS NULL AND currency IS NULL AND quoted_at IS NULL AND unavailable_reason IS NOT NULL)); END $$",
+    testFile: 'tests/desking-appraisal.test.ts',
+    testName: 'a valuation is a number or an honest absence, and never both',
+  },
+  {
+    id: 'appraisal_evidence_editable',
+    section: '065 §10 — FBL-120 Row 2',
+    intent:
+      'a recorded appraisal version is evidence. Dropped, the walk-around can be rewritten after the fact and the version history means nothing.',
+    drop: 'DROP TRIGGER trg_appraisal_versions_append_only ON appraisal_versions',
+    restore:
+      'CREATE TRIGGER trg_appraisal_versions_append_only BEFORE UPDATE OR DELETE ON appraisal_versions FOR EACH ROW EXECUTE FUNCTION appraisal_versions_append_only()',
+    testFile: 'tests/desking-appraisal.test.ts',
+    testName:
+      'the database refuses to edit or delete a recorded version, with the service stepped round',
+  },
+  {
+    id: 'approved_figures_editable',
+    section: '065 §10 — FBL-120 Row 5',
+    intent:
+      "a version's figures are written once and an approved one may only be superseded. Dropped, the numbers a manager approved can be edited underneath the decision.",
+    drop: 'DROP TRIGGER trg_desking_scenarios_freeze ON desking_scenarios',
+    restore:
+      'CREATE TRIGGER trg_desking_scenarios_freeze BEFORE UPDATE ON desking_scenarios FOR EACH ROW EXECUTE FUNCTION desking_scenarios_freeze()',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'an approved version cannot be edited, and only supersession moves it',
+  },
+  {
+    id: 'approval_unbound_from_the_reviewed_version',
+    section: '065 §10 — FBL-120 Row 5',
+    intent:
+      'a decision names the exact figures reviewed. Dropped, an approval can be recorded against a version that has since been rebuilt, and nobody can say what was signed.',
+    drop: 'DROP TRIGGER trg_scenario_approvals_bind_reviewed_version ON scenario_approvals',
+    restore:
+      'CREATE TRIGGER trg_scenario_approvals_bind_reviewed_version BEFORE INSERT ON scenario_approvals FOR EACH ROW EXECUTE FUNCTION scenario_approvals_bind_reviewed_version()',
+    testFile: 'tests/desking-approval.test.ts',
+    testName:
+      'the database refuses a decision that names the wrong figures, with the service stepped round',
+  },
 ];
 
 /**

@@ -244,6 +244,31 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'versioned and audited throughout',
   },
   {
+    file: 'packages/desking/src/intake.ts',
+    because:
+      'FBL-120’s intake: a desk file opened FROM Release Train 4’s handed-on fact, one per ' +
+      'fact and one per opportunity, enforced by two unique keys rather than a check. The ' +
+      'write takes an acting user link, is refused unless that person works the rooftop the ' +
+      'fact names, and writes one audit row in the transaction that opened the file',
+  },
+  {
+    file: 'packages/desking/src/appraisal.ts',
+    because:
+      'FBL-120’s trade: identity written once and evidence written as versions that a ' +
+      'trigger refuses to edit afterwards. Every write takes an acting user link, advances ' +
+      'the appraisal’s version and writes one audit row in the same transaction',
+  },
+  {
+    file: 'packages/desking/src/scenarios.ts',
+    because:
+      'FBL-120’s figures and the decision on them: a priced version is INSERTed and never ' +
+      'edited — the only column that moves afterwards is `state`, and migration 065’s ' +
+      'trigger refuses everything else for every role. The decision itself is append-only ' +
+      'and bound by a trigger to the exact version reviewed. Every write takes an acting ' +
+      'user link, advances the row’s version and writes one audit row in the transaction ' +
+      'that made the change',
+  },
+  {
     file: 'packages/sales/src/selling.ts',
     because:
       'RELEASE TRAIN 4’s selling work: the shortlist and which car is selected, test ' +
@@ -439,6 +464,21 @@ const EXPECTED_OWNED_TABLES = [
   'opportunity_activities',
   'opportunity_vehicles',
   'showroom_visits',
+  // ── FBL-120 (migration 065) ──────────────────────────────────────────────
+  //
+  // Three tables carry `authorization_version` because each holds CURRENT STATE
+  // somebody may correct: the desk file and whether it has been approved, the
+  // trade appraisal and which version of its evidence is current, and a priced
+  // version's STATE as it moves from draft to a decision. Nothing else in the
+  // phase does. The eleven APPEND-ONLY tables — appraisal versions and their
+  // damage, equipment and observations, attachments, source quotations, the
+  // rule book, scenario line items, rule applications, state events and the
+  // decisions themselves — deliberately carry no version, because nothing
+  // corrects them: a further row is written instead, and in three of those
+  // cases a trigger refuses the alternative outright.
+  'appraisals',
+  'desking_cases',
+  'desking_scenarios',
 ] as const;
 
 /**

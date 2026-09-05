@@ -708,6 +708,16 @@ describe(
       );
 
       // ── and the constraints are really there, under those names ───────────
+      //
+      // `ck_desking_pre_fbl120` IS NOT ON THIS LIST ANY MORE, and its absence is
+      // the ordered outcome rather than a regression. Migration 064 pinned
+      // `desking_handoffs.desking_status` to NOT_YET_AVAILABLE with that CHECK
+      // *because the desk did not exist*, and said in its own header that
+      // whoever built FBL-120 would take the pin off. Migration 065 is that
+      // phase and does exactly that; `tests/desking-intake.test.ts` asserts the
+      // column now reaches AVAILABLE when a desk file is opened from the fact.
+      // What Release Train 4 must still not be able to do is unchanged, and the
+      // two constraints below are what say so.
       const named = await query(
         `SELECT conname FROM pg_constraint
           WHERE conname IN ('ck_opportunity_pre_deal', 'ck_negotiation_pre_desking',
@@ -716,7 +726,7 @@ describe(
       );
       assert.deepEqual(
         (named.rows as Array<{ conname: string }>).map((r) => r.conname),
-        ['ck_desking_pre_fbl120', 'ck_negotiation_pre_desking', 'ck_opportunity_pre_deal'],
+        ['ck_negotiation_pre_desking', 'ck_opportunity_pre_deal'],
         'the prohibition is structural, not a comment',
       );
 

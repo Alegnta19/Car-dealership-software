@@ -15,3 +15,10 @@ export * from './showroom';
 export * from './selling';
 export * from './reads';
 export * from './actions';
+/*
+ * The FBL-120 seam, added when the desk was built. It reads the fact this train
+ * already wrote and says the desk now holds it; it adds no sales behaviour and
+ * changes none, which is the same shape as the one seam Release Train 4 added
+ * to @dealer/crm.
+ */
+export * from './desking-seam';

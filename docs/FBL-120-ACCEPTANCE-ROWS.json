@@ -1,0 +1,305 @@
+{
+  "$comment": "THE SEVEN FBL-120 ROWS, LOCKED BEFORE ANY CODE WAS WRITTEN, exactly as Master Blueprint Version 3.1 §14.3 Part B states them. `order_text` is quoted verbatim from the committed document's own bytes — the build script read it out of docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx rather than retyping it, because a hand-copied acceptance contract is a contract with the implementer's fingerprints on it. Three different orders in that document open rows with “Row N -”, so the reader was bounded to the Part B block before it quoted anything. `tests` is filled in as each row is proven, and a row naming no test — or naming one that does not exist — fails scripts/check-fbl120-rows.ts.",
+  "order": {
+    "phase": "FBL-120 — Appraisal, Trade, Pricing, and Desking",
+    "document": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx",
+    "document_sha256": "c57894f4c0018e7d36afc3e7255eeb17d80b2b3899d5ba44ebd1956a1ee93979",
+    "version_label": "Version 3.1",
+    "section": "14.3 Part B",
+    "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx",
+    "opening": "Begin from the verified RT4 merge on main. Preserve migrations 000-064 byte-for-byte and begin new schema work at migration 065. Consume exactly one ready_for_appraisal_desking fact; do not reopen CRM, inventory, or showroom behavior.",
+    "owner_visible_finish_line": "Owner-visible finish line. A salesperson or desk manager opens the canonical customer, selected vehicle, opportunity, and trade context without rekeying; records a structured appraisal; builds and compares deterministic, versioned desking scenarios; obtains an attributable manager decision; and freezes one exact approved version. The phase ends with that immutable approved version ready for the later deal-jacket phase - never a sale, contract, funded deal, delivery, or sold vehicle.",
+    "locked_before": "migration 065 existed"
+  },
+  "rows": [
+    {
+      "row": 1,
+      "title": "Canonical intake",
+      "order_text": "Row 1 - Canonical intake. Consume the desking-ready fact exactly once and preserve the canonical opportunity, customer, rooftop, selected stock, and optional trade vehicle. Repeated or concurrent intake converges; foreign or mismatched references refuse without disclosure.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "opening a desk file carries every canonical reference the fact was written with"
+        },
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "a repeated intake converges on the file that already exists"
+        },
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "two genuinely concurrent intakes converge on one desk file"
+        },
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "a fact at a rooftop this person does not work is refused in the words a missing one gets"
+        },
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "a file opened at another rooftop is not readable, and not listed"
+        },
+        {
+          "file": "tests/desking-intake.test.ts",
+          "name": "the discovery list holds facts nobody has opened yet, and drops them once opened"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "the backstop keys refuse duplicates with every service stepped round"
+        }
+      ]
+    },
+    {
+      "row": 2,
+      "title": "Appraisal evidence",
+      "order_text": "Row 2 - Appraisal evidence. Record structured trade identity, ownership/relationship, odometer, condition, equipment, damage, inspection observations, attachments, source quotations, timestamps, and provenance. Changes are versioned and attributable; unavailable external valuation data is explicit rather than fabricated.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "one appraisal carries identity once and evidence as a version"
+        },
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "a revision is a new version, and the old one is exactly as it was"
+        },
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "the database refuses to edit or delete a recorded version, with the service stepped round"
+        },
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "a valuation is a number or an honest absence, and never both"
+        },
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "an attachment records which version it arrived in, and the header reads it all back"
+        },
+        {
+          "file": "tests/desking-appraisal.test.ts",
+          "name": "a second appraisal on the same file converges rather than opening a rival"
+        }
+      ]
+    },
+    {
+      "row": 3,
+      "title": "Deterministic scenarios",
+      "order_text": "Row 3 - Deterministic scenarios. Calculate each scenario from explicit versioned inputs using fixed decimal and currency rules. Include vehicle price, trade allowance/payoff/equity, configured taxes and fees, documented incentives, cash/down-payment, and financing assumptions only to the extent required for desking; identical inputs reproduce identical outputs.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "the same inputs and the same rule book reproduce the same figures and the same digests"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "the rule book may arrive in any order and the figures do not move"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "every figure can be checked by hand, in whole cents"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "a rule that applies to the total sees the total, and only after the first pass"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "an incentive takes money off, and the rule book still records it as a positive magnitude"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "a different input changes the input digest, and a rule version change changes it too"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "rounding is half away from zero, once per line and never on an intermediate"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "the monthly figure is the annuity formula, and a zero rate is answered rather than divided by"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "no monthly figure is invented when the desk did not give a term and a rate"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "the canonical form sorts keys and writes bigints as strings, so a digest is portable"
+        },
+        {
+          "file": "tests/desking-calculator.test.ts",
+          "name": "an empty rule book prices the car and nothing else, and says so in the lines"
+        }
+      ]
+    },
+    {
+      "row": 4,
+      "title": "Rule and source truth",
+      "order_text": "Row 4 - Rule and source truth. Every tax, fee, incentive, valuation, and policy input names its source, jurisdiction or rooftop scope, effective interval, and version. Expired, overlapping, missing, or inapplicable rules refuse or remain NOT_YET_AVAILABLE; deterministic simulators may stand in for uncertified providers without pretending to be live data.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "every rule names its source, scope, interval and version"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "two rules of the same kind and code cannot both be in force over one instant"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "a rule that starts where the last one stopped is accepted, and only one is in force"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "a rooftop's own rule beats the tenant-wide one, and the audit says which won"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "a jurisdiction nobody configured refuses the pricing rather than pricing it at zero"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "a rule book that ran out is a different answer from one that was never written"
+        },
+        {
+          "file": "tests/desking-rules.test.ts",
+          "name": "what a version was priced under is copied beside it, so a later edit cannot rewrite it"
+        }
+      ]
+    },
+    {
+      "row": 5,
+      "title": "Manager approval and freeze",
+      "order_text": "Row 5 - Manager approval and freeze. Approval binds an eligible manager, the exact scenario version reviewed, any required limit or override reason, and one immutable decision time. Approved versions cannot be edited; rejection, expiry, and explicit audited supersession are modeled without rewriting history.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "an approval names the manager, the exact version reviewed and one decision time"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a manager looking at figures that were rebuilt is refused, and nothing is written"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "the database refuses a decision that names the wrong figures, with the service stepped round"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "an approved version cannot be edited, and only supersession moves it"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a rejection says what it was measured against, and a rejected version is final"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a second decision on one version is refused, and a replayed one converges"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a salesperson cannot decide their own deal, and the refusal explains nothing"
+        }
+      ]
+    },
+    {
+      "row": 6,
+      "title": "Lifecycle and oversight",
+      "order_text": "Row 6 - Lifecycle and oversight. Support draft, revise, compare, submit, approve, reject, expire, and supersede with one current approved version per opportunity. The manager view reconciles appraisal variance, scenario versions, pending approvals, exceptions, and source freshness across permitted rooftops without inventing gross or sale facts.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a later revision supersedes its predecessor without changing approved history"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a version whose expiry passed cannot be approved, and expiry itself is a state"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "the lifecycle is readable end to end, with every state change attributed"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "the board reconciles the floor and invents no gross or sale fact"
+        },
+        {
+          "file": "tests/desking-approval.test.ts",
+          "name": "a file with no appraisal and no version says so, in words a manager can act on"
+        }
+      ]
+    },
+    {
+      "row": 7,
+      "title": "Integrity, UI journey, and delivery proof",
+      "order_text": "Row 7 - Integrity, UI journey, and delivery proof. Enforce tenant/rooftop isolation, exact-parent binding, non-leaking authorization, idempotency, optimistic concurrency, audit, outbox replay, append-only approval history, and safe upgrade. Demonstrate appraisal through frozen approval in the real shipped salesperson and manager UI without raw internal IDs; fresh install and forward upgrade converge.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "a salesperson may build and submit, and may not decide"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "a scenario is reached through its own id, and somebody else’s is not found"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "an appraisal is revised through ITS id, and a file id in that slot is not found"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "a repeated command with one key is applied once, and answered twice"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "a stale expected_version is a conflict that names the version to reload"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "money crosses the wire as whole cents, and a float is refused"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "writing the rule book is a manager’s job, and the refusal explains nothing"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "this phase still cannot create a sale, a deal or a delivery, because there is nowhere to put one"
+        },
+        {
+          "file": "tests/desking-authority.test.ts",
+          "name": "an unauthenticated caller reaches nothing at all"
+        },
+        {
+          "file": "tests/desking-isolation.test.ts",
+          "name": "every table this phase adds is secured, and a session without a dealership sees none of it"
+        },
+        {
+          "file": "tests/desking-isolation.test.ts",
+          "name": "one dealership cannot read, edit or delete another’s desk"
+        },
+        {
+          "file": "tests/desking-isolation.test.ts",
+          "name": "a write that names another dealership is refused by the policy, not merely filtered"
+        },
+        {
+          "file": "tests/desking-isolation.test.ts",
+          "name": "the privileged resolver is not executable by the runtime, and the ordinary one is dealership-bound"
+        }
+      ]
+    }
+  ],
+  "exclusions": "FBL-120 exclusions. Do not implement digital retail, deal-jacket generation, e-sign, credit application or underwriting, lender decisions, payment collection, funding, title, registration, delivery, sold inventory, authoritative revenue, accounting, fixed operations, or autonomous binding decisions. Those remain later phases.",
+  "binary_proof": "FBL-120 binary proof. Two concurrent consumers create one desking case; the same versioned inputs reproduce the same scenario totals; stale, foreign, expired, overlapping, or unauthorized inputs refuse without partial writes; manager approval freezes the exact reviewed version; and a later revision creates an attributable successor without changing approved history.",
+  "verification_and_forward_motion": "FBL-120 verification and forward motion. Lock these seven rows before coding, use focused tests while building, and run one final complete battery, all declared mutations with zero survivors, populated upgrade/fresh convergence, a persisted real-UI journey, and exact-final-SHA CI. Return once at the FBL-120 finish line with a seven-row checklist. If accepted, merge the exact reviewed SHA, record FBL-120 CLOSED, and activate FBL-140 without a second closure review.",
+  "inherited_seam": {
+    "fact": "sales.opportunity.ready_for_appraisal_desking",
+    "row_table": "desking_handoffs",
+    "written_by": "packages/sales/src/opportunities.ts, moveOpportunityStage",
+    "note": "Release Train 4 ends by writing ONE desking_handoffs row per opportunity — its (tenant_id, opportunity_id) unique key is the exactly-once guarantee — and ONE admin_outbox event in the same transaction. FBL-120 consumes that fact and nothing else from the sales train; it does not reopen CRM, inventory or showroom behaviour."
+  }
+}

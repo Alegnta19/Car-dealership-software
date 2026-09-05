@@ -16,7 +16,8 @@
       "@dealer/identity-access": ["packages/identity-access/src/index.ts"],
       "@dealer/inventory": ["packages/inventory/src/index.ts"],
       "@dealer/crm": ["packages/crm/src/index.ts"],
-      "@dealer/sales": ["packages/sales/src/index.ts"]
+      "@dealer/sales": ["packages/sales/src/index.ts"],
+      "@dealer/desking": ["packages/desking/src/index.ts"]
     },
     "noEmit": true
   },

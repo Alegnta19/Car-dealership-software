@@ -112,6 +112,12 @@ export interface GoverningDocumentRecord {
   bare_blueprint_citation_residue: string[];
   governing: BlueprintFacts;
   superseded: BlueprintFacts;
+  /**
+   * The order the CURRENT phase is built under — Version 3.1, whose §14.3 is a third
+   * thing again. Optional in the type because every record written before FBL-120 was
+   * a two-document record, and a reader of one of those is not wrong, only earlier.
+   */
+  current_order?: BlueprintFacts;
 }
 
 export interface ClauseEntry {
@@ -164,6 +170,16 @@ export function declaredTestNames(file: string): Set<string> {
   // and a scanner blind to the second shape would refuse a map that cites them.
   for (const m of source.matchAll(/\b(?:test\(\s*|title:\s*)'((?:[^'\\]|\\.)*)'/g)) {
     names.add((m[1] as string).replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
+  }
+  /*
+   * …and the same two shapes written with DOUBLE quotes, which is what a name
+   * containing an apostrophe has to use. A scanner blind to that shape reports
+   * a test as undeclared when the only thing wrong with it is English
+   * punctuation, and a gate reading this would refuse a row that is genuinely
+   * proven — which is how a checker teaches people to name tests badly.
+   */
+  for (const m of source.matchAll(/\b(?:test\(\s*|title:\s*)"((?:[^"\\]|\\.)*)"/g)) {
+    names.add((m[1] as string).replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
   }
   return names;
 }
@@ -241,7 +257,7 @@ function nonDocumentFiles(): string[] {
  * documents and the source tree are judged by the same rule.
  */
 export function citationQualifiers(map: RequirementMap = loadRequirementMap()): string[] {
-  const { governing, superseded } = map.governing_document;
+  const { governing, superseded, current_order: current } = map.governing_document;
   return [
     'Version 1.0',
     'Version 2.0',
@@ -251,6 +267,12 @@ export function citationQualifiers(map: RequirementMap = loadRequirementMap()): 
     superseded.file,
     governing.file_sha256.slice(0, 8),
     superseded.file_sha256.slice(0, 8),
+    // The third document qualifies exactly as the other two do, and only once the
+    // record names it: a version label nobody has committed bytes for would let an
+    // unqualified citation through on the strength of a string.
+    ...(current === undefined
+      ? []
+      : [current.version_label, 'v3.1', current.file, current.file_sha256.slice(0, 8)]),
   ];
 }
 
