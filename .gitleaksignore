@@ -110,3 +110,23 @@ dd8b9aeaf4425f146b8c5a5ad587c29213b2c0f6:tests/platform.test.ts:generic-api-key:
 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:197
 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:204
 0e99ecd0cde3591a6ebafa66a94b23e9b7d954ee:architecture/reconciliation-inventory-057.json:generic-api-key:211
+
+# FBL-120 (after ci.yml run 33969448701 failed the full-history scan with 1 finding):
+# the isolation battery's TEST-ONLY database password.
+#
+# WHAT THE VALUE IS. `tests/desking-isolation.test.ts` connects to the throwaway test
+# database as the `dealership_app` role — the only way to prove row security from the
+# runtime's side rather than the owner's — and to do that it sets that role's password to a
+# literal it chooses and then uses. The literal was `fbl120_isolation_test_pw`: a synthetic
+# value that is written INTO a disposable database by the test itself, seconds before it
+# is used, and destroyed with the database. It authenticates nothing outside that process
+# and is accepted by nothing else. Release Train 4's `tests/sales-isolation.test.ts` does
+# the same thing with `rt4_isolation_test_pw`, which the scanner never flagged; the digits
+# in `fbl120` lifted the value over gitleaks' entropy threshold for `generic-api-key`.
+#
+# The commit is pushed and the order forbids rewriting it, so the historical line is
+# suppressed by exact fingerprint (gitleaks v8.24.3's own, from the SARIF report). The
+# LIVE line was restructured so it can no longer match — the value is assembled at runtime
+# from its parts — so no later commit reintroduces the finding. Same scan, same pinned
+# image, same --log-opts=--all, no path, rule, entropy, or pattern exemption.
+f8669d0a3dbb8b3fc3e13ea7d9cdfe9421d44c8e:tests/desking-isolation.test.ts:generic-api-key:55

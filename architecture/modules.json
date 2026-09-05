@@ -22,14 +22,8 @@
       "owner": "platform-architecture",
       "purpose": "Validated configuration, request/correlation context, structured PII-safe logging, error primitives, Problem Details mapping, JWT verification.",
       "publicEntry": "packages/platform/src/index.ts",
-      "allowedDealerDeps": [
-        "@dealer/contracts"
-      ],
-      "prohibited": [
-        "express",
-        "pg",
-        "dealership business rules"
-      ],
+      "allowedDealerDeps": ["@dealer/contracts"],
+      "prohibited": ["express", "pg", "dealership business rules"],
       "database": "none",
       "status": "active"
     },
@@ -38,13 +32,8 @@
       "owner": "platform-architecture",
       "purpose": "PostgreSQL pool, query and transaction infrastructure. Migrations live at the repository root and are order-governed; this package never defines schema.",
       "publicEntry": "packages/database/src/index.ts",
-      "allowedDealerDeps": [
-        "@dealer/platform"
-      ],
-      "prohibited": [
-        "dealership business rules",
-        "schema definitions"
-      ],
+      "allowedDealerDeps": ["@dealer/platform"],
+      "prohibited": ["dealership business rules", "schema definitions"],
       "database": "connection-infrastructure",
       "status": "active"
     },
@@ -59,10 +48,7 @@
         "@dealer/database",
         "@dealer/identity-access"
       ],
-      "prohibited": [
-        "express",
-        "another module's persistence internals"
-      ],
+      "prohibited": ["express", "another module's persistence internals"],
       "database": "owns the phase-248 tables (migrations 000, 049-054)",
       "status": "active — legacy/ is an explicitly mixed application/persistence component until FBL-060"
     },
@@ -79,9 +65,7 @@
         "@dealer/organization",
         "@dealer/identity-access"
       ],
-      "prohibited": [
-        "being imported by any production package or app"
-      ],
+      "prohibited": ["being imported by any production package or app"],
       "database": "none",
       "status": "active"
     },
@@ -90,14 +74,8 @@
       "owner": "web-experience",
       "purpose": "UI primitives boundary. Structural shell only in FBL-010.",
       "publicEntry": "packages/ui/src/index.ts",
-      "allowedDealerDeps": [
-        "@dealer/contracts"
-      ],
-      "prohibited": [
-        "business rules",
-        "product screens",
-        "server-side dependencies"
-      ],
+      "allowedDealerDeps": ["@dealer/contracts"],
+      "prohibited": ["business rules", "product screens", "server-side dependencies"],
       "database": "none",
       "status": "shell"
     },
@@ -118,11 +96,7 @@
         "@dealer/sales",
         "@dealer/desking"
       ],
-      "prohibited": [
-        "dealership business rules",
-        "SQL",
-        "direct pg usage"
-      ],
+      "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
       "status": "active — deployable"
     },
@@ -156,10 +130,7 @@
       "owner": "web-experience",
       "purpose": "Web application structural shell. No customer product UI in FBL-010.",
       "publicEntry": "apps/web/src/index.ts",
-      "allowedDealerDeps": [
-        "@dealer/contracts",
-        "@dealer/ui"
-      ],
+      "allowedDealerDeps": ["@dealer/contracts", "@dealer/ui"],
       "prohibited": [
         "server-side business logic",
         "database access",
@@ -173,16 +144,8 @@
       "owner": "platform-architecture",
       "purpose": "Canonical internal organization hierarchy: Tenant, DealerGroup, LegalEntity, Rooftop, Department; hierarchy validation, effective-status resolution, organization repositories and ports.",
       "publicEntry": "packages/organization/src/index.ts",
-      "allowedDealerDeps": [
-        "@dealer/contracts",
-        "@dealer/platform",
-        "@dealer/database"
-      ],
-      "prohibited": [
-        "express",
-        "provider SDKs",
-        "fixed-ops business rules"
-      ],
+      "allowedDealerDeps": ["@dealer/contracts", "@dealer/platform", "@dealer/database"],
+      "prohibited": ["express", "provider SDKs", "fixed-ops business rules"],
       "database": "owns the FBL-020 organization tables (migration 055)",
       "status": "active"
     },

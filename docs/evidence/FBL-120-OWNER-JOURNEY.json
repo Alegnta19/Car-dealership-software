@@ -182,9 +182,7 @@
     "salesperson_approval_refused_with": "404 Resource not found"
   },
   "manager_view": {
-    "rooftopIds": [
-      "909b4cf4-065e-4645-81f9-363108919919"
-    ],
+    "rooftopIds": ["909b4cf4-065e-4645-81f9-363108919919"],
     "rows": [
       {
         "deskingCaseId": "0f11683d-15c1-4868-baef-1abb80eeb8f5",
@@ -200,9 +198,7 @@
         "monthlyPaymentCents": "86452",
         "appraisalVarianceCents": "15000",
         "oldestSourceAt": "2026-09-05T06:40:44.000Z",
-        "exceptions": [
-          "a valuation source had nothing to give"
-        ]
+        "exceptions": ["a valuation source had nothing to give"]
       }
     ],
     "openCases": 0,

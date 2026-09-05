@@ -236,8 +236,8 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 16 CODE-BEARING COMMITS
-EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 17 CODE-BEARING COMMITS
+EXIST ACROSS R5, R6 AND R7, 5 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
 exactly as disclosed — R5 used three and R6 six — and disclosure does not cure those
@@ -1866,10 +1866,10 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 
 | Figure                       | Value                                                                                                     | Read from                                                                           |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `suite_tests`                | <!--fig:suite_tests-->838<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
-| `suite_suites`               | <!--fig:suite_suites-->84<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
-| `suite_passed`               | <!--fig:suite_passed-->838<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
-| `observed_ok`                | <!--fig:observed_ok-->922<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
+| `suite_tests`                | <!--fig:suite_tests-->902<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
+| `suite_suites`               | <!--fig:suite_suites-->92<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
+| `suite_passed`               | <!--fig:suite_passed-->902<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
+| `observed_ok`                | <!--fig:observed_ok-->994<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
 | `observed_not_ok`            | <!--fig:observed_not_ok-->0<!--/fig-->                                                                    | `artifacts/test-summary.json` `observed_not_ok_lines`                               |
 | `floor_tests`                | <!--fig:floor_tests-->902<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
 | `floor_suites`               | <!--fig:floor_suites-->92<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
@@ -2574,7 +2574,7 @@ absolute ships here without a fixture proving it.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | §4.0 census provenance, and the migration preflight   | the census was taken from a tree with "none of them under `migrations/`" / "`migrations/` matches: yes" | the artifact records `migrations_match_head: false` and "`migrations/` carries 1 of them". §4.0 now states the artifact's number and what the one change means  |
 | §4.0, the migration preflight, and `058`'s own header | the artifact "says nothing of the kind" / "records no such thing" about a stale `postmaster.pid`        | the artifact records the disagreement in four evidence rows, `postmaster.pid and the running server agree on the data directory` = `false`. All three corrected |
-| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->838<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
+| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->902<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
 | §4.2 and `docs/identity/DATA-DICTIONARY.md`           | `058`'s digests published as `33c851a0…` / `bcf39d9a…`                                                  | the body had been edited since; both documents carry the re-derived values, and `architecture/migration-fixture-chains.json` declares the same one              |
 
 **NINE FORMATTING REPAIRS BELONG WITH THEM, AND ONE MECHANISM EXPLAINS ALL OF THEM.** §4.1's

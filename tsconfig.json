@@ -3,62 +3,24 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@dealer/contracts": [
-        "packages/contracts/src/index.ts"
-      ],
-      "@dealer/platform": [
-        "packages/platform/src/index.ts"
-      ],
-      "@dealer/database": [
-        "packages/database/src/index.ts"
-      ],
-      "@dealer/fixed-ops": [
-        "packages/fixed-ops/src/index.ts"
-      ],
-      "@dealer/test-kit": [
-        "packages/test-kit/src/index.ts"
-      ],
-      "@dealer/ui": [
-        "packages/ui/src/index.ts"
-      ],
-      "@dealer/api": [
-        "apps/api/src/index.ts"
-      ],
-      "@dealer/worker": [
-        "apps/worker/src/index.ts"
-      ],
-      "@dealer/web": [
-        "apps/web/src/index.ts"
-      ],
-      "@dealer/organization": [
-        "packages/organization/src/index.ts"
-      ],
-      "@dealer/identity-access": [
-        "packages/identity-access/src/index.ts"
-      ],
-      "@dealer/inventory": [
-        "packages/inventory/src/index.ts"
-      ],
-      "@dealer/crm": [
-        "packages/crm/src/index.ts"
-      ],
-      "@dealer/sales": [
-        "packages/sales/src/index.ts"
-      ],
-      "@dealer/desking": [
-        "packages/desking/src/index.ts"
-      ]
+      "@dealer/contracts": ["packages/contracts/src/index.ts"],
+      "@dealer/platform": ["packages/platform/src/index.ts"],
+      "@dealer/database": ["packages/database/src/index.ts"],
+      "@dealer/fixed-ops": ["packages/fixed-ops/src/index.ts"],
+      "@dealer/test-kit": ["packages/test-kit/src/index.ts"],
+      "@dealer/ui": ["packages/ui/src/index.ts"],
+      "@dealer/api": ["apps/api/src/index.ts"],
+      "@dealer/worker": ["apps/worker/src/index.ts"],
+      "@dealer/web": ["apps/web/src/index.ts"],
+      "@dealer/organization": ["packages/organization/src/index.ts"],
+      "@dealer/identity-access": ["packages/identity-access/src/index.ts"],
+      "@dealer/inventory": ["packages/inventory/src/index.ts"],
+      "@dealer/crm": ["packages/crm/src/index.ts"],
+      "@dealer/sales": ["packages/sales/src/index.ts"],
+      "@dealer/desking": ["packages/desking/src/index.ts"]
     },
     "noEmit": true
   },
-  "include": [
-    "apps/*/src/**/*.ts",
-    "packages/*/src/**/*.ts",
-    "scripts/**/*.ts",
-    "tests/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "**/dist"
-  ]
+  "include": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "**/dist"]
 }
