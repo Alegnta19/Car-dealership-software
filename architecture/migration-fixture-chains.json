@@ -658,6 +658,15 @@
               "note": "the committed RELEASE TRAIN 4 sales-pipeline-and-showroom migration, carried unmutated while a 057 control body is probed"
             }
           ]
+        },
+        "065_appraisal_trade_pricing_desking.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "e20987f966a9e6a6e6a0356caba13f1f0d6d4a87d8b64c4f5d84157a354a9b60",
+              "note": "the committed FBL-120 appraisal, trade, pricing and desking migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

@@ -7,7 +7,9 @@
     "declaration": true,
     "declarationMap": true
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
     {
       "path": "../../packages/contracts"
@@ -30,7 +32,14 @@
     {
       "path": "../../packages/inventory"
     },
-    { "path": "../../packages/crm" },
-    { "path": "../../packages/sales" }
+    {
+      "path": "../../packages/crm"
+    },
+    {
+      "path": "../../packages/sales"
+    },
+    {
+      "path": "../../packages/desking"
+    }
   ]
 }

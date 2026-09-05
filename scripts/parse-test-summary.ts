@@ -156,6 +156,15 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * §4.3's own floor is 577 tests / 59 suites; the declared floors below are above it, so the
  * order's number is cleared with room and is stated in `docs/orders/FBL-020-R6.md`.
  *
+ * IT MOVED 838 → 902 / 84 → 92 UNDER FBL-120 (Appraisal, Trade, Pricing and Desking),
+ * which added sixty-four tests across eight suites: the desk calculator proved deterministic
+ * without a database at all, one fact converging on one desk file under a real race, the
+ * trade recorded as versions a trigger refuses to edit, a rule book that answers once or
+ * refuses, the decision that freezes exactly the version a manager read, the surface those
+ * commands are reached through, the fourteen new tables secured at the database boundary,
+ * and the delivery proof that every one of the order's seven rows names a test this
+ * repository declares. Measured by the full local run before being written here.
+ *
  * IT MOVED 829 → 838 / 83 → 84 UNDER RT4-C1, the seven-outcome correction, which added one
  * suite — `tests/sales-showroom-ops.test.ts`, holding the three probes for the day a
  * showroom actually has: bookings that move, are called off or are missed and CANNOT then
@@ -283,8 +292,8 @@ type Key = 'tests' | 'suites' | 'pass' | 'fail' | 'cancelled' | 'skipped' | 'tod
  * exactly once, with the replayed-delivery ledger conflict); and one new suite line each
  * for the two new batteries. Measured by the full local run before being written here.
  */
-export const MINIMUM_TESTS = 838;
-export const MINIMUM_SUITES = 84;
+export const MINIMUM_TESTS = 902;
+export const MINIMUM_SUITES = 92;
 
 /**
  * The order's own floor.

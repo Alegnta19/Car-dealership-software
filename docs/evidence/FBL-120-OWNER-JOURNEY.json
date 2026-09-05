@@ -1,0 +1,222 @@
+{
+  "phase": "FBL-120",
+  "order": "Master Blueprint Version 3.1 §14.3 Part B",
+  "walked_in": "the shipped staff console at /admin/, through the production /auth/login and /auth/callback routes",
+  "identities": {
+    "salesperson": "5f9bf78a-fa80-4406-aea2-a874e2a9b534",
+    "sales_manager": "4dd03aa9-49ab-4229-8f6a-0e3b91a9f08a"
+  },
+  "no_identifier_was_typed": true,
+  "identifier_note": "A VIN and money amounts were typed. No internal identifier was: the desk file was CHOSEN from the handed-on list, and every other id came from a row already on the screen.",
+  "stages": [
+    {
+      "stage": 1,
+      "who": "salesperson",
+      "what": "signed in through /auth/login and /auth/callback, and landed on the shipped console"
+    },
+    {
+      "stage": 2,
+      "who": "salesperson",
+      "what": "opened the Desk board: 0 open files, 0 waiting on a decision, 0 approved",
+      "saw": "No desk files at the rooftops you work."
+    },
+    {
+      "stage": 3,
+      "who": "salesperson",
+      "what": "read the board’s own statement of what this phase does not know",
+      "saw": "Gross, revenue, commission, close rate, ROI, the deal record, sold inventory and delivery are NOT_YET_AVAILABLE in this phase."
+    },
+    {
+      "stage": 4,
+      "who": "salesperson",
+      "what": "pressed “Open a desk file” and was shown the customers the showroom had handed on",
+      "saw": "Ready for appraisal and desking — Handed just now",
+      "typed": ""
+    },
+    {
+      "stage": 5,
+      "who": "salesperson",
+      "what": "CHOSE the handed-on customer from that list; nothing was typed",
+      "toast": "Desk file opened"
+    },
+    {
+      "stage": 6,
+      "who": "salesperson",
+      "what": "read the file header",
+      "saw": "Marta Silva — 2003 (stock M104352) — open — opened just now"
+    },
+    {
+      "stage": 7,
+      "who": "salesperson",
+      "what": "saw that the selected car names itself by stock number, because migration 062 leaves make and model NULL until a decoder runs",
+      "note": "the journey found this: the header used to render “2003 null null”, and the read was repaired to print what is known"
+    },
+    {
+      "stage": 8,
+      "who": "salesperson",
+      "what": "pressed “Appraise a trade” and filled the walk-around",
+      "typed": "VIN 2T1BURHE0JC014729, year 2018, make Toyota, model Corolla, trim LE, odometer 68420, notes “Tyres at 5mm, service history complete, one key.”"
+    },
+    {
+      "stage": 9,
+      "who": "salesperson",
+      "what": "recorded the trade",
+      "toast": "Appraisal recorded",
+      "saw": "2018 Toyota Corolla LE · VIN 2T1BURHE0JC014729 · 68,420 miles · clean · version 1"
+    },
+    {
+      "stage": 10,
+      "who": "salesperson",
+      "what": "recorded an outside valuation that gave a number",
+      "typed": "source book_sim, value 11,850.00",
+      "saw": "book_sim · deterministic simulator · $11,850.00"
+    },
+    {
+      "stage": 11,
+      "who": "salesperson",
+      "what": "recorded an outside valuation that gave NOTHING, and said why",
+      "typed": "source auction_feed, reason “No auction comparables for this trim in the last 90 days.”",
+      "saw": "auction_feed · deterministic simulator · NOT_YET_AVAILABLE"
+    },
+    {
+      "stage": 12,
+      "who": "salesperson",
+      "what": "pressed “Build a version” and priced the first pencil",
+      "typed": "jurisdiction US-CO, price 45,500.00, trade allowance 12,000.00, trade payoff 14,500.00, cash down 3,000.00, term 72, rate 7.49"
+    },
+    {
+      "stage": 13,
+      "who": "salesperson",
+      "what": "read the figures the desk computed",
+      "toast": "Version 1 priced",
+      "saw": "price $45,500.00 · trade equity -$2,500.00 · taxable $33,500.00 · tax $971.50 · fees $699.00 · financed $46,670.50 · monthly $806.71 · 72 months at 7.49%"
+    },
+    {
+      "stage": 14,
+      "who": "salesperson",
+      "what": "opened the version detail and read every line and the rule behind it",
+      "saw": "state sales tax v1 — Colorado Revised Statutes §39-26-104 (US-CO); documentation fee v1 — Rooftop pricing policy 2026-01; trade tax credit v1 — Colorado Revised Statutes §39-26-113(5)"
+    },
+    {
+      "stage": 15,
+      "who": "salesperson",
+      "what": "sent version 1 to a manager",
+      "toast": "Sent for a decision"
+    },
+    {
+      "stage": 16,
+      "who": "salesperson",
+      "what": "TRIED TO APPROVE THEIR OWN DEAL, and was refused",
+      "saw": "[error] Request failed (404)",
+      "note": "a role denial on a resource-typed action answers in the words a record they cannot see would get"
+    },
+    {
+      "stage": 17,
+      "who": "sales_manager",
+      "what": "signed in as a DIFFERENT person, through the same production routes"
+    },
+    {
+      "stage": 18,
+      "who": "sales_manager",
+      "what": "read the desk board: 1 open file, 1 waiting on a decision, 0 approved",
+      "saw": "Marta Silva · open · v1 of 1 · submitted · $46,670.50 · $806.71 · appraisal variance $150.00 · oldest source 1m ago · needs doing: waiting on a decision, a valuation source had nothing to give"
+    },
+    {
+      "stage": 19,
+      "who": "sales_manager",
+      "what": "opened the file and pressed “Decide” on version 1",
+      "saw": "Financed $46,670.50, $806.71 a month over 72 months at 7.49%. Approving freezes these exact figures."
+    },
+    {
+      "stage": 20,
+      "who": "sales_manager",
+      "what": "approved it, naming the limit it was inside",
+      "typed": "Within the desk limit; customer collecting Friday.",
+      "toast": "Approved and frozen"
+    },
+    {
+      "stage": 21,
+      "who": "sales_manager",
+      "what": "saw the file itself move to approved, and every action but “Detail” disappear from the frozen version"
+    },
+    {
+      "stage": 22,
+      "who": "sales_manager",
+      "what": "built version 2 as a revision — more down, a shorter term",
+      "typed": "cash down 6,000.00, term 60, rate 6.99",
+      "toast": "Version 2 priced"
+    },
+    {
+      "stage": 23,
+      "who": "sales_manager",
+      "what": "sent version 2 for a decision and approved it",
+      "toast": "Approved and frozen"
+    },
+    {
+      "stage": 24,
+      "who": "sales_manager",
+      "what": "saw version 1 become SUPERSEDED with every figure it carried unchanged",
+      "saw": "v2 — Revision · approved · $43,670.50 · $864.52 · 60 months at 6.99% ||| v1 — First pencil · superseded · $46,670.50 · $806.71 · 72 months at 7.49%"
+    },
+    {
+      "stage": 25,
+      "who": "sales_manager",
+      "what": "opened version 1’s detail and read its whole life, decision included",
+      "saw": "none → draft; draft → submitted; submitted → approved — Within the desk limit; customer collecting Friday.; approved → superseded — superseded by version 2. Decided approved."
+    },
+    {
+      "stage": 26,
+      "who": "sales_manager",
+      "what": "read the final board: 0 open, 0 waiting, 1 approved",
+      "saw": "Marta Silva · approved · v2 of 2 · approved · $43,670.50 · $864.52 · appraisal variance $150.00 · needs doing: a valuation source had nothing to give"
+    }
+  ],
+  "outcome": {
+    "desking_case_state": "approved",
+    "versions": 2,
+    "approved_version_no": 2,
+    "superseded_version_no": 1,
+    "superseded_keeps_its_figures": true,
+    "both_decisions_survive": true,
+    "approval_bound_to_reviewed_figures": true,
+    "salesperson_approval_refused_with": "404 Resource not found"
+  },
+  "manager_view": {
+    "rooftopIds": [
+      "909b4cf4-065e-4645-81f9-363108919919"
+    ],
+    "rows": [
+      {
+        "deskingCaseId": "0f11683d-15c1-4868-baef-1abb80eeb8f5",
+        "rooftopId": "909b4cf4-065e-4645-81f9-363108919919",
+        "customerName": "Marta Silva",
+        "state": "approved",
+        "versions": 2,
+        "latestVersionNo": 2,
+        "latestState": "approved",
+        "pendingApproval": false,
+        "approvedVersionNo": 2,
+        "amountFinancedCents": "4367050",
+        "monthlyPaymentCents": "86452",
+        "appraisalVarianceCents": "15000",
+        "oldestSourceAt": "2026-09-05T06:40:44.000Z",
+        "exceptions": [
+          "a valuation source had nothing to give"
+        ]
+      }
+    ],
+    "openCases": 0,
+    "awaitingApproval": 0,
+    "approvedCases": 1,
+    "notYetAvailable": {
+      "gross": "NOT_YET_AVAILABLE",
+      "revenue": "NOT_YET_AVAILABLE",
+      "commission": "NOT_YET_AVAILABLE",
+      "close": "NOT_YET_AVAILABLE",
+      "roi": "NOT_YET_AVAILABLE",
+      "deal": "NOT_YET_AVAILABLE",
+      "sold_inventory": "NOT_YET_AVAILABLE",
+      "delivery": "NOT_YET_AVAILABLE"
+    }
+  }
+}

@@ -171,6 +171,16 @@ export function declaredTestNames(file: string): Set<string> {
   for (const m of source.matchAll(/\b(?:test\(\s*|title:\s*)'((?:[^'\\]|\\.)*)'/g)) {
     names.add((m[1] as string).replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
   }
+  /*
+   * …and the same two shapes written with DOUBLE quotes, which is what a name
+   * containing an apostrophe has to use. A scanner blind to that shape reports
+   * a test as undeclared when the only thing wrong with it is English
+   * punctuation, and a gate reading this would refuse a row that is genuinely
+   * proven — which is how a checker teaches people to name tests badly.
+   */
+  for (const m of source.matchAll(/\b(?:test\(\s*|title:\s*)"((?:[^"\\]|\\.)*)"/g)) {
+    names.add((m[1] as string).replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+  }
   return names;
 }
 

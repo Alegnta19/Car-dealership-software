@@ -1368,6 +1368,174 @@ export const MUTATIONS: Mutation[] = [
     testName:
       'a pass in which a registered sweep FAILS reports it, and --once refuses to report success',
   },
+
+  // ── FBL-120: APPRAISAL, TRADE, PRICING AND DESKING ──────────────────────
+  //
+  // WHAT IS DELIBERATELY NOT DECLARED HERE. `openDeskingCaseWithin` converges
+  // through THREE independent guards — an advisory lock with a pre-check, an
+  // ON CONFLICT clause, and a raced re-select — and each one alone produces the
+  // correct answer. No honest single-line mutation of it can die, and a mutation
+  // that can never die reads as coverage while proving nothing. The outcome is
+  // proven instead by tests/desking-intake.test.ts, which runs the race for real,
+  // and by the database key declared in scripts/database-control-mutations.ts.
+  {
+    id: 'desking_intake_ignores_the_rooftop',
+    control:
+      'a desking-ready fact may only be opened by somebody who works the rooftop that owns it',
+    file: 'packages/desking/src/intake.ts',
+    from: "  if (!(await reaches(input.tenantId, actor, fact.rooftopId))) return { outcome: 'not_found' };",
+    to: "  if (false) return { outcome: 'not_found' };",
+    testFile: 'tests/desking-intake.test.ts',
+    testName:
+      'a fact at a rooftop this person does not work is refused in the words a missing one gets',
+  },
+  {
+    id: 'desking_seam_never_says_available',
+    control: 'opening a desk file marks the Release Train 4 fact AVAILABLE in the same transaction',
+    file: 'packages/desking/src/intake.ts',
+    from:
+      '  await markDeskingHandoffAvailableWithin(executor, {\n' +
+      '    tenantId: input.tenantId,\n' +
+      '    deskingHandoffId: input.deskingHandoffId,\n' +
+      '  });',
+    to: '  // the seam is left saying the desk has never seen this',
+    testFile: 'tests/desking-intake.test.ts',
+    testName: 'opening a desk file carries every canonical reference the fact was written with',
+  },
+  {
+    id: 'certified_provider_admitted',
+    control:
+      'no certified valuation provider is integrated, so a simulator may not wear that label',
+    file: 'packages/desking/src/appraisal.ts',
+    from: "    if (input.providerKind === 'certified_provider') {",
+    to: '    if (false) {',
+    testFile: 'tests/desking-appraisal.test.ts',
+    testName: 'a valuation is a number or an honest absence, and never both',
+  },
+  {
+    id: 'rule_overlap_escapes_as_a_fault',
+    control: 'an overlapping rule is a business refusal the desk can act on, not a 500',
+    file: 'packages/desking/src/rules.ts',
+    from: '    if (isExclusionViolation(error)) {',
+    to: '    if (false) {',
+    testFile: 'tests/desking-rules.test.ts',
+    testName: 'two rules of the same kind and code cannot both be in force over one instant',
+  },
+  {
+    id: 'missing_rules_priced_at_zero',
+    control: 'a jurisdiction with no tax rule refuses the pricing rather than pricing it at zero',
+    file: 'packages/desking/src/scenarios.ts',
+    from: '  if (book.missing.length > 0 || book.expired.length > 0) {',
+    to: '  if (false) {',
+    testFile: 'tests/desking-rules.test.ts',
+    testName: 'a jurisdiction nobody configured refuses the pricing rather than pricing it at zero',
+  },
+  {
+    id: 'expired_rules_read_as_never_configured',
+    control:
+      'a rule book that ran out is reported as EXPIRED, which is not the same answer as missing',
+    file: 'packages/desking/src/rules.ts',
+    from: '  const expired = priceable.filter((k) => everKinds.has(k) && staleKinds.has(k));',
+    to: '  const expired: RuleKind[] = [];',
+    testFile: 'tests/desking-rules.test.ts',
+    testName: 'a rule book that ran out is a different answer from one that was never written',
+  },
+  {
+    id: 'anybody_may_decide',
+    control: "only an eligible manager at the file's rooftop may approve or reject a version",
+    file: 'packages/desking/src/scenarios.ts',
+    from: '    if (!(await isEligibleManager(tx, input.tenantId, actor, scenario.rooftopId))) {',
+    to: '    if (false) {',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'a salesperson cannot decide their own deal, and the refusal explains nothing',
+  },
+  {
+    id: 'approval_ignores_the_reviewed_figures',
+    control: 'a decision binds the exact version reviewed, and a rebuilt screen is refused',
+    file: 'packages/desking/src/scenarios.ts',
+    from: '    if (scenario.outputFingerprint !== input.reviewedOutputFingerprint) {',
+    to: '    if (false) {',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'a manager looking at figures that were rebuilt is refused, and nothing is written',
+  },
+  {
+    id: 'expired_version_may_be_approved',
+    control: 'a version whose expiry has passed cannot be approved',
+    file: 'packages/desking/src/scenarios.ts',
+    from: '    if (scenario.expiresAt !== null && scenario.expiresAt <= now) {',
+    to: '    if (false) {',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'a version whose expiry passed cannot be approved, and expiry itself is a state',
+  },
+  {
+    id: 'decision_replay_is_a_conflict',
+    control: 'a replayed decision converges on the decision already made, before the version check',
+    file: 'packages/desking/src/scenarios.ts',
+    from: '    if (decided.rows.length > 0) {',
+    to: '    if (false) {',
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'a second decision on one version is refused, and a replayed one converges',
+  },
+  {
+    id: 'tax_ignores_the_trade_credit',
+    control: 'a tax written against the taxable base is computed on the base, not on the sticker',
+    file: 'packages/desking/src/calculator.ts',
+    from:
+      '    const base =\n' +
+      "      rule.appliesTo === 'taxable_amount' ? taxableAmountCents : inputs.vehiclePriceCents;",
+    to: '    const base = inputs.vehiclePriceCents;',
+    testFile: 'tests/desking-calculator.test.ts',
+    testName: 'every figure can be checked by hand, in whole cents',
+  },
+  {
+    id: 'negative_equity_reduces_the_balance',
+    control:
+      'negative trade equity is financed too — it adds to the balance rather than reducing it',
+    file: 'packages/desking/src/calculator.ts',
+    from: '    inputs.cashDownCents -\n' + '    tradeEquityCents;',
+    to: '    inputs.cashDownCents +\n' + '    tradeEquityCents;',
+    testFile: 'tests/desking-calculator.test.ts',
+    testName: 'every figure can be checked by hand, in whole cents',
+  },
+  {
+    id: 'rounding_truncates',
+    control: 'a line item rounds half away from zero, rather than truncating toward it',
+    file: 'packages/desking/src/money.ts',
+    from: '  const rounded = (magnitude * 2n + divisor) / (divisor * 2n);',
+    to: '  const rounded = magnitude / divisor;',
+    testFile: 'tests/desking-calculator.test.ts',
+    testName: 'rounding is half away from zero, once per line and never on an intermediate',
+  },
+  {
+    id: 'payment_ignores_the_rate',
+    control: 'a financed balance is amortised at its rate, not split evenly across the term',
+    file: 'packages/desking/src/money.ts',
+    from: '  if (aprPpm === 0n) return roundDiv(amountFinancedCents, n);',
+    to: '  if (aprPpm >= 0n) return roundDiv(amountFinancedCents, n);',
+    testFile: 'tests/desking-calculator.test.ts',
+    testName:
+      'the monthly figure is the annuity formula, and a zero rate is answered rather than divided by',
+  },
+  {
+    id: 'fingerprint_ignores_rule_versions',
+    control: 'the input digest covers WHICH version of each rule was applied, not only the amounts',
+    file: 'packages/desking/src/calculator.ts',
+    from: '    rules: applications.map((a) => [a.ruleId, a.ruleVersion] as const),',
+    to: '    rules: [],',
+    testFile: 'tests/desking-calculator.test.ts',
+    testName:
+      'a different input changes the input digest, and a rule version change changes it too',
+  },
+  {
+    id: 'board_invents_a_gross',
+    control:
+      'gross is NOT_YET_AVAILABLE in this phase, and the board says so rather than computing one',
+    file: 'packages/desking/src/reads.ts',
+    from: "  gross: 'NOT_YET_AVAILABLE',",
+    to: "  gross: '0.00',",
+    testFile: 'tests/desking-approval.test.ts',
+    testName: 'the board reconciles the floor and invents no gross or sale fact',
+  },
 ];
 
 const ROOT = join(__dirname, '..');
