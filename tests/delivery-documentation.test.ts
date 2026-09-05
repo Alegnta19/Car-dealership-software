@@ -16,7 +16,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { loadRequirementMap, type BlueprintFacts } from '../scripts/check-requirement-map';
+import {
+  citationQualifiers,
+  loadRequirementMap,
+  type BlueprintFacts,
+} from '../scripts/check-requirement-map';
 import { docxHeadings, docxLines, fileBytes, fileSha256 } from '../scripts/docx-text';
 import {
   BLOCK_END,
@@ -382,6 +386,54 @@ describe('both blueprints, each verified from its own bytes (FBL-020-R5 §3.1/§
     );
   });
 
+  test('the order the current phase is built under is IN the repository, and measured from its bytes', () => {
+    /*
+     * A THIRD DOCUMENT, and the same rule as the other two. FBL-120 is built under Master
+     * Blueprint Version 3.1 §14.3 Part B, which is neither Version 1.0's §14.3 (FBL-000) nor
+     * Version 2.0's (FBL-020-R2) — so a repository that held only the older two would leave a
+     * reader unable to check what the current phase was actually ordered to do. The bytes are
+     * committed and every recorded fact is read back out of them here, exactly as the
+     * governing and superseded documents are, because a record that describes a file nobody
+     * can open is an attestation wearing a measurement's clothes.
+     */
+    const facts = loadRequirementMap().governing_document.current_order;
+    assert.ok(facts !== undefined, 'the record must name the order the current phase runs under');
+    assert.equal(facts.present_in_repository, true);
+    const path = join(ROOT, facts.repository_path);
+    assert.ok(existsSync(path), `${facts.repository_path} must be committed`);
+    assert.equal(fileSha256(path), facts.file_sha256, 'the current order digest');
+    assert.equal(fileBytes(path), facts.bytes, 'the current order byte length');
+
+    const lines = docxLines(path);
+    for (const [label, value] of [
+      ['title, first line', facts.title_line_1],
+      ['title, second line', facts.title_line_2],
+      ['version line', facts.version_line],
+    ] as const) {
+      assert.ok(lines.includes(value), `${label}: ${value}`);
+    }
+
+    const headings = docxHeadings(path).map((h) => h.text);
+    for (const expected of Object.values(facts.section_14_headings)) {
+      assert.ok(headings.includes(expected), `§14 heading: ${expected}`);
+    }
+
+    /*
+     * The whole reason the third document had to be committed: its §14.3 is a different
+     * order again, and it is the one FBL-120 answers to.
+     */
+    assert.match(
+      facts.section_14_headings['14.3'] ?? '',
+      /FBL-120/,
+      'Version 3.1 §14.3 is the RT4-closure-then-FBL-120 instruction',
+    );
+    assert.notEqual(
+      facts.file_sha256,
+      loadRequirementMap().governing_document.governing.file_sha256,
+      'and it is not the Version 2.0 document under another name',
+    );
+  });
+
   test('every blueprint citation in the delivery documents names its version, file or digest', () => {
     /*
      * The R3 defect, made mechanical. "§14.3" alone names FBL-000 in the superseded
@@ -389,17 +441,12 @@ describe('both blueprints, each verified from its own bytes (FBL-020-R5 §3.1/§
      * the reader can tell which document it means, so every occurrence must carry a version
      * label, a file name or a digest within the same neighbourhood.
      */
-    const facts = loadRequirementMap().governing_document;
-    const qualifiers = [
-      'Version 1.0',
-      'Version 2.0',
-      'v1.0',
-      'v2.0',
-      facts.governing.file,
-      facts.superseded.file,
-      facts.governing.file_sha256.slice(0, 8),
-      facts.superseded.file_sha256.slice(0, 8),
-    ];
+    /*
+     * The list comes from `citationQualifiers` rather than being restated here, because
+     * a third document now exists and two copies of this rule would have drifted apart
+     * the moment one of them learned about it.
+     */
+    const qualifiers = citationQualifiers();
     const unqualified: string[] = [];
     for (const [name, doc] of deliveryDocuments()) {
       for (const m of doc.matchAll(/§14\.\d/g)) {

@@ -1,0 +1,74 @@
+{
+  "$comment": "THE SEVEN FBL-120 ROWS, LOCKED BEFORE ANY CODE WAS WRITTEN, exactly as Master Blueprint Version 3.1 §14.3 Part B states them. `order_text` is quoted verbatim from the committed document's own bytes — the build script read it out of docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx rather than retyping it, because a hand-copied acceptance contract is a contract with the implementer's fingerprints on it. Three different orders in that document open rows with “Row N -”, so the reader was bounded to the Part B block before it quoted anything. `tests` is filled in as each row is proven, and a row naming no test — or naming one that does not exist — fails scripts/check-fbl120-rows.ts.",
+  "order": {
+    "phase": "FBL-120 — Appraisal, Trade, Pricing, and Desking",
+    "document": "Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx",
+    "document_sha256": "c57894f4c0018e7d36afc3e7255eeb17d80b2b3899d5ba44ebd1956a1ee93979",
+    "version_label": "Version 3.1",
+    "section": "14.3 Part B",
+    "repository_path": "docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx",
+    "opening": "Begin from the verified RT4 merge on main. Preserve migrations 000-064 byte-for-byte and begin new schema work at migration 065. Consume exactly one ready_for_appraisal_desking fact; do not reopen CRM, inventory, or showroom behavior.",
+    "owner_visible_finish_line": "Owner-visible finish line. A salesperson or desk manager opens the canonical customer, selected vehicle, opportunity, and trade context without rekeying; records a structured appraisal; builds and compares deterministic, versioned desking scenarios; obtains an attributable manager decision; and freezes one exact approved version. The phase ends with that immutable approved version ready for the later deal-jacket phase - never a sale, contract, funded deal, delivery, or sold vehicle.",
+    "locked_before": "migration 065 existed"
+  },
+  "rows": [
+    {
+      "row": 1,
+      "title": "Canonical intake",
+      "order_text": "Row 1 - Canonical intake. Consume the desking-ready fact exactly once and preserve the canonical opportunity, customer, rooftop, selected stock, and optional trade vehicle. Repeated or concurrent intake converges; foreign or mismatched references refuse without disclosure.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 2,
+      "title": "Appraisal evidence",
+      "order_text": "Row 2 - Appraisal evidence. Record structured trade identity, ownership/relationship, odometer, condition, equipment, damage, inspection observations, attachments, source quotations, timestamps, and provenance. Changes are versioned and attributable; unavailable external valuation data is explicit rather than fabricated.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 3,
+      "title": "Deterministic scenarios",
+      "order_text": "Row 3 - Deterministic scenarios. Calculate each scenario from explicit versioned inputs using fixed decimal and currency rules. Include vehicle price, trade allowance/payoff/equity, configured taxes and fees, documented incentives, cash/down-payment, and financing assumptions only to the extent required for desking; identical inputs reproduce identical outputs.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 4,
+      "title": "Rule and source truth",
+      "order_text": "Row 4 - Rule and source truth. Every tax, fee, incentive, valuation, and policy input names its source, jurisdiction or rooftop scope, effective interval, and version. Expired, overlapping, missing, or inapplicable rules refuse or remain NOT_YET_AVAILABLE; deterministic simulators may stand in for uncertified providers without pretending to be live data.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 5,
+      "title": "Manager approval and freeze",
+      "order_text": "Row 5 - Manager approval and freeze. Approval binds an eligible manager, the exact scenario version reviewed, any required limit or override reason, and one immutable decision time. Approved versions cannot be edited; rejection, expiry, and explicit audited supersession are modeled without rewriting history.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 6,
+      "title": "Lifecycle and oversight",
+      "order_text": "Row 6 - Lifecycle and oversight. Support draft, revise, compare, submit, approve, reject, expire, and supersede with one current approved version per opportunity. The manager view reconciles appraisal variance, scenario versions, pending approvals, exceptions, and source freshness across permitted rooftops without inventing gross or sale facts.",
+      "state": "LOCKED",
+      "tests": []
+    },
+    {
+      "row": 7,
+      "title": "Integrity, UI journey, and delivery proof",
+      "order_text": "Row 7 - Integrity, UI journey, and delivery proof. Enforce tenant/rooftop isolation, exact-parent binding, non-leaking authorization, idempotency, optimistic concurrency, audit, outbox replay, append-only approval history, and safe upgrade. Demonstrate appraisal through frozen approval in the real shipped salesperson and manager UI without raw internal IDs; fresh install and forward upgrade converge.",
+      "state": "LOCKED",
+      "tests": []
+    }
+  ],
+  "exclusions": "FBL-120 exclusions. Do not implement digital retail, deal-jacket generation, e-sign, credit application or underwriting, lender decisions, payment collection, funding, title, registration, delivery, sold inventory, authoritative revenue, accounting, fixed operations, or autonomous binding decisions. Those remain later phases.",
+  "binary_proof": "FBL-120 binary proof. Two concurrent consumers create one desking case; the same versioned inputs reproduce the same scenario totals; stale, foreign, expired, overlapping, or unauthorized inputs refuse without partial writes; manager approval freezes the exact reviewed version; and a later revision creates an attributable successor without changing approved history.",
+  "verification_and_forward_motion": "FBL-120 verification and forward motion. Lock these seven rows before coding, use focused tests while building, and run one final complete battery, all declared mutations with zero survivors, populated upgrade/fresh convergence, a persisted real-UI journey, and exact-final-SHA CI. Return once at the FBL-120 finish line with a seven-row checklist. If accepted, merge the exact reviewed SHA, record FBL-120 CLOSED, and activate FBL-140 without a second closure review.",
+  "inherited_seam": {
+    "fact": "sales.opportunity.ready_for_appraisal_desking",
+    "row_table": "desking_handoffs",
+    "written_by": "packages/sales/src/opportunities.ts, moveOpportunityStage",
+    "note": "Release Train 4 ends by writing ONE desking_handoffs row per opportunity — its (tenant_id, opportunity_id) unique key is the exactly-once guarantee — and ONE admin_outbox event in the same transaction. FBL-120 consumes that fact and nothing else from the sales train; it does not reopen CRM, inventory or showroom behaviour."
+  }
+}

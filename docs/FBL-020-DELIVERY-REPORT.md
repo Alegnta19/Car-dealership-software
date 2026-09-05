@@ -236,7 +236,7 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 14 CODE-BEARING COMMITS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 15 CODE-BEARING COMMITS
 EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
@@ -428,7 +428,7 @@ this tree — once with `artifacts/` present and once with the directory MOVED A
 restored afterwards — and both runs report the same figures, which §5 publishes from the
 artifact of the first: zero failed, cancelled, skipped and todo in each, and the two runs’
 TOP-LEVEL NAME SETS ARE IDENTICAL (`diff` of the sorted `ok` lines is empty), so nothing
-silently skipped itself when its source was unreadable. This battery is <!--fig:doc_battery_tests-->48<!--/fig-->
+silently skipped itself when its source was unreadable. This battery is <!--fig:doc_battery_tests-->49<!--/fig-->
 of those tests, and FBL-020-R6 §1.1 and §4.5 are the reason the size moved: the census this delivery rests on and the final-state record it
 now also carries are COMMITTED rather than written into `artifacts/`, precisely so that a
 gate reading either reads the same bytes in both conditions. Under the absent condition the
@@ -1665,7 +1665,7 @@ reprinting the run.
 
 Each restoration returned `tests/delivery-documentation.test.ts` to a fully green battery,
 with zero failed, cancelled, skipped and todo. **The size is stated separately from the
-result on purpose:** those experiments ran when this battery held 26 tests, and it holds <!--fig:doc_battery_tests-->48<!--/fig-->
+result on purpose:** those experiments ran when this battery held 26 tests, and it holds <!--fig:doc_battery_tests-->49<!--/fig-->
 on this tree — S3 (§2.2), FBL-020-R6 §1.1/§1.2 and FBL-020-R6 §4.5 all added to it, the last of
 those contributing the tests that drive the final-state gate. **The additions are named and not
 tallied**: an itemised sum published beside a gated figure is a second copy of that figure, and
@@ -1880,7 +1880,7 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 | `ratchet_tsc`                | <!--fig:ratchet_tsc-->53<!--/fig-->                                                                       | `quality-baselines.json` `tsc-strict.total`                                         |
 | `ratchet_eslint`             | <!--fig:ratchet_eslint-->123<!--/fig-->                                                                   | `quality-baselines.json` `eslint.total`                                             |
 | `ratchet_format`             | <!--fig:ratchet_format-->0<!--/fig-->                                                                     | `quality-baselines.json` `format.total`                                             |
-| `doc_battery_tests`          | <!--fig:doc_battery_tests-->48<!--/fig-->                                                                 | `tests/delivery-documentation.test.ts`, `test(` declarations                        |
+| `doc_battery_tests`          | <!--fig:doc_battery_tests-->49<!--/fig-->                                                                 | `tests/delivery-documentation.test.ts`, `test(` declarations                        |
 | `blueprint_v1_bytes`         | <!--fig:blueprint_v1_bytes-->88,931<!--/fig-->                                                            | the Version 1.0 `.docx` checked in here, its own byte length                        |
 | `blueprint_v1_sha256`        | <!--fig:blueprint_v1_sha256-->d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9<!--/fig--> | the Version 1.0 `.docx` checked in here, its own digest                             |
 | `blueprint_v2_sha256`        | <!--fig:blueprint_v2_sha256-->556d4e108c9db8b7dcfee284828f926157f7663d260d3d3e0d8774bb032feaaf<!--/fig--> | `docs/orders/FBL-020-R5.md` Appendix A item 8 — the order text's own claimed digest |
@@ -1941,7 +1941,7 @@ artifact_ (the mutual-consistency limb, which sees the span disagreeing with the
 table's prose without consulting any artifact at all). The report was then restored from a
 byte copy taken before the edit and `diff` confirmed the restoration byte-identical, the
 gate returned exit 0, and the battery returned fully green — 26 tests, which was its size
-when that experiment was run; it holds <!--fig:doc_battery_tests-->48<!--/fig--> on this tree
+when that experiment was run; it holds <!--fig:doc_battery_tests-->49<!--/fig--> on this tree
 (§5.1 names what added to it; the additions are not tallied there or here). **No digest of this file is
 quoted here on purpose**: a checksum of the delivery report, published inside the delivery
 report, is stale the instant the next sentence is written — which is the very class §5.4

@@ -1,6 +1,29 @@
 # Which blueprint governs, and what a bare §14 citation resolves to in each
 
-**Governing authority.** The active order is **FBL-020-R6**; the R5 order text it succeeds is
+**THE ORDER IN FORCE NOW — Master Blueprint Version 3.1.** Since 31 August 2026 the active
+code-bearing instruction is **Version 3.1 §14.3**, whose Part A was the RT4 bounded closure
+(merged) and whose Part B is FBL-120 — Appraisal, Trade, Pricing and Desking. Its bytes are
+committed here at
+[`Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx`](Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx),
+107,070 bytes, sha256 `c57894f4c0018e7d36afc3e7255eeb17d80b2b3899d5ba44ebd1956a1ee93979`,
+version line `Version 3.1  |  August 31, 2026  |  SO-001 governing; RT3 closed; RT4 C1 active; FBL-120 pre-authorized`.
+Every one of those facts is read back out of the file by
+`tests/delivery-documentation.test.ts`, exactly as the two documents below are, so attaching
+the wrong file fails rather than passing quietly.
+
+**This makes the ambiguity three-way rather than two-way, and that is why the document is
+here.** Section 14.3 reads FBL-000 in the Version 1.0 document, FBL-020-R2 in the Version 2.0
+one, and `14.3 Current active instruction - RT4 bounded closure, then FBL-120` in Version 3.1.
+A citation qualifies by naming a version label, a file name or a digest — now for three
+documents rather than two. **Version 3.0** (28 August 2026) exists between 2.0 and 3.1 and is
+NOT in this repository; nothing here cites it.
+
+**What the two documents below still are.** Version 2.0 remains the FBL-020-era governing
+document and Version 1.0 its superseded twin; the record beneath this line describes that
+pair and is unchanged, because FBL-020 was delivered under it and rewriting an anchor after
+the fact destroys the thing it anchors. Nothing below is withdrawn.
+
+**Governing authority for FBL-020.** The order for that phase is **FBL-020-R6**; the R5 order text it succeeds is
 checked into this repository at
 [`docs/orders/FBL-020-R5.md`](FBL-020-R5.md), canonical-LF SHA-256
 `83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44` — reproduce with
