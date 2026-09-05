@@ -92,7 +92,8 @@
         "@dealer/organization",
         "@dealer/identity-access",
         "@dealer/inventory",
-        "@dealer/crm"
+        "@dealer/crm",
+        "@dealer/sales"
       ],
       "prohibited": ["dealership business rules", "SQL", "direct pg usage"],
       "database": "none (wires @dealer/database at composition only)",
@@ -111,7 +112,8 @@
         "@dealer/organization",
         "@dealer/identity-access",
         "@dealer/inventory",
-        "@dealer/crm"
+        "@dealer/crm",
+        "@dealer/sales"
       ],
       "prohibited": [
         "queues, outbox tables and schedulers until FBL-040",
@@ -185,6 +187,28 @@
         "provider SDKs"
       ],
       "database": "owns migration 063 tables",
+      "status": "active"
+    },
+    "@dealer/sales": {
+      "path": "packages/sales",
+      "owner": "sales-showroom",
+      "purpose": "Sales pipeline and showroom management: the opportunity created from the CRM handoff, the showroom visit and the floor rotation that decides who takes it, vehicle selection and demonstration against real stock, the sales-side timeline, negotiation rounds without figures, and manager turnover. Stops before desking, the deal record, F&I, title and delivery.",
+      "publicEntry": "packages/sales/src/index.ts",
+      "allowedDealerDeps": [
+        "@dealer/contracts",
+        "@dealer/platform",
+        "@dealer/database",
+        "@dealer/identity-access",
+        "@dealer/inventory",
+        "@dealer/crm"
+      ],
+      "prohibited": [
+        "pricing, desking or any money figure",
+        "deal records, F&I, title or delivery",
+        "HTTP",
+        "provider SDKs"
+      ],
+      "database": "owns migration 064 tables",
       "status": "active"
     },
     "@dealer/identity-access": {

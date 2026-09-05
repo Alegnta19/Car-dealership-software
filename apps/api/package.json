@@ -23,6 +23,7 @@
     "@dealer/organization": "0.1.0",
     "@dealer/identity-access": "0.1.0",
     "@dealer/inventory": "0.1.0",
-    "@dealer/crm": "0.1.0"
+    "@dealer/crm": "0.1.0",
+    "@dealer/sales": "0.1.0"
   }
 }

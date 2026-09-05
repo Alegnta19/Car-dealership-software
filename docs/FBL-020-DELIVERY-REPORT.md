@@ -236,7 +236,7 @@ this report does not read it as any. Everything §8 lists as NOT DISCHARGED stay
 
 ### 1.1 The commit budget — a VIOLATION, not a footnote
 
-**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 13 CODE-BEARING COMMITS
+**THE ONE-COMMIT BUDGET WAS REMOVED FOR R7 BY FBL-020-R7-A1 §4: 15 CODE-BEARING COMMITS
 EXIST ACROSS R5, R6 AND R7, 4 OF THEM FAILED THEIR OWN EXACT-SHA RUN, AND EVERY ONE IS
 DISCLOSED IN THE FINAL-STATE RECORD.** Under R5 and R6 each order allowed one code-bearing
 commit plus an optional documentation-only closeout, and **both orders were ruled VIOLATED
@@ -666,7 +666,7 @@ revision changed.
 | **F1** | `058` §3.4's pre-check is the ONE refusal in the file that fires on a database the shipped `057` schema accepts with nothing tampered with, and it told the operator to "adjudicate" rows an append-only ledger forbids them to touch — the third instance of that defect class in one file.                       | The measurement was re-taken against the shipped code and the refusal now STATES it: `policy.ts` holds the only production `INSERT INTO policy_decisions`; its four `record()` call sites are all inside `decide()`; the deny path writes `decision = 'deny'`; the dealership ALLOW records `actor_type = 'user'`; the platform ALLOW writes a `platform.` action, which the pre-check exempts by name; the support ALLOW always carries its live session id. So the message says no shipped writer can produce the row, names up to ten offending `decision_id`s, says there is no repair inside the migration and why, and points at `request_id`/`correlation_id`/`occurred_at` and `support_access_sessions` — the one question an operator can still act on. |
 | **F2** | The delivery report still ASSERTED the measurement finding D9 withdrew — "MEASURED on the drill database" — in the D3 row of §2.4, while the D9 row of the same table withdrew it.                                                                                                                                 | The words are removed from the D3 row, which now records the withdrawal instead, and the whole document was swept for the same shape: §4 described `persistent_environments_with_057` correctly in §4.0 and then published it as EMPTY again inside §4.1, the C5 row of §2.3 restated the same stale pair, `docs/evidence/FBL-020-R6-MIGRATION-PREFLIGHT.md` counted three `yes` verdicts and listed two, and §10.0 still recorded that the R6 order text is not checked in — which §0.1 denies. Both are corrected against the committed artifact, and the `yes` verdict count is now published only from `totals.verdict_yes`.                                                                                                                                  |
 | **F3** | The post-057 drill stage DOCUMENTED a shape it did not produce: it revoked a binding no decision had ever named, so no stored authority row named a superseded version and `058` §3.3's history-tolerance case went unexercised — the D1b defect, one table over.                                                  | The stage now records an ordinary version-2 ALLOW against the binding it is about to revoke, and ASSERTS the result: `evidence_naming_a_superseded_binding_version` >= 1 fails the stage otherwise. `--phase=post-058` asserts the same rows SURVIVED `058` and that none of them sits at `evidence_version` 3. Revert-proved: with the ALLOW recorded against a binding nothing revokes, the stage reports `0 naming a superseded binding version` and exits 1.                                                                                                                                                                                                                                                                                                  |
-| **F4** | C7's rule is ONE `RAISE` guarded by five comparisons — one per scope level — and only the `rooftop` and `tenant` ones had a named adversarial test. `dealer_group`, `legal_entity` and `department` were credited to C7 while nothing named drove them: each could have been deleted with the whole battery green. | Three new named direct-SQL adversarial tests, each built from real sibling nodes on a real chain and each carrying an accepted leg, plus three new predicate mutations that delete exactly one comparison. All three KILLED their declared test, and the registry is <!--fig:db_controls_registered-->69<!--/fig--> entries with zero survivors.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **F4** | C7's rule is ONE `RAISE` guarded by five comparisons — one per scope level — and only the `rooftop` and `tenant` ones had a named adversarial test. `dealer_group`, `legal_entity` and `department` were credited to C7 while nothing named drove them: each could have been deleted with the whole battery green. | Three new named direct-SQL adversarial tests, each built from real sibling nodes on a real chain and each carrying an accepted leg, plus three new predicate mutations that delete exactly one comparison. All three KILLED their declared test, and the registry is <!--fig:db_controls_registered-->76<!--/fig--> entries with zero survivors.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **The three overclaims, and what each of them said.** All three asserted a fact about the
 reviewer's own project record, which no document in this repository may do — the same class
@@ -1175,6 +1175,7 @@ sed 's/\r$//' migrations/<file>.sql | git hash-object --stdin    # canonical blo
 | `061_dealership_administration.sql`            | `bc41f9cab17784d8f1e99db2a547cf9ed75da9bd` | `5bd48b9be29c7819e6d7cbe9adc9aba53e2ac4fe49afcaefb45682f7798d9816` |
 | `062_vehicle_acquisition_inventory.sql`        | `89d6e1b6d569a9bb3cb32b9944c81313b73ce35d` | `1da381c09702f0d7ef408cb9497c904cdfecb02f1abae87fb21cd8d77cc1cfc9` |
 | `063_crm_bdc_marketing.sql`                    | `8a22aed31f6b670abbe847494600a17628c91c17` | `6ed0cdd5f170b47d4de6e4e69a911314e78d06b0d1739ddf233844c2a82d20f0` |
+| `064_sales_pipeline_showroom.sql`              | `99617b2867a9fc03e31f9d6ba45da5a19912c1ee` | `d390a60dfd8d305616050a749561e234e37973a58201c841918dc010f9b69345` |
 
 **`058_policy_evidence_reconstructable.sql` is NEW IN FBL-020-R6 and is now COMMITTED**, so
 its two digests are of a blob in `HEAD` as well as of the body on disk, and the two agree. It is the file §4.0's frozen-`057` position requires:
@@ -1250,7 +1251,8 @@ cannot roll back, and a customer merged away after approval is withheld as `part
 rather than as a missing address. Revenue is now **structurally** prohibited: the named
 constraint `ck_attribution_pre_sale_revenue` refuses any row claiming money or declaring
 revenue AVAILABLE, so the promise is kept by the database rather than by convention, and
-FBL-100's migration is what relaxes it. It is listed here for the same reason `061` and
+and the release that relaxes it is whichever one first desks a
+deal — NOT FBL-100, which shipped as `064` and left the constraint standing. It is listed here for the same reason `061` and
 `062` are: this table is the one census of the migration chain on disk. Over the immutable
 `000`–`062` it adds lead intake and identity, the immutable source-touch history, routing,
 lifecycle and the first-response clock, one shared timeline of activities and appointments,
@@ -1264,6 +1266,136 @@ FBL-100 is not in it, and `attribution_runs` carries the revenue contract while 
 zero would be a measurement rather than an absence. Its batteries are
 `tests/crm-journey.test.ts`, `tests/crm-campaign.test.ts` and `tests/crm-isolation.test.ts`,
 and the fixture-chain declaration (`negative-control-057`) pins its digest.
+
+**`064_sales_pipeline_showroom.sql` is POST-FBL-020 work — Release Train 4 (FBL-100,
+Sales Pipeline and Showroom Management), not part of this delivery.** **It was returned
+once, under RT4-C1, and carries seven corrections; the digest above is the amended one.**
+It is listed here for the same reason `061`, `062` and `063` are: this table is the one
+census of the migration chain on disk. Over the immutable `000`–`063` it adds the
+opportunity and the two doors it comes through, the showroom floor — the up-rotation, the
+visits standing on it and their event history — the shortlist of cars a customer is
+considering and the sequence of how it changed, test drives as five facts rather than two,
+the sales-side activity timeline, negotiation rounds, manager turnovers, and the single
+fact this train is allowed to hand on: fourteen tables, every one row-secured, registering
+`opportunity`, `showroom_visit` and `demonstration` in BOTH resolvers so a rooftop-bound
+salesperson cannot reach another store's deal.
+
+**WHAT RT4-C1 CORRECTED**, in the order the architect set them out.
+
+1. **CANONICAL INTAKE, ATOMIC AND CONVERGING.** Receipt takes an advisory lock on the
+   handoff and inserts ON CONFLICT DO NOTHING, so a provider that delivers twice, a retry
+   and two genuinely concurrent receipts all end with ONE opportunity and none of them
+   sees a unique-key error — where before the loser got a raw 23505 as a 500, which a
+   retrying webhook would simply retry again. Every fact now comes from Release Train 3's
+   FROZEN snapshot rather than the live lead, and the opportunity retains all five
+   canonical references: party, lead, appointment, rooftop and stock. A WALK-IN is now
+   modelled at all, through RT2's own search-create-deduplicate path — a salesperson finds
+   the customer, and a genuinely new one is created where RT2's duplicate detection can
+   answer, so a walk-in cannot open a second file on somebody the dealership already knows.
+2. **ONE AUDITED OWNER, AND REPLAYABLE COMMANDS.** Receipt establishes the owner — the
+   person the CRM handed it to if they still work that rooftop, else the receiving
+   salesperson — and writes it to the append-only assignment history; where it cannot, an
+   explicit acceptance does, and the board shows the deal as unowned until then.
+   Assignment and stage moves answer their own replay case (`already_assigned`,
+   `already_there`) BEFORE the version check, because holding a stale version is the
+   consequence of the first call having succeeded. The earliest open due action is exposed
+   on the opportunity and the board, with complete and cancel behaviour — and a logged note
+   or call is now recorded as DONE rather than left open for ever, so "actions outstanding"
+   is a figure somebody can act on.
+3. **ONE ACTIVE VISIT, AND AN APPOINTMENT KEPT ATOMICALLY.**
+   `uq_showroom_visits_one_active` makes two open visits for one customer impossible, and
+   the service converges on the existing visit — including for two check-ins carrying
+   DIFFERENT request keys, which the idempotency layer cannot merge because it has never
+   seen them. A valid booking is validated and marked kept through RT3's own service inside
+   the check-in transaction; a completed, cancelled or no-show booking is refused, because
+   a no-show that can be checked in an hour later makes the no-show figure a guess.
+   Greeting and ACCEPTANCE are now separate acts, and reschedule, cancellation and no-show
+   are visible operations on the showroom screen.
+4. **A ROOFTOP-FILTERED CHOOSER, AND FIVE DEMONSTRATION FACTS.** An ordinary salesperson
+   picks a car from canonical inventory filtered to the rooftops they work, without holding
+   inventory authority. `opportunity_vehicle_events` keeps the SEQUENCE the status column
+   destroys — a customer who selected one car, drove another and came back to the first
+   left a single row reading `selected` and the story was gone. A drive is now issued,
+   started, returned, cancelled or an exception, with `demonstration_events` beside it, and
+   THREE incompatible active combinations are named and enforced by partial unique indexes:
+   one car, one driver, one accompanying salesperson. **The refusals no longer leak**:
+   foreign inventory is NOT FOUND in the same words as inventory that does not exist, and a
+   collision says which of the caller's OWN inputs is busy and nothing about the record that
+   holds it — where before it returned the winning demonstration's id.
+5. **THE DISPOSITION BOUNDARY.** The `won` stage and the `sold` disposition are GONE from
+   the schema, not merely from the surface — `tests/sales-authority.test.ts` reads the
+   CHECK definitions back to prove no future caller can reach them. A positive outcome is
+   `committed_to_purchase`, whose only effect is ONE `desking_handoffs` row whose unique key
+   makes "exactly once" a database guarantee, plus ONE
+   `sales.opportunity.ready_for_appraisal_desking` outbox event written in the same
+   transaction and traceable to it. It creates no sale, no sold-inventory transition, no
+   deal, no delivery, no revenue and no monetary negotiation fact — and the battery asserts
+   the car's lifecycle state is untouched.
+6. **ONE RECONCILED MANAGER VIEW.** `salesBoard` is a single read in a single transaction
+   carrying appointments (expected, kept, cancelled, no-show), arrivals and waits including
+   the longest, the floor, every pipeline stage with median age and what has stalled,
+   selected and shortlisted vehicles, demonstrations active and concluded each way, next
+   actions open and overdue, dispositions with their reasons, and the rows a manager can
+   ACT on — a long wait, an overdue task, an unowned deal, a car out too long, a damaged
+   car. Revenue, ROI, gross, commission, close, pricing and deal all answer
+   `NOT_YET_AVAILABLE`, and the battery walks the payload at every depth to prove no
+   money-named field carries a value.
+7. **A REAL UI JOURNEY WITH NO TYPED IDENTIFIERS.** Every id the console needs is chosen
+   from a `/find/*` list the server filtered to the caller's rooftops — handoffs,
+   customers, appointments, vehicles, colleagues — behind one `picker()` primitive. The
+   journey battery drives it with SEPARATE eligible salesperson and manager identities,
+   including a manager reassignment a salesperson is refused, a real turnover, and the
+   positive desking-ready handoff.
+
+**TWO INVARIANTS ARE DECIDED BY THE DATABASE** rather than by a check in a service,
+because both are races a real Saturday produces: the three active-demonstration indexes,
+and the floor rotation taken under `FOR UPDATE SKIP LOCKED` so two managers greeting two
+walk-ins get two different salespeople. `tests/sales-floor.test.ts` RUNS both races rather
+than reasoning about them, and proves the second issue genuinely BLOCKS by asserting on
+`pg_locks` rather than by waiting a fixed number of milliseconds.
+
+**ONE SEAM WAS ADDED TO RELEASE TRAIN 3, AND NOTHING ELSE WAS TOUCHED THERE.**
+`setAppointmentStateWithin` is the `X` / `XWithin` pair every other service in
+`packages/crm` already comes in, and `setAppointmentState` is now that function wrapped in
+a transaction — one implementation of the rules, no second one to drift. It exists because
+outcome 3 requires the arrival and the kept booking to commit together, and the
+alternative was Release Train 4 writing `appointments` behind the service that owns them.
+Migration `063` is byte-for-byte unchanged.
+
+**The journey outcome 7 asks for is recorded in
+`docs/evidence/RT4-OWNER-JOURNEY.json`** — thirty-nine stages walked in a browser through
+the shipped console by TWO separate signed-in identities, a salesperson and a sales
+manager, with no identifier typed anywhere. It holds the refusals in the words a user
+actually sees, the same command answered two different ways for two different people, and
+the positive conclusion replayed twice more under request keys the server had never seen —
+both answered `already_there`, and the timeline still held exactly one `desking.ready`
+fact. Two of its entries are labelled as MY OWN probe mistakes rather than removed.
+
+Its batteries are `tests/sales-journey.test.ts`, `tests/sales-floor.test.ts`,
+`tests/sales-authority.test.ts`, `tests/sales-isolation.test.ts` and
+`tests/sales-showroom-ops.test.ts` — the fourth of which proves row security and its policy
+on every one of the fourteen tables through a genuine `dealership_app` connection rather
+than the pooled owner one, because 064 does not FORCE row security and the owner bypasses
+it. The fixture-chain declaration (`negative-control-057`) pins its digest.
+
+**TWO REGISTRY FINDINGS ARE DISCLOSED RATHER THAN TIDIED AWAY.** (1) A mutation aimed at
+the handoff-intake advisory lock SURVIVED, and so did one aimed at its `ON CONFLICT DO
+NOTHING`: `receiveHandoffWithin` has three independent guards — the lock plus its
+pre-check, the ON CONFLICT clause, and the raced re-select — and each alone produces the
+correct answer, so no honest single-line mutation exists for that path. The registry now
+carries the REASON in place of an entry, because a mutation that can never kill reads as
+coverage while proving nothing; the outcome is proven instead by running the race for
+real. (2) Four database controls — the visit key, the three active-demonstration keys and
+the desking key — are BACKSTOPS their services check first, so the service path never
+reaches them. Rather than delete the controls or weaken the services, one probe steps round
+every service and proves all of them refuse duplicates by name.
+
+Three of its controls are registered in `scripts/database-control-mutations.ts` rather
+than in `scripts/mutation-kill.ts`, for the structural reason that runner exists: a CHECK
+or a UNIQUE INDEX lives in an ALREADY-MIGRATED database, so editing `064` proves nothing
+about a suite that runs where `064` was applied long ago. Each is DROPPED from a copy of
+the migrated database, a named test is required to die, and the control is then restored
+and the test required to pass again.
 
 **`062_vehicle_acquisition_inventory.sql` is POST-FBL-020 work — Release Train 2
 (Vehicle Acquisition and Inventory), not part of this delivery.** It is listed here for
@@ -1359,14 +1491,14 @@ TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:55434/dealership_test" \
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `npm run build`                              | **0 TypeScript errors**, exit 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Full suite                                   | the totals are published from `artifacts/test-summary.json` in §5.4 and are NOT retyped here; what this row asserts is the SHAPE the gate requires — **0 failed, 0 cancelled, 0 skipped, 0 todo**, which `scripts/parse-test-summary.ts` enforces on all eight fields                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `scripts/parse-test-summary.ts`              | declared floors **807 / 79**, above every minimum below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/parse-test-summary.ts`              | declared floors **838 / 84**, above every minimum below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `npm run architecture:check`                 | green — dependency rules, app-SQL guard, module manifest, env confinement, role-binding effectiveness, owned mutations, audit inventory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `scripts/quality-ratchet.ts check`           | **exit 0** — tsc-strict 53 / eslint 123 / format 1, **no baseline raised**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `scripts/quality-ratchet.ts check`           | **exit 0** — tsc-strict 53 / eslint 123 / format 0, **no baseline raised**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `scripts/check-requirement-map.ts`           | OK — 44 requirements, 29 clauses, **<!--fig:map_tests-->302<!--/fig-->** mapped test names, every clause covered, 0 problems                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `scripts/reconciliation-inventory.ts`        | **107** statements in `057`; **38** reconciliations = 11 control-covered + 24 declared not-load-bearing + **3** refusal guards; **0 unaccounted**; **12** negative controls declared                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `scripts/mutation-kill.ts`                   | **66 declared / 66 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/mutation-kill.ts`                   | **79 declared / 79 killed / 0 survived** — a COMPLETE run of the whole registry, every baseline green, the working tree intact after each. The artifact records WHEN it was taken and WHAT it measured in its own `generated_at`, `head` and `tree_dirty` fields; an earlier run that came back 43 / 1 on a red baseline is disclosed in §2.2 (S6a) rather than dropped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `scripts/check-published-figures.ts`         | every figure in this report and in the requirement map equals the artifact or constant it derives from (§5.4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `scripts/database-control-mutations.ts`      | **<!--fig:db_controls_declared-->69<!--/fig--> declared / <!--fig:db_controls_killed-->69<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `scripts/database-control-mutations.ts`      | **<!--fig:db_controls_declared-->76<!--/fig--> declared / <!--fig:db_controls_killed-->76<!--/fig--> killed / <!--fig:db_controls_survived-->0<!--/fig--> survived** — each §3 database control DROPPED from a copy of the migrated database, a NAMED test required to die, then restored and required to pass again (§6.1). `controls_filtered` is `false`, so a narrowed diagnostic run cannot stand in for the gate                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `scripts/check-final-state.ts`               | **exit 0** — the record matches git (every commit in the range, every subject, the range in both directions, plus the ahead-of-evidence list checked against `git rev-list <evidence>..HEAD`), the run data is internally consistent, and all five governed documents restate the same final state (§1). It does NOT assert that the evidence commit is `HEAD`: `HEAD` is the documentation-only closeout above it, which is what `repository_head_relation` records                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | …the same gate on a tree copy with NO `.git` | **exit 0**, printing `git history: ABSENT (this tree is not a git repository)` and naming the head relation together with the four history limbs as unrun. This is the NAMED TRAP'S SIXTH APPEARANCE — what a developer tree has and another checkout does not, after four gitignored-artifact instances and one shallow clone. `scripts/mutation-kill.ts` builds exactly this environment on every run (`isolatedCopy()` excludes `.git` on purpose), and `readGitFacts` called `git rev-parse HEAD` unguarded, so every test driving this gate was red inside the copy BEFORE any mutation was applied; run 32452596992 died there with a battery in which every declared test passed. A non-repository is NOT a harsher shallow clone — a shallow clone still answers `rev-parse HEAD` and still decides the head relation — and the two are asserted apart. The named test `the gate SURVIVES a tree copy with NO .git, and says the head relation did not run` BUILDS the copy the way the runner does rather than reasoning about it, and proves the DOCUMENT half still bites there by corrupting the record inside the copy and requiring the gate to fail |
 | …the same gate on a REAL `--depth 1` clone   | **exit 0**, printing `git history: SHALLOW` and naming the four limbs that could not run there. That is the R6 gate's finding C2 closed and PROVED rather than reasoned about: the named test `the gate SURVIVES a real --depth 1 clone, and says which limbs did not run` makes the clone with git and runs the real gate against it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -1391,7 +1523,7 @@ a complete run of the whole registry, and a fresh complete run at this head reco
 thing. The runner registers every mutation, applies each to an ISOLATED COPY of the tree,
 requires the mutation's own battery to be GREEN before the mutation is applied, and requires
 the named test to die after it; it also asserts the working tree is intact afterwards.
-**66 declared / 66 killed / 0 survived, 0 baselines red, 0 trees left dirty.** A report that
+**79 declared / 79 killed / 0 survived, 0 baselines red, 0 trees left dirty.** A report that
 understates a mandatory §4 gate is as much an evidence defect as one that overstates it, and
 the gate in §5.4 now reads the artifact so that neither direction can ship again.
 
@@ -1448,7 +1580,7 @@ noted. They are:
 | ------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | FBL-020-R5 §4                   | <!--fig:order_text_floor_tests-->459<!--/fig--> / <!--fig:order_text_floor_suites-->47<!--/fig--> | the order's FLOOR clause — "the existing 459-test/47-suite floor may not shrink"        |
 | FBL-020-R5 Appendix A item 9    | <!--fig:order_appendix_tests-->525<!--/fig--> / <!--fig:order_appendix_suites-->57<!--/fig-->     | a quality condition on a count the implementer had already reported, not a second floor |
-| `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->807<!--/fig--> / <!--fig:floor_suites-->79<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
+| `scripts/parse-test-summary.ts` | <!--fig:floor_tests-->838<!--/fig--> / <!--fig:floor_suites-->84<!--/fig-->                       | the DECLARED floor, pinned to what this revision actually measured                      |
 
 **HOW THE FLOOR GOT TO THE MEASUREMENT, IN THREE STEPS, EACH OF WHICH LEFT IT BELOW FOR A WHILE.** `MINIMUM_TESTS` stood at 646 while the battery
 measured 652, inside a constant whose own docstring says a floor is raised to what a measured
@@ -1715,13 +1847,13 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 
 | Figure                       | Value                                                                                                     | Read from                                                                           |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `suite_tests`                | <!--fig:suite_tests-->807<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
-| `suite_suites`               | <!--fig:suite_suites-->79<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
-| `suite_passed`               | <!--fig:suite_passed-->807<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
-| `observed_ok`                | <!--fig:observed_ok-->886<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
+| `suite_tests`                | <!--fig:suite_tests-->838<!--/fig-->                                                                      | `artifacts/test-summary.json` `tests`                                               |
+| `suite_suites`               | <!--fig:suite_suites-->84<!--/fig-->                                                                      | `artifacts/test-summary.json` `suites`                                              |
+| `suite_passed`               | <!--fig:suite_passed-->838<!--/fig-->                                                                     | `artifacts/test-summary.json` `passed`                                              |
+| `observed_ok`                | <!--fig:observed_ok-->922<!--/fig-->                                                                      | `artifacts/test-summary.json` `observed_ok_lines`                                   |
 | `observed_not_ok`            | <!--fig:observed_not_ok-->0<!--/fig-->                                                                    | `artifacts/test-summary.json` `observed_not_ok_lines`                               |
-| `floor_tests`                | <!--fig:floor_tests-->807<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
-| `floor_suites`               | <!--fig:floor_suites-->79<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
+| `floor_tests`                | <!--fig:floor_tests-->838<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_TESTS`                                     |
+| `floor_suites`               | <!--fig:floor_suites-->84<!--/fig-->                                                                      | `scripts/parse-test-summary.ts` `MINIMUM_SUITES`                                    |
 | `order_floor_tests`          | <!--fig:order_floor_tests-->459<!--/fig-->                                                                | `scripts/parse-test-summary.ts` `ORDER_MINIMUM_TESTS`                               |
 | `order_floor_suites`         | <!--fig:order_floor_suites-->47<!--/fig-->                                                                | `scripts/parse-test-summary.ts` `ORDER_MINIMUM_SUITES`                              |
 | `order_text_floor_tests`     | <!--fig:order_text_floor_tests-->459<!--/fig-->                                                           | `docs/orders/FBL-020-R5.md` §4, the floor clause itself                             |
@@ -1730,10 +1862,10 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 | `order_appendix_suites`      | <!--fig:order_appendix_suites-->57<!--/fig-->                                                             | `docs/orders/FBL-020-R5.md` Appendix A item 9                                       |
 | `order_clauses`              | <!--fig:order_clauses-->29<!--/fig-->                                                                     | `docs/orders/FBL-020-R5.md`, clause headings in the Part 3 register                 |
 | `order_sha256`               | <!--fig:order_sha256-->83b7bcd961bd36e1ba06ed79bebe524a8d1a6b40c65797ad2b4c37cc0ce47f44<!--/fig-->        | canonical-LF SHA-256 of `docs/orders/FBL-020-R5.md`                                 |
-| `mutations_declared`         | <!--fig:mutations_declared-->66<!--/fig-->                                                                | `artifacts/mutation-kill.json` `mutations_total`                                    |
-| `mutations_killed`           | <!--fig:mutations_killed-->66<!--/fig-->                                                                  | `artifacts/mutation-kill.json` `mutations_killed`                                   |
+| `mutations_declared`         | <!--fig:mutations_declared-->79<!--/fig-->                                                                | `artifacts/mutation-kill.json` `mutations_total`                                    |
+| `mutations_killed`           | <!--fig:mutations_killed-->79<!--/fig-->                                                                  | `artifacts/mutation-kill.json` `mutations_killed`                                   |
 | `mutations_survived`         | <!--fig:mutations_survived-->0<!--/fig-->                                                                 | `artifacts/mutation-kill.json` `mutations_survived`                                 |
-| `mutations_registered`       | <!--fig:mutations_registered-->66<!--/fig-->                                                              | `scripts/mutation-kill.ts`, `id:` declarations in the registry                      |
+| `mutations_registered`       | <!--fig:mutations_registered-->79<!--/fig-->                                                              | `scripts/mutation-kill.ts`, `id:` declarations in the registry                      |
 | `map_requirements`           | <!--fig:map_requirements-->44<!--/fig-->                                                                  | the requirement map's own `requirements` array                                      |
 | `map_clauses`                | <!--fig:map_clauses-->29<!--/fig-->                                                                       | the requirement map's own `clause_inventory`                                        |
 | `map_tests`                  | <!--fig:map_tests-->302<!--/fig-->                                                                        | the requirement map's test citations, counted as `check-requirement-map.ts` counts  |
@@ -1747,7 +1879,7 @@ the run recorded in `artifacts/test-summary.json`; the corrections are listed in
 | `negative_controls`          | <!--fig:negative_controls-->12<!--/fig-->                                                                 | `architecture/negative-control-anchors-057.json`, one key per control               |
 | `ratchet_tsc`                | <!--fig:ratchet_tsc-->53<!--/fig-->                                                                       | `quality-baselines.json` `tsc-strict.total`                                         |
 | `ratchet_eslint`             | <!--fig:ratchet_eslint-->123<!--/fig-->                                                                   | `quality-baselines.json` `eslint.total`                                             |
-| `ratchet_format`             | <!--fig:ratchet_format-->1<!--/fig-->                                                                     | `quality-baselines.json` `format.total`                                             |
+| `ratchet_format`             | <!--fig:ratchet_format-->0<!--/fig-->                                                                     | `quality-baselines.json` `format.total`                                             |
 | `doc_battery_tests`          | <!--fig:doc_battery_tests-->48<!--/fig-->                                                                 | `tests/delivery-documentation.test.ts`, `test(` declarations                        |
 | `blueprint_v1_bytes`         | <!--fig:blueprint_v1_bytes-->88,931<!--/fig-->                                                            | the Version 1.0 `.docx` checked in here, its own byte length                        |
 | `blueprint_v1_sha256`        | <!--fig:blueprint_v1_sha256-->d38ad00ad2cd5a13ac087dbb96a34a4c133d0e5bfe8c81d9820a0b69f31e03f9<!--/fig--> | the Version 1.0 `.docx` checked in here, its own digest                             |
@@ -1996,8 +2128,8 @@ schema where `058` has already been applied — so `scripts/database-control-mut
 copies the migrated database, removes ONE control, requires the named test to FAIL, restores
 it and requires the same test to PASS again. It also removes ONE anchored clause at a time
 from the three multi-clause trigger functions, reading the bodies out of `058` itself so the
-registry cannot drift from the file it mutates. <!--fig:db_controls_declared-->69<!--/fig-->
-checks, <!--fig:db_controls_killed-->69<!--/fig--> killed, <!--fig:db_controls_survived-->0<!--/fig-->
+registry cannot drift from the file it mutates. <!--fig:db_controls_declared-->76<!--/fig-->
+checks, <!--fig:db_controls_killed-->76<!--/fig--> killed, <!--fig:db_controls_survived-->0<!--/fig-->
 survivors, gated in `ci.yml` on `"survivors": 0` and on `"controls_filtered": false`.
 
 **A defect in the fingerprint comparison itself was found by this drill and fixed.**
@@ -2423,7 +2555,7 @@ absolute ships here without a fixture proving it.
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | §4.0 census provenance, and the migration preflight   | the census was taken from a tree with "none of them under `migrations/`" / "`migrations/` matches: yes" | the artifact records `migrations_match_head: false` and "`migrations/` carries 1 of them". §4.0 now states the artifact's number and what the one change means  |
 | §4.0, the migration preflight, and `058`'s own header | the artifact "says nothing of the kind" / "records no such thing" about a stale `postmaster.pid`        | the artifact records the disagreement in four evidence rows, `postmaster.pid and the running server agree on the data directory` = `false`. All three corrected |
-| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->807<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
+| `scripts/parse-test-summary.ts`                       | `MINIMUM_TESTS` at 646 under a docstring saying the floor is pinned to the measured run                 | the battery measures <!--fig:suite_tests-->838<!--/fig-->. The constant is raised rather than the docstring softened (§5.1)                                     |
 | §4.2 and `docs/identity/DATA-DICTIONARY.md`           | `058`'s digests published as `33c851a0…` / `bcf39d9a…`                                                  | the body had been edited since; both documents carry the re-derived values, and `architecture/migration-fixture-chains.json` declares the same one              |
 
 **NINE FORMATTING REPAIRS BELONG WITH THEM, AND ONE MECHANISM EXPLAINS ALL OF THEM.** §4.1's

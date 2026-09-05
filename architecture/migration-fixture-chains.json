@@ -649,6 +649,15 @@
               "note": "the committed RELEASE TRAIN 3 CRM, BDC and marketing migration, carried unmutated while a 057 control body is probed"
             }
           ]
+        },
+        "064_sales_pipeline_showroom.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "d390a60dfd8d305616050a749561e234e37973a58201c841918dc010f9b69345",
+              "note": "the committed RELEASE TRAIN 4 sales-pipeline-and-showroom migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

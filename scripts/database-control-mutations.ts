@@ -548,6 +548,195 @@ export const CONTROLS: DatabaseControl[] = [
     testFile: 'tests/identity-evidence-integrity.test.ts',
     testName: 'a staged pending-then-approved transition cannot bypass scope validation',
   },
+  // ── RELEASE TRAIN 4 (migration 064) — the structural prohibitions ─────────
+  //
+  // These belong in THIS runner rather than in `mutation-kill.ts` for the same
+  // structural reason the §3 controls do: each is a CHECK or a UNIQUE INDEX in
+  // an already-migrated database, so editing 064 proves nothing — the suite
+  // runs against a database where 064 was applied long before the edit.
+  //
+  // The first two are the promise that this train carries no money. RT3 made
+  // the same promise with `ck_attribution_pre_sale_revenue`, and the reason to
+  // register it here is that a constraint nobody has ever seen fail is
+  // indistinguishable from a constraint that was quietly dropped.
+  //
+  // WHY THESE THREE RESTORES CLEAN BEFORE THEY REBUILD, and the other sixty-nine
+  // do not. Every §3 control is a TRIGGER: with it dropped, the declared test's
+  // write SUCCEEDS but the runner's copy is left holding one extra row that
+  // nothing later reads, so `CREATE TRIGGER` puts it straight back. These three
+  // are DATA INVARIANTS. With one dropped, the test's write succeeds and leaves
+  // behind exactly the row the invariant forbids — and `ADD CONSTRAINT` then
+  // refuses, because the table no longer satisfies the rule being restored. The
+  // restore is written as a DO block (still one statement) that first undoes the
+  // damage the missing control permitted and then rebuilds the control itself.
+  // That is what restoring a data invariant MEANS; it is not a weakening, and
+  // the rebuilt constraint is validated against the whole table exactly as 064
+  // declares it.
+  // ── RT4-C1 (migration 064, as corrected) ─────────────────────────────────
+  //
+  // Four more invariants that live in the DATABASE and nowhere a source edit can
+  // reach: one active visit per customer, one active drive per driver, one per
+  // accompanying salesperson, and exactly one desking handoff per opportunity.
+  // Each is checked by its service too, so the caller gets a sentence — but the
+  // service is one caller, and these are the invariant.
+  {
+    id: 'one_customer_may_have_two_open_visits',
+    section: '064 §2 — FBL-100 / RT4-C1',
+    intent:
+      'a person is in the building or they are not. Dropped, one customer can hold two ' +
+      'open visits — a board that double-counts them, a wait timer measuring the wrong ' +
+      'arrival, and two salespeople each believing they have them.',
+    drop: 'DROP INDEX uq_showroom_visits_one_active',
+    restore:
+      'DO $$ BEGIN ' +
+      'CREATE TEMP TABLE dup_visits AS' +
+      ' SELECT v.tenant_id, v.visit_id FROM showroom_visits v, showroom_visits w' +
+      '  WHERE v.tenant_id = w.tenant_id AND v.party_id = w.party_id' +
+      "    AND v.state <> 'departed' AND w.state <> 'departed'" +
+      '    AND v.visit_id > w.visit_id; ' +
+      'DELETE FROM demonstration_events de USING demonstrations d, dup_visits x' +
+      ' WHERE de.tenant_id = d.tenant_id AND de.demonstration_id = d.demonstration_id' +
+      '   AND d.tenant_id = x.tenant_id AND d.visit_id = x.visit_id; ' +
+      'DELETE FROM demonstrations d USING dup_visits x' +
+      ' WHERE d.tenant_id = x.tenant_id AND d.visit_id = x.visit_id; ' +
+      'DELETE FROM visit_events e USING dup_visits x' +
+      ' WHERE e.tenant_id = x.tenant_id AND e.visit_id = x.visit_id; ' +
+      'DELETE FROM showroom_visits v USING dup_visits x' +
+      ' WHERE v.tenant_id = x.tenant_id AND v.visit_id = x.visit_id; ' +
+      'DROP TABLE dup_visits; ' +
+      'CREATE UNIQUE INDEX uq_showroom_visits_one_active ON showroom_visits ' +
+      "(tenant_id, party_id) WHERE state <> 'departed'; END $$",
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'one_driver_may_drive_two_cars',
+    section: '064 §3 — FBL-100 / RT4-C1',
+    intent:
+      'one person cannot be driving two cars. Dropped, two active drives for one ' +
+      'customer means somebody typed the wrong car and nobody can tell afterwards ' +
+      'which record was the real one.',
+    drop: 'DROP INDEX uq_demonstrations_driver_out',
+    restore:
+      'DO $$ BEGIN ' +
+      'DELETE FROM demonstration_events de USING demonstrations d, demonstrations e' +
+      ' WHERE de.tenant_id = d.tenant_id AND de.demonstration_id = d.demonstration_id' +
+      '   AND d.tenant_id = e.tenant_id AND d.driver_party_id = e.driver_party_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'DELETE FROM demonstrations d USING demonstrations e' +
+      ' WHERE d.tenant_id = e.tenant_id AND d.driver_party_id = e.driver_party_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'CREATE UNIQUE INDEX uq_demonstrations_driver_out ON demonstrations ' +
+      "(tenant_id, driver_party_id) WHERE state IN ('issued', 'in_progress'); END $$",
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'one_salesperson_may_accompany_two_drives',
+    section: '064 §3 — FBL-100 / RT4-C1',
+    intent:
+      'one employee cannot ride along on two drives. An unaccompanied drive is a ' +
+      'deliberate decision; being recorded on two at once is a mistake.',
+    drop: 'DROP INDEX uq_demonstrations_escort_out',
+    restore:
+      'DO $$ BEGIN ' +
+      'DELETE FROM demonstration_events de USING demonstrations d, demonstrations e' +
+      ' WHERE de.tenant_id = d.tenant_id AND de.demonstration_id = d.demonstration_id' +
+      '   AND d.tenant_id = e.tenant_id AND d.accompanied_by_user_link_id = e.accompanied_by_user_link_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'DELETE FROM demonstrations d USING demonstrations e' +
+      ' WHERE d.tenant_id = e.tenant_id AND d.accompanied_by_user_link_id = e.accompanied_by_user_link_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'CREATE UNIQUE INDEX uq_demonstrations_escort_out ON demonstrations ' +
+      "(tenant_id, accompanied_by_user_link_id) WHERE state IN ('issued', 'in_progress'); END $$",
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
+  {
+    id: 'desking_may_be_handed_twice',
+    section: '064 §5 — FBL-100 / RT4-C1',
+    intent:
+      'EXACTLY ONE desking handoff per opportunity — the whole idempotence guarantee ' +
+      'for the one fact this train hands on. Dropped, a replay opens a second file on ' +
+      'the desk for a customer who committed once.',
+    drop: 'ALTER TABLE desking_handoffs DROP CONSTRAINT desking_handoffs_tenant_id_opportunity_id_key',
+    restore:
+      'DO $$ BEGIN ' +
+      'DELETE FROM desking_handoffs d USING desking_handoffs e ' +
+      ' WHERE d.tenant_id = e.tenant_id AND d.opportunity_id = e.opportunity_id ' +
+      '   AND d.desking_handoff_id > e.desking_handoff_id; ' +
+      'ALTER TABLE desking_handoffs ' +
+      'ADD CONSTRAINT desking_handoffs_tenant_id_opportunity_id_key ' +
+      'UNIQUE (tenant_id, opportunity_id); END $$',
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the database itself refuses a second desking handoff, service stepped round',
+  },
+  {
+    id: 'opportunity_may_claim_a_deal',
+    section: '064 §1 — FBL-100',
+    intent:
+      'an opportunity cannot declare a deal AVAILABLE before desking exists to make one. ' +
+      'Dropped, a pipeline row can claim a sale this platform has no record of.',
+    drop: 'ALTER TABLE opportunities DROP CONSTRAINT ck_opportunity_pre_deal',
+    restore:
+      'DO $$ BEGIN ' +
+      "UPDATE opportunities SET deal_status = 'NOT_YET_AVAILABLE' " +
+      "WHERE deal_status <> 'NOT_YET_AVAILABLE'; " +
+      'ALTER TABLE opportunities ADD CONSTRAINT ck_opportunity_pre_deal ' +
+      "CHECK (deal_status = 'NOT_YET_AVAILABLE'); END $$",
+    testFile: 'tests/sales-authority.test.ts',
+    testName: 'pre-sale money is unrepresentable — the database refuses it, by name',
+  },
+  {
+    id: 'negotiation_may_carry_a_price',
+    section: '064 §8 — FBL-100',
+    intent:
+      'a negotiation round records what was SAID and never a figure. Dropped, a round can ' +
+      'declare pricing AVAILABLE while no desking exists to have produced it.',
+    drop: 'ALTER TABLE negotiation_rounds DROP CONSTRAINT ck_negotiation_pre_desking',
+    restore:
+      'DO $$ BEGIN ' +
+      "UPDATE negotiation_rounds SET pricing_status = 'NOT_YET_AVAILABLE' " +
+      "WHERE pricing_status <> 'NOT_YET_AVAILABLE'; " +
+      'ALTER TABLE negotiation_rounds ADD CONSTRAINT ck_negotiation_pre_desking ' +
+      "CHECK (pricing_status = 'NOT_YET_AVAILABLE'); END $$",
+    testFile: 'tests/sales-authority.test.ts',
+    testName: 'pre-sale money is unrepresentable — the database refuses it, by name',
+  },
+  {
+    id: 'one_car_may_go_out_twice',
+    section: '064 §5 — FBL-100',
+    intent:
+      'a stock item cannot be on two test drives at once. The service also serializes on ' +
+      'the car, so this index is the BACKSTOP for any writer that does not — dropped, a ' +
+      'caller reaching the table by another route puts one car in two places.',
+    drop: 'DROP INDEX uq_demonstrations_vehicle_out',
+    restore:
+      'DO $$ BEGIN ' +
+      'DELETE FROM demonstration_events de USING demonstrations d, demonstrations e' +
+      ' WHERE de.tenant_id = d.tenant_id AND de.demonstration_id = d.demonstration_id' +
+      '   AND d.tenant_id = e.tenant_id AND d.stock_item_id = e.stock_item_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'DELETE FROM demonstrations d USING demonstrations e' +
+      ' WHERE d.tenant_id = e.tenant_id AND d.stock_item_id = e.stock_item_id' +
+      "   AND d.state IN ('issued', 'in_progress')" +
+      "   AND e.state IN ('issued', 'in_progress')" +
+      '   AND d.demonstration_id > e.demonstration_id; ' +
+      'CREATE UNIQUE INDEX uq_demonstrations_vehicle_out ON demonstrations ' +
+      "(tenant_id, stock_item_id) WHERE state IN ('issued', 'in_progress'); END $$",
+    testFile: 'tests/sales-floor.test.ts',
+    testName: 'the backstop keys refuse duplicates with every service stepped round',
+  },
 ];
 
 /**

@@ -11,7 +11,10 @@ export default tseslint.config(
   {
     // Tool configuration in CommonJS (.cjs) is legitimate require/module territory.
     files: ['**/*.cjs'],
-    languageOptions: { sourceType: 'commonjs', globals: { require: 'readonly', module: 'writable', __dirname: 'readonly' } },
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { require: 'readonly', module: 'writable', __dirname: 'readonly' },
+    },
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
     },

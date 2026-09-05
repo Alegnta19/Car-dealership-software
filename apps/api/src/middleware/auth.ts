@@ -66,6 +66,7 @@ import {
 } from '@dealer/identity-access';
 import { createInventoryActionCatalog } from '@dealer/inventory';
 import { createCrmActionCatalog } from '@dealer/crm';
+import { createSalesActionCatalog } from '@dealer/sales';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
 import { identityProvider } from '../identity/provider';
 
@@ -139,6 +140,7 @@ export function actionCatalog(): ActionCatalog {
       createIdentityActionCatalog(),
       createInventoryActionCatalog(),
       createCrmActionCatalog(),
+      createSalesActionCatalog(),
     );
   }
   return catalogInstance;
@@ -474,6 +476,21 @@ const RESOURCE_PARAMS: Record<string, string> = {
   lead: 'leadId',
   appointment: 'appointmentId',
   campaign: 'campaignId',
+  // ── RELEASE TRAIN 4 ──────────────────────────────────────────────────────
+  //
+  // Everything hanging off an opportunity — its shortlist, its test drives, its
+  // negotiation rounds, its turnovers — is authorized THROUGH the opportunity,
+  // so those routes name `opportunityId`. A visit and a demonstration get their
+  // own entries because each is acted on by its own identifier once its parent
+  // is behind it in the URL.
+  //
+  // A ROUTE WHOSE ACTION DECLARES A TYPE MUST CARRY THAT TYPE'S PARAMETER. When
+  // it does not, nothing here matches, no resource is resolved, and the
+  // decision quietly widens to the whole dealership — which is exactly the
+  // defect RT3-C1 was returned for.
+  opportunity: 'opportunityId',
+  showroom_visit: 'visitId',
+  demonstration: 'demonstrationId',
 };
 
 export function requireAction(action: string) {

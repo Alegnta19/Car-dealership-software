@@ -225,12 +225,54 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'superseding rather than mutating a previous run, attributed and audited',
   },
   {
+    file: 'packages/sales/src/opportunities.ts',
+    because:
+      'RELEASE TRAIN 4’s pipeline: an opportunity received from a CRM handoff — one per ' +
+      'handoff, enforced by a unique key rather than a check — moved through an ' +
+      'enumerated stage machine with an append-only event beside every move, and ' +
+      'assigned only to somebody whose bindings actually reach the rooftop. Each write ' +
+      'takes an acting user link, advances the row’s version and writes one audit row ' +
+      'in the transaction that made the change',
+  },
+  {
+    file: 'packages/sales/src/showroom.ts',
+    because:
+      'RELEASE TRAIN 4’s floor: the up-rotation and the visits on it. A turn is taken ' +
+      'under FOR UPDATE SKIP LOCKED and the greeting it produces commits with it, so two ' +
+      'managers cannot hand the same salesperson to two customers; a departure returns ' +
+      'that salesperson to the back of the queue in the same transaction. Attributed, ' +
+      'versioned and audited throughout',
+  },
+  {
+    file: 'packages/sales/src/selling.ts',
+    because:
+      'RELEASE TRAIN 4’s selling work: the shortlist and which car is selected, test ' +
+      'drives that refuse to start until a licence has been checked and that no other ' +
+      'opportunity can take out at the same time, follow-up activities, negotiation ' +
+      'rounds carrying what was said and no figure, and manager turnovers. Every write ' +
+      'attributed, versioned where the row can be corrected, audited in the same ' +
+      'transaction',
+  },
+  {
     file: 'packages/inventory/src/listings.ts',
     because:
       'RELEASE TRAIN 2’s publication: the listing state machine and the dispatcher that ' +
       'carries it to the provider. Every state change commits with its outbox event, its ' +
       'delivery-ledger row and its audit row, which is what makes an at-least-once ' +
       'delivery an exactly-once business effect',
+  },
+  {
+    file: 'scripts/database-control-mutations.ts',
+    because:
+      'RELEASE TRAIN 4 §064: three of the controls this runner drops are DATA INVARIANTS — ' +
+      'two CHECK constraints and one UNIQUE INDEX — rather than triggers. With one dropped, ' +
+      'the declared test’s write SUCCEEDS and leaves behind exactly the row the invariant ' +
+      'forbids, so rebuilding the constraint afterwards is refused by the table itself. Each ' +
+      'of those three restores is therefore one DO block that first undoes the damage the ' +
+      'missing control permitted and then rebuilds the control. The statements are STRINGS in ' +
+      'a runner that executes them ONLY against the disposable copy it created and drops, ' +
+      'never against a real database, and putting a data invariant back is what restoring it ' +
+      'means — the alternative is a runner that cannot test a CHECK constraint at all',
   },
   {
     file: 'scripts/upgrade-precheck-refusals-057.ts',
@@ -381,6 +423,22 @@ const EXPECTED_OWNED_TABLES = [
   'lead_sources',
   'leads',
   'party_purpose_consents',
+  // ── RELEASE TRAIN 4 (migration 064) ──────────────────────────────────────
+  //
+  // Six tables carry `authorization_version` because each holds CURRENT STATE a
+  // person may correct: the opportunity and the stage it stands at, a
+  // salesperson's place in the floor rotation, a customer's visit while they are
+  // still in the building, where a shortlisted car stands, a test drive that is
+  // out and not yet back, and a follow-up task that gets completed. The train's
+  // five APPEND-ONLY tables — stage events, assignments, visit events,
+  // negotiation rounds and manager turnovers — deliberately carry no version:
+  // nothing corrects them, a further row is written instead.
+  'demonstrations',
+  'floor_rotations',
+  'opportunities',
+  'opportunity_activities',
+  'opportunity_vehicles',
+  'showroom_visits',
 ] as const;
 
 /**
