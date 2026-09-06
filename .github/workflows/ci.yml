@@ -62,7 +62,7 @@ jobs:
       # fixture. An exact-SHA run must measure the exact commit, so the
       # checkout follows github.head_ref when it exists and the pushed ref
       # otherwise.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
@@ -382,7 +382,7 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_upgrade_test
       FRESH_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cockpit_fresh_check
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # FBL-020-R7: measure the exact branch head, not the synthetic merge
           # ref (see the checkout note in the test job).
@@ -859,7 +859,7 @@ jobs:
     name: container build (digest-pinned base)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # FBL-020-R7: measure the exact branch head, not the synthetic merge
           # ref (see the checkout note in the test job).
@@ -896,7 +896,7 @@ jobs:
       # fixture. An exact-SHA run must measure the exact commit, so the
       # checkout follows github.head_ref when it exists and the pushed ref
       # otherwise.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref || github.ref }}
           fetch-depth: 0
