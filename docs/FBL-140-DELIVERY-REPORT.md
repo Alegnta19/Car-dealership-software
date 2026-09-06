@@ -227,5 +227,26 @@ code for it.**
 - Persisted multi-identity journey: `docs/evidence/FBL-140-OWNER-JOURNEY.json`, 29 stages, four
   identities, three refusals.
 
-The exact-SHA CI run, the merge and the frozen digest of migration `066` are recorded in the
-Closure section once they exist; until then this phase is on its Draft PR.
+## Closure
+
+**FBL-140 is CLOSED.** PR #18 was merged into `main` at
+`72019f186619e49898e66f25ab33ab28133bab13` (parents `6172ba8` and `92427f8`) as a true merge
+commit: `git diff 92427f8 72019f1` is empty and both name the tree object
+`7ba91f2c447fe6da690772a972db21c8a9ef0caa`. The exact tested head `92427f8` carried CI run
+33999774082 (#98), green 4/4 — after `8a3dd6f`'s own run 33996033506 (#96) failed the full-history
+secret scan (two wrong-key probes in the callback batteries, shaped like a key) and the
+mutation-kill step (one Release Train 4 battery red before its mutation in the runner's copy,
+with no detail recorded), and after `b4c11b0`'s run 33998624901 (#97) lost that same Release
+Train 4 test in the complete battery to the hour of the day. Both corrections are bounded to
+what those runs refused and both failures are disclosed in the final-state record rather than
+tidied away. The runner now keeps a red baseline's failing assertion, so a repeat will explain
+itself. The merge has no run of its own; main's run on it, 34005532222 (#99),
+concluded failure: failed ONLY the three final-state tests inside the complete battery ('3 recorded commit(s) are not on top of the evidence commit: 9f651d9…, 8a3dd6f…, b4c11b0…'), exactly as this gate is built to do when a true merge moves branch commits off the line it walks, with the upgrade drill, the container build and the secret scan green and the other 958 tests passing; this closeout is the correction.
+
+**Migration `066` is FROZEN** at canonical-LF sha256
+`bc4c5a3d9bec905a054b7ae8db44ce3a09eafb638e21534c3de084ca41b68494`, pinned in
+`architecture/migration-fixture-chains.json` and enforced by the migration ledger's checksum
+refusal. Migrations `000–065` are byte-for-byte as FBL-120 left them: `git diff 6172ba8 72019f1
+-- migrations/` reports exactly one line, the addition of `066`.
+
+The next phase, FBL-150, waits for the next architect order.
