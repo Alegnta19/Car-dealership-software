@@ -840,6 +840,162 @@ export const CONTROLS: DatabaseControl[] = [
     testName:
       'the database refuses a decision that names the wrong figures, with the service stepped round',
   },
+
+  // ── FBL-140 (migration 066): DEAL JACKET, DOCUMENTS AND E-SIGN EVIDENCE ──
+  {
+    id: 'two_active_jackets_on_one_deal',
+    section: '066 §2 — FBL-140 Outcome 1',
+    intent:
+      'ONE active jacket per desk file. Dropped, a second jacket opens on the same deal naming another version and the paperwork has two answers.',
+    drop: 'DROP INDEX uq_deal_jackets_one_active_per_case',
+    restore:
+      "DO $$ BEGIN DELETE FROM deal_jackets a USING deal_jackets b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.desking_case_id = b.desking_case_id AND a.state <> 'voided' AND b.state <> 'voided'; CREATE UNIQUE INDEX uq_deal_jackets_one_active_per_case ON deal_jackets (tenant_id, desking_case_id) WHERE state <> 'voided'; END $$",
+    testFile: 'tests/jacket-intake.test.ts',
+    testName: 'the backstop keys refuse a duplicate active jacket with every service stepped round',
+  },
+  {
+    id: 'two_jackets_on_one_approved_version',
+    section: '066 §2 — FBL-140 Outcome 1',
+    intent:
+      'exactly one jacket per approved desk version. Dropped, the same approval carries two jackets and a retry writes a duplicate instead of converging.',
+    drop: 'ALTER TABLE deal_jackets DROP CONSTRAINT deal_jackets_tenant_id_approved_scenario_id_key',
+    restore:
+      'DO $$ BEGIN DELETE FROM deal_jackets a USING deal_jackets b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.approved_scenario_id = b.approved_scenario_id; ALTER TABLE deal_jackets ADD CONSTRAINT deal_jackets_tenant_id_approved_scenario_id_key UNIQUE (tenant_id, approved_scenario_id); END $$',
+    testFile: 'tests/jacket-intake.test.ts',
+    testName: 'the backstop keys refuse a duplicate active jacket with every service stepped round',
+  },
+  {
+    id: 'template_versions_may_overlap',
+    section: '066 §1 — FBL-140 Outcome 2',
+    intent:
+      'two versions of one template cannot both be in force over one instant. Dropped, a document renders from whichever version the query happened to return.',
+    drop: 'ALTER TABLE document_templates DROP CONSTRAINT uq_document_templates_no_overlap',
+    restore:
+      "DO $$ BEGIN DELETE FROM document_templates a USING document_templates b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.template_code = b.template_code AND a.jurisdiction = b.jurisdiction AND a.transaction_type = b.transaction_type AND COALESCE(a.legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid) AND COALESCE(a.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) AND tstzrange(a.effective_from, a.effective_to) && tstzrange(b.effective_from, b.effective_to); ALTER TABLE document_templates ADD CONSTRAINT uq_document_templates_no_overlap EXCLUDE USING gist (tenant_id WITH =, template_code WITH =, jurisdiction WITH =, transaction_type WITH =, (COALESCE(legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =, (COALESCE(rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =, tstzrange(effective_from, effective_to) WITH &&); END $$",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'two versions of one requirement or template cannot both be in force over one instant',
+  },
+  {
+    id: 'requirement_versions_may_overlap',
+    section: '066 §1 — FBL-140 Outcome 2',
+    intent:
+      'two versions of one requirement cannot both be in force over one instant. Dropped, the checklist resolves two answers and cannot say what the deal needs.',
+    drop: 'ALTER TABLE document_requirements DROP CONSTRAINT uq_document_requirements_no_overlap',
+    restore:
+      "DO $$ BEGIN DELETE FROM document_requirements a USING document_requirements b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.requirement_code = b.requirement_code AND a.jurisdiction = b.jurisdiction AND a.transaction_type = b.transaction_type AND COALESCE(a.legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid) AND COALESCE(a.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid) AND tstzrange(a.effective_from, a.effective_to) && tstzrange(b.effective_from, b.effective_to); ALTER TABLE document_requirements ADD CONSTRAINT uq_document_requirements_no_overlap EXCLUDE USING gist (tenant_id WITH =, requirement_code WITH =, jurisdiction WITH =, transaction_type WITH =, (COALESCE(legal_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =, (COALESCE(rooftop_id, '00000000-0000-0000-0000-000000000000'::uuid)) WITH =, tstzrange(effective_from, effective_to) WITH &&); END $$",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'two versions of one requirement or template cannot both be in force over one instant',
+  },
+  {
+    id: 'template_approved_by_nobody',
+    section: '066 §1 — FBL-140 Outcome 2',
+    intent:
+      'an approval names who and when or it is not one. Dropped, a sample can be relabelled approved with nobody accountable, which is the one lie the table exists to refuse.',
+    drop: 'ALTER TABLE document_templates DROP CONSTRAINT ck_template_approval_is_attributed',
+    restore:
+      "DO $$ BEGIN DELETE FROM document_templates WHERE approval_status = 'approved' AND (approved_by_user_link_id IS NULL OR approved_at IS NULL); ALTER TABLE document_templates ADD CONSTRAINT ck_template_approval_is_attributed CHECK ((approval_status = 'approved' AND approved_by_user_link_id IS NOT NULL AND approved_at IS NOT NULL) OR (approval_status <> 'approved' AND approved_by_user_link_id IS NULL AND approved_at IS NULL)); END $$",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'an approval names who and when and what it rests on, or it is not an approval — service and database agree',
+  },
+  {
+    id: 'waiver_with_three_of_four_things',
+    section: '066 §2 — FBL-140 Outcome 2',
+    intent:
+      'a waiver is actor, reason, policy version and evidence, on a waivable requirement. Dropped, a line can be waived with any of them missing, or on a requirement nobody may waive.',
+    drop: 'ALTER TABLE jacket_checklist_items DROP CONSTRAINT ck_checklist_waiver_complete',
+    restore:
+      "DO $$ BEGIN UPDATE jacket_checklist_items SET state = 'missing', waived_by_user_link_id = NULL, waiver_reason = NULL, waiver_policy_version = NULL, waiver_evidence_uri = NULL, waived_at = NULL WHERE state = 'waived' AND (NOT waivable OR waived_by_user_link_id IS NULL OR waiver_reason IS NULL OR waiver_policy_version IS NULL OR waiver_evidence_uri IS NULL OR waived_at IS NULL); ALTER TABLE jacket_checklist_items ADD CONSTRAINT ck_checklist_waiver_complete CHECK ((state <> 'waived' AND waived_by_user_link_id IS NULL AND waiver_reason IS NULL AND waiver_policy_version IS NULL AND waiver_evidence_uri IS NULL AND waived_at IS NULL) OR (state = 'waived' AND waivable AND waived_by_user_link_id IS NOT NULL AND waiver_reason IS NOT NULL AND waiver_policy_version IS NOT NULL AND waiver_evidence_uri IS NOT NULL AND waived_at IS NOT NULL)); END $$",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'a waiver is four things from an eligible manager, or it is nothing — service and database agree',
+  },
+  {
+    id: 'blob_key_may_lie_about_its_bytes',
+    section: '066 §9(a) — FBL-140 Outcome 4',
+    intent:
+      'a blob is its own digest. Dropped, a row can name one hash and hold other bytes, and every content hash on every document becomes a claim rather than a fact.',
+    drop: 'DROP TRIGGER trg_document_blobs_content_addressed ON document_blobs',
+    restore:
+      "DO $$ BEGIN DELETE FROM document_blobs b WHERE b.content_sha256 <> encode(digest(b.content, 'sha256'), 'hex') AND NOT EXISTS (SELECT 1 FROM package_documents d WHERE d.content_sha256 = b.content_sha256); CREATE TRIGGER trg_document_blobs_content_addressed BEFORE INSERT OR UPDATE OR DELETE ON document_blobs FOR EACH ROW EXECUTE FUNCTION document_blobs_are_content_addressed(); END $$",
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName:
+      'a written package, a rendered document and a blob cannot be edited — the database refuses each',
+  },
+  {
+    id: 'written_package_may_be_edited',
+    section: '066 §9(b) — FBL-140 Outcomes 4 and 6',
+    intent:
+      'a written package version is immutable but for its state, and its final states are absorbing. Dropped, its fields digest and package hash can be rewritten under a ceremony that bound them, and a voided package can be revived.',
+    drop: 'DROP TRIGGER trg_jacket_packages_freeze ON jacket_packages',
+    restore:
+      'CREATE TRIGGER trg_jacket_packages_freeze BEFORE UPDATE ON jacket_packages FOR EACH ROW EXECUTE FUNCTION jacket_packages_freeze()',
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName:
+      'a written package, a rendered document and a blob cannot be edited — the database refuses each',
+  },
+  {
+    id: 'rendered_document_may_be_edited',
+    section: '066 §9(c) — FBL-140 Outcome 4',
+    intent:
+      'a rendered document is evidence; only its scan result and hold state move. Dropped, its content hash, title and template binding can be rewritten after a signer read it.',
+    drop: 'DROP TRIGGER trg_package_documents_freeze ON package_documents',
+    restore:
+      'CREATE TRIGGER trg_package_documents_freeze BEFORE UPDATE OR DELETE ON package_documents FOR EACH ROW EXECUTE FUNCTION package_documents_freeze()',
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName:
+      'a written package, a rendered document and a blob cannot be edited — the database refuses each',
+  },
+  {
+    id: 'package_fields_may_be_edited',
+    section: '066 §9(e) — FBL-140 Outcome 3',
+    intent:
+      'assembled fields are an append-only ledger. Dropped, a figure a signer read can be changed under the signature.',
+    drop: 'DROP TRIGGER trg_package_fields_append_only ON package_fields',
+    restore:
+      'CREATE TRIGGER trg_package_fields_append_only BEFORE UPDATE OR DELETE ON package_fields FOR EACH ROW EXECUTE FUNCTION fbl140_ledger_append_only()',
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName:
+      'a written package, a rendered document and a blob cannot be edited — the database refuses each',
+  },
+  {
+    id: 'signature_unbound_from_the_package',
+    section: '066 §9(d) — FBL-140 Outcome 5',
+    intent:
+      'a signature binds exactly the package the ceremony bound, in a signable state. Dropped, a signer can be signed onto a superseded or voided package with the service stepped round.',
+    drop: 'DROP TRIGGER trg_ceremony_signers_bind_signature ON ceremony_signers',
+    restore:
+      'CREATE TRIGGER trg_ceremony_signers_bind_signature BEFORE UPDATE ON ceremony_signers FOR EACH ROW EXECUTE FUNCTION ceremony_signers_bind_signature()',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a superseded or modified package takes no signature — the service and the database both refuse',
+  },
+  {
+    id: 'ceremony_ledger_may_be_rewritten',
+    section: '066 §9(e) — FBL-140 Outcome 5',
+    intent:
+      'the ceremony event ledger is append-only. Dropped, a provider event or a consent can be edited after the fact.',
+    drop: 'DROP TRIGGER trg_ceremony_events_append_only ON ceremony_events',
+    restore:
+      'CREATE TRIGGER trg_ceremony_events_append_only BEFORE UPDATE OR DELETE ON ceremony_events FOR EACH ROW EXECUTE FUNCTION fbl140_ledger_append_only()',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence',
+  },
+  {
+    id: 'provider_event_recorded_twice',
+    section: '066 §4 — FBL-140 Outcome 5',
+    intent:
+      'a provider callback is recorded once by its own reference. Dropped, the second delivery is a second row and the replay guard has nothing to converge on.',
+    drop: 'ALTER TABLE ceremony_events DROP CONSTRAINT ceremony_events_tenant_id_provider_event_ref_key',
+    restore:
+      'DO $$ BEGIN DELETE FROM ceremony_events a USING ceremony_events b WHERE a.ctid > b.ctid AND a.tenant_id = b.tenant_id AND a.provider_event_ref IS NOT NULL AND a.provider_event_ref = b.provider_event_ref; ALTER TABLE ceremony_events ADD CONSTRAINT ceremony_events_tenant_id_provider_event_ref_key UNIQUE (tenant_id, provider_event_ref); END $$',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence',
+  },
 ];
 
 /**

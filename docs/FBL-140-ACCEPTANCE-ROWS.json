@@ -1,0 +1,310 @@
+{
+  "$comment": "THE EIGHT FBL-140 OUTCOMES, LOCKED BEFORE ANY CODE WAS WRITTEN, exactly as the architect's order states them. `order_text` is quoted VERBATIM from docs/orders/FBL-140-ORDER.md — the build script read it out of that committed file rather than retyping it, and scripts/check-fbl140-rows.ts refuses a quotation those bytes do not contain, so the acceptance contract cannot carry the implementer's fingerprints. `tests` is filled in as each outcome is proven, and a row naming no test — or naming one that does not exist — fails the gate.",
+  "order": {
+    "phase": "FBL-140 — Deal Jacket, Documents, and E-Sign Evidence",
+    "document": "FBL-140-ORDER.md",
+    "repository_path": "docs/orders/FBL-140-ORDER.md",
+    "issued_under": "Standing Architect Order SO-001, Master Blueprint Version 3.1 (docs/orders/Car_Dealership_Management_and_Sales_Cloud_Master_Blueprint_v3.1.docx, sha256 c57894f4c0018e7d36afc3e7255eeb17d80b2b3899d5ba44ebd1956a1ee93979)",
+    "received_on": "2026-09-05",
+    "starting_point": "main at 6172ba8e1ba99db074d2f7985ca70dd57d6e057d, FBL-120 CLOSED, migration 065 frozen",
+    "first_migration": "066_deal_jacket_documents_esign.sql",
+    "objective": "From one exact, current, manager-approved FBL-120 desking version, produce an immutable, version-bound, auditable deal-jacket and document-signing package ready for the later limited F&I and funding workflow. FBL-140 may create the deal-jacket/document aggregate. It must not declare a sale, funding, delivery, sold vehicle, accounting entry, or revenue event.",
+    "locked_before": "migration 066 existed"
+  },
+  "rows": [
+    {
+      "row": 1,
+      "title": "Canonical intake and identity",
+      "order_text": "1. Canonical intake and identity Consume the exact approved desking version through FBL-120’s public interface or published fact. Bind tenant, legal entity, rooftop, opportunity, party, selected stock, trade/appraisal context, approved scenario version, and rule versions. Retry and concurrency must converge without duplicate active jackets.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "opening a jacket binds every canonical reference at the version it carried"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "a repeated intake converges on the jacket that already exists"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "two genuinely concurrent intakes converge on one jacket"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "a deal nothing is approved on cannot have a jacket, and a foreign or missing file is simply not found"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "the discovery list holds approved deals nobody has opened a jacket for, and drops them once opened"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "the backstop keys refuse a duplicate active jacket with every service stepped round"
+        },
+        {
+          "file": "tests/jacket-intake.test.ts",
+          "name": "when the desk approves a newer version the jacket is stale, assembly refuses, and void-then-open binds the new one"
+        }
+      ]
+    },
+    {
+      "row": 2,
+      "title": "Versioned checklist and document requirements",
+      "order_text": "2. Versioned checklist and document requirements Resolve requirements from typed, effective-dated legal-entity, rooftop, jurisdiction, transaction-type, and template configuration. Every requirement must show its source and version. Missing required items block progression. Any permitted waiver requires authorized actor, reason, policy version, and, and and evidence.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "every requirement and template names its source, scope, interval and version, and a sample says it is one"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "an approval names who and when and what it rests on, or it is not an approval — service and database agree"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "two versions of one requirement or template cannot both be in force over one instant"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "missing required items block progression, evidence satisfies, and an optional item never blocks"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "a waiver is four things from an eligible manager, or it is nothing — service and database agree"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "a template with no version in force is a render failure the board can see, not a blank document"
+        },
+        {
+          "file": "tests/jacket-checklist.test.ts",
+          "name": "a rooftop's own requirement beats the tenant-wide one, and an exact transaction type beats 'any'"
+        }
+      ]
+    },
+    {
+      "row": 3,
+      "title": "Deterministic package assembly",
+      "order_text": "3. Deterministic package assembly Assemble fields from canonical records without operator rekeying or copied shadow truth. Every financial figure must exactly match the approved FBL-120 version and preserve currency and fixed-decimal semantics. Record field provenance and source versions.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "every financial field is the approved version’s own integer cents, with its currency and its provenance"
+        },
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "a stale desk approval is refused at assembly and shows on the board, while the approved figures never move under a jacket"
+        }
+      ]
+    },
+    {
+      "row": 4,
+      "title": "Immutable rendering and artifacts",
+      "order_text": "4. Immutable rendering and artifacts Render versioned document packages deterministically. Bind each artifact to package version, template version, content hash, MIME type, size, classification, malware result, retention policy, and legal-hold state. A changed input creates a new superseding version; it never mutates a rendered or signed package.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "rendering is a pure function: same template and fields, same bytes, same digest"
+        },
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "the same inputs assembled again write nothing, and every artifact is bound to what the order names"
+        },
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "a written package, a rendered document and a blob cannot be edited — the database refuses each"
+        },
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "a changed input writes the next version and supersedes the last; the earlier package, its figures and its bytes are intact"
+        },
+        {
+          "file": "tests/jacket-assembly.test.ts",
+          "name": "an approved template renders its approval and a package of approved templates asks for no review"
+        }
+      ]
+    },
+    {
+      "row": 5,
+      "title": "E-sign ceremony and evidence",
+      "order_text": "5. E-sign ceremony and evidence Capture electronic-record consent, signer identity and role, signing authority, authentication assurance, intent, exact package version/hash, timestamps, provider delivery records, signature results, and completion certificate. Provider callbacks must be signed, idempotent, replay-safe, and reconcilable. A signer cannot sign a superseded or modified package.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "sending is a manager’s act that binds the package hash, seats the signers in their lanes, and shows staff no link"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "the customer views, consents, and signs exactly the hash they were shown — in that order and no other"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "the dealer signs last, through the staff session the ceremony names, and completion is a document anyone can re-hash"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "a superseded or modified package takes no signature — the service and the database both refuse"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "declining ends the ceremony, voids the package and touches nothing that was signed"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence"
+        },
+        {
+          "file": "tests/jacket-signing.test.ts",
+          "name": "a signing link is a digest in the database and a clock in the hand — expired, foreign and invented tokens all fail closed"
+        }
+      ]
+    },
+    {
+      "row": 6,
+      "title": "Lifecycle and operational exceptions",
+      "order_text": "6. Lifecycle and operational exceptions Support coherent states equivalent to draft, review-ready, sent, partially signed, signed-complete, voided, expired, and superseded. Terminal states are absorbing except through explicit versioned supersession. Expose actionable queues for missing documents, render failure, rejected or expired signatures, provider failure, and stale approved-desking inputs.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-lifecycle.test.ts",
+          "name": "draft → review-ready → sent → partially signed → signed-complete, each move attributed and versioned"
+        },
+        {
+          "file": "tests/jacket-lifecycle.test.ts",
+          "name": "a manager voids a sent package and its ceremony; the signer’s link stops answering; nothing is deleted"
+        },
+        {
+          "file": "tests/jacket-lifecycle.test.ts",
+          "name": "terminal states are absorbing: the database refuses to revive a voided package or void a signed one"
+        },
+        {
+          "file": "tests/jacket-lifecycle.test.ts",
+          "name": "the clock expires a ceremony nobody finished — through the worker’s own pass, once — and the board queues it"
+        },
+        {
+          "file": "tests/jacket-lifecycle.test.ts",
+          "name": "the board carries every queue the order names, and says what it does not know"
+        }
+      ]
+    },
+    {
+      "row": 7,
+      "title": "Authorization, isolation, and privacy",
+      "order_text": "7. Authorization, isolation, and privacy Enforce tenant and rooftop RLS, tenant-qualified parent binding, non-disclosing authorization, optimistic concurrency, idempotency, audit/outbox atomicity, short-lived artifact access, PII-safe logs/events, retention, export, and legal holds. Sales staff, managers, customer signers, support actors, and system/provider callbacks must use distinct authority lanes.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "a salesperson opens, assembles and readies; only a manager waives, reviews, sends and voids — and the refusal explains nothing"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "the support lane is the administrator’s alone: retention, legal hold and export refuse a manager"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "a package is reached through its own id, and somebody else’s package, jacket or ceremony is not found"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "a repeated command with one key is applied once and answered twice; a stale expected_version is a conflict"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "a document leaves only through a short-lived grant, which is counted and then shut"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "the customer’s lane is a token, not a session: it signs the exact package, and a staff token opens nothing on it"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "the provider’s lane is a signature over the raw body: unsigned is refused before it is read, a replay converges"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "the event ledger, the outbox and the audit trail carry ids and digests — never a name, an address or a link"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "this phase still cannot create a sale, a funded deal or a delivery, because there is nowhere to put one"
+        },
+        {
+          "file": "tests/jacket-authority.test.ts",
+          "name": "an unauthenticated caller reaches nothing on the staff surface"
+        },
+        {
+          "file": "tests/jacket-isolation.test.ts",
+          "name": "every table this phase adds is secured, and a session without a dealership sees none of it"
+        },
+        {
+          "file": "tests/jacket-isolation.test.ts",
+          "name": "one dealership cannot read, edit or delete another’s jacket, package, documents or signatures"
+        },
+        {
+          "file": "tests/jacket-isolation.test.ts",
+          "name": "a write that names another dealership is refused by the policy, not merely filtered"
+        },
+        {
+          "file": "tests/jacket-isolation.test.ts",
+          "name": "the blob store is reachable only through a dealership’s own document rows"
+        },
+        {
+          "file": "tests/jacket-isolation.test.ts",
+          "name": "the privileged resolver is not executable by the runtime, and the ordinary one is dealership-bound"
+        }
+      ]
+    },
+    {
+      "row": 8,
+      "title": "Real persisted user journey",
+      "order_text": "8. Real persisted user journey Demonstrate the shipped UI without raw UUID entry:\n   * salesperson opens the approved desking result and assembles the jacket;\n   * required documents and missing items are visible;\n   * an authorized manager completes any configured review;\n   * a separate customer identity receives, reviews, consents, and signs the exact package;\n   * staff sees the completed certificate and immutable timeline;\n   * an unauthorized user cannot approve or sign for another actor;\n   * package supersession preserves the earlier package, figures, signatures, and decisions.",
+      "state": "PROVEN",
+      "tests": [
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "all eight outcomes are proven, and each names tests this repository declares"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "the outcomes are quoted verbatim from the committed order, not paraphrased from memory"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "the journey was walked in the shipped console and signing page by four different people"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "every bullet of Outcome 8 has a stage that shows it"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "every cross-lane attempt was refused in the words a missing record gets"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "nothing in the journey was reached by typing an identifier"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "the staff view carries hashes and figures, and says NOT_YET_AVAILABLE for what this phase lacks"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "every FBL-140 control the registries declare names a test that exists, and every anchor occurs exactly once"
+        },
+        {
+          "file": "tests/jacket-delivery.test.ts",
+          "name": "the delivery report names the order, the seam, the five lanes and every outcome"
+        }
+      ]
+    }
+  ],
+  "exclusions": "FBL-140 exclusions. FBL-140 must not implement: credit applications, bureau pulls, lender routing or decisions; F&I product menus or contracting; funding or receivable approval; title or registration completion; vehicle delivery or sold-inventory transition; payment settlement or accounting posting; gross, commission, or revenue recognition; advanced digital retail; Fixed Operations expansion. Do not invent legal forms or claim that sample templates are jurisdictionally approved. Store the exact template source, approval status, jurisdiction, effective interval, and accountable approver.",
+  "binary_proof": "FBL-140 binary proof. One complete local battery; all declared runtime and database-control mutation registries with zero survivors and green baselines; fresh and upgraded database convergence; proof that migrations 000–065 remain byte-identical and only forward migration 066+ is added; persisted multi-identity UI journey; artifact hash/version and signature replay proof; exact-SHA CI; Ready status and merge of the exact verified SHA; green post-merge main state."
+}

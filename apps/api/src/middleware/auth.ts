@@ -68,6 +68,7 @@ import { createInventoryActionCatalog } from '@dealer/inventory';
 import { createCrmActionCatalog } from '@dealer/crm';
 import { createSalesActionCatalog } from '@dealer/sales';
 import { createDeskingActionCatalog } from '@dealer/desking';
+import { createJacketActionCatalog } from '@dealer/jacket';
 import { createServiceActionCatalog, resolveServiceResourceScope } from '@dealer/fixed-ops';
 import { identityProvider } from '../identity/provider';
 
@@ -143,6 +144,7 @@ export function actionCatalog(): ActionCatalog {
       createCrmActionCatalog(),
       createSalesActionCatalog(),
       createDeskingActionCatalog(),
+      createJacketActionCatalog(),
     );
   }
   return catalogInstance;
@@ -502,6 +504,17 @@ const RESOURCE_PARAMS: Record<string, string> = {
   desking_case: 'deskingCaseId',
   appraisal: 'appraisalId',
   desking_scenario: 'scenarioId',
+  // ── FBL-140 ──────────────────────────────────────────────────────────────
+  //
+  // Everything hanging off a deal jacket — its checklist, its bindings, its
+  // packages' fields and documents, its ceremony's signers and events — is
+  // authorized THROUGH the jacket; a package and a ceremony get their own
+  // entries because each is acted on by its own identifier once its parent is
+  // behind it in the URL. The customer signer and the provider hold no user
+  // link and no action: their lanes never reach this table.
+  deal_jacket: 'jacketId',
+  jacket_package: 'packageId',
+  signing_ceremony: 'ceremonyId',
 };
 
 export function requireAction(action: string) {

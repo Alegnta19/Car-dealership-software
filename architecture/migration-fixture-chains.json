@@ -667,6 +667,15 @@
               "note": "the committed FBL-120 appraisal, trade, pricing and desking migration, carried unmutated while a 057 control body is probed"
             }
           ]
+        },
+        "066_deal_jacket_documents_esign.sql": {
+          "required": true,
+          "variants": [
+            {
+              "sha256": "bc4c5a3d9bec905a054b7ae8db44ce3a09eafb638e21534c3de084ca41b68494",
+              "note": "the committed FBL-140 deal jacket, documents and e-sign evidence migration, carried unmutated while a 057 control body is probed"
+            }
+          ]
         }
       }
     },

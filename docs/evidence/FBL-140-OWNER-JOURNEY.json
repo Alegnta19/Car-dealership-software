@@ -1,0 +1,1897 @@
+{
+  "phase": "FBL-140",
+  "order": "docs/orders/FBL-140-ORDER.md — Outcome 8, Real persisted user journey",
+  "walked_in": "the shipped staff console at /admin/ and the shipped customer signing page at /sign/, through the production /auth/login and /auth/callback routes for every staff identity; the customer reached the signing page from the link the simulated e-sign provider delivered and held no dealership identity at all",
+  "how_controls_were_driven": "in the Claude desktop browser pane; where the pane accepted pointer clicks they were used, and where its backgrounded renderer dropped them the page’s own button was activated (element.click()) so that the shipped handler ran unchanged — no request was issued outside the console or the signing page except reading the customer’s inbox from the harness",
+  "identities": {
+    "salesperson": "5bf8ce13-491e-4a93-bff1-3da8017e2517",
+    "sales_manager": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+    "tenant_admin": "f7899bc7-4133-4644-99d1-5f32ebeefb4a",
+    "customer": "party ac327bca-8534-4c9b-916b-c0f03d4c580b (Marta Silva) — no user link; authenticated only by the provider-delivered signing link"
+  },
+  "tenant_id": "50e9556f-6504-4327-b832-cefe43ded333",
+  "jacket_id": "4694a512-6c99-4282-a646-c0f839e0f37f",
+  "ceremony_id": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+  "no_identifier_was_typed": true,
+  "identifier_note": "A file URI, a sha256 digest, template text and a hold reason were typed. No internal identifier was: the jacket was CHOSEN from the approved list, the customer arrived by the delivered link, and every other id came from a row already on the screen.",
+  "stages": [
+    {
+      "stage": 1,
+      "who": "salesperson",
+      "what": "signed in through /auth/login and /auth/callback, and landed on the shipped console at Jackets"
+    },
+    {
+      "stage": 2,
+      "who": "salesperson",
+      "what": "read the empty Jackets board: 0 open jackets, 0 ready for review, 0 out for signature, 0 signed complete; every queue at 0",
+      "saw": "A signed package is evidence that people signed documents. The sale, funding, delivery, sold inventory, accounting posting, gross, commission and revenue are NOT_YET_AVAILABLE in this phase; nothing here moves money or a car. ||| Needs doing: missing documents 0 render failure 0 rejected or expired 0 provider failure 0 desk approval moved 0 ||| No jackets at the rooftops you work."
+    },
+    {
+      "stage": 3,
+      "who": "salesperson",
+      "what": "pressed “Open a jacket” and was shown the deals the desk had approved and that had no jacket yet",
+      "saw": "These are the deals a manager has approved on the desk and that have no jacket yet. Choose one — there is nothing to type. ||| Marta Silva — desk v1 · financed $46,670.50 · $806.71/mo · approved 1m ago"
+    },
+    {
+      "stage": 4,
+      "who": "salesperson",
+      "what": "chose Marta Silva from that list; the jacket opened bound to the desk’s approved version",
+      "saw": "Jacket opened ||| Marta Silva · 2003 (stock M104352) · open · bound to desk v1 (retail finance, US-CO) · opened just now"
+    },
+    {
+      "stage": 5,
+      "who": "salesperson",
+      "what": "read the checklist resolved from configuration: three required items missing, one optional, each naming its source and version",
+      "saw": "3 required item(s) still missing — the package cannot go for review until they are met or waived. ||| odometer_disclosure v1 · Rooftop document policy 2026-01 · document odometer_disclosure · missing ||| privacy_notice v1 (optional) · missing ||| proof_of_insurance v1 · evidence: insurance_card · missing ||| retail_agreement v1 · document retail_agreement · missing"
+    },
+    {
+      "stage": 6,
+      "who": "salesperson",
+      "what": "read what the jacket is bound to: every canonical record with the version it carried when the jacket opened",
+      "saw": "appraisal version · version 1 ||| desking rule · version 1 (×3) ||| desking scenario · version 1 · cdc4c89ee393… ||| legal entity · version 1 ||| party · version 1 ||| rooftop · version 1 ||| scenario approval · version 2026-09-05T18:56:02.000Z · cdc4c89ee393… ||| stock item · version 1 ||| vehicle · version 1"
+    },
+    {
+      "stage": 7,
+      "who": "salesperson",
+      "what": "pressed “Assemble the package”; three documents rendered from the approved figures, each bound to its template version, content hash, size, scan state and retention policy",
+      "saw": "Package version 1 assembled: 3 document(s) ||| Version 1 draft unapproved sample templates · fields 297125a839a8… · package hash 124c32264dce… ||| 1 Odometer disclosure (sample) odometer_disclosure v1 unapproved sample 254fd8b68670… 696 not scanned deal_jacket_documents v1 ||| 2 Privacy notice acknowledgement (sample) privacy_notice v1 unapproved sample 2ac6d95786da… 654 ||| 3 Retail purchase agreement (sample) retail_agreement v1 unapproved sample ddd1628df558… 1110 ||| Figures, from the approved desk version in whole cents: amount financed $46,670.50 USD · cash down $3,000.00 USD · fee total $699.00 USD · incentive total $0.00 USD · monthly payment $806.71 USD · tax total $971.50 USD · taxable amount $33,500.00 USD · trade allowance $12,000.00 USD · trade equity -$2,500.00 USD · trade payoff $14,500.00 USD · vehicle price $45,500.00 USD ||| 1 required item(s) still missing"
+    },
+    {
+      "stage": 8,
+      "who": "salesperson",
+      "what": "pressed “Record evidence” on proof_of_insurance and recorded where the insurance card is and the sha256 of its bytes",
+      "typed": "file://scans/marta-silva-insurance-card.pdf and 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "saw": "Evidence recorded ||| Every required item is met."
+    },
+    {
+      "stage": 9,
+      "who": "salesperson",
+      "what": "pressed “Ready for review”",
+      "saw": "Package is ready for review ||| Version 1 review ready unapproved sample templates"
+    },
+    {
+      "stage": 10,
+      "who": "salesperson",
+      "what": "pressed “Record manager review” as a salesperson, and was refused in the words a record they cannot see would get",
+      "saw": "[error] Request failed (404)",
+      "refused": 404
+    },
+    {
+      "stage": 11,
+      "who": "salesperson",
+      "what": "pressed “Send for signature (manager)” as a salesperson, and was refused; the package stayed review ready",
+      "saw": "[error] Request failed (404) ||| Version 1 review ready",
+      "refused": 404
+    },
+    {
+      "stage": 12,
+      "who": "sales_manager",
+      "what": "signed in through /auth/login as a different person and read the board",
+      "saw": "1 Open jackets · 1 Ready for review · 0 Out for signature · 0 Signed complete ||| Marta Silva · 2003 (stock M104352) · open · desk v1 · v1 review ready · manager review needed · unapproved sample templates"
+    },
+    {
+      "stage": 13,
+      "who": "sales_manager",
+      "what": "opened the jacket from its row on the board"
+    },
+    {
+      "stage": 14,
+      "who": "sales_manager",
+      "what": "pressed “Record manager review” — the review a package of unapproved samples asks for",
+      "saw": "Review recorded"
+    },
+    {
+      "stage": 15,
+      "who": "sales_manager",
+      "what": "pressed “Send for signature (manager)”; the ceremony bound the package hash and seated two signers in two lanes; the customer’s link went to the provider and was not shown",
+      "saw": "Sent: 2 signer(s) invited through the provider ||| Signing ceremony sent · provider simulated_esign (deterministic simulator) · envelope ENV-E8147059A7204677 · bound to package hash 124c32264dce… · expires 9/19/2026 ||| 1 Marta Silva (customer) · m***@example.com · invitation link (never shown to staff) · self · email link · invited ||| 3 Meridian manager (dealer representative) · staff session · authorised representative · staff session · invited ||| Timeline: ceremony.created · staff; signer.invited · system · delivery delivered; signer.invited · system"
+    },
+    {
+      "stage": 16,
+      "who": "customer",
+      "what": "received the invitation the simulated provider delivered to marta.silva@example.com and opened the signing page from it — no dealership sign-in exists for a customer; the delivered link is the only credential"
+    },
+    {
+      "stage": 17,
+      "who": "customer",
+      "what": "read the signing page: who is signing, the package version and hash, the sample-template warning, the figures, the documents, and that signing is not a sale",
+      "saw": "Signing as Marta Silva (customer) ||| Package version 1 · 3 document(s) · package hash 124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9 ||| One or more documents in this package are rendered from UNAPPROVED SAMPLE templates that are not jurisdictionally approved forms. Each document says so on its face. ||| Signing here records that you signed these documents. It is not a sale, a funded loan or a delivery. ||| AMOUNT FINANCED $46,670.50 USD … VEHICLE PRICE $45,500.00 USD ||| customer — viewed · dealer representative — invited"
+    },
+    {
+      "stage": 18,
+      "who": "customer",
+      "what": "opened the Retail purchase agreement (sample) through the link on the page; the bytes came back naming their own hash",
+      "saw": "X-Content-Sha256 ddd1628df5589bf17a3fbde341b607b2b9da05086bda13a2f995b0603f64ff6d ||| UNAPPROVED SAMPLE — NOT A JURISDICTIONALLY APPROVED FORM. This text has not been approved by an accountable person for use in the stated jurisdiction. Source: FBL-140 sample text — NOT a jurisdictionally approved form. RETAIL PURCHASE AGREEMENT between Meridian LLC (Riverside) and Marta Silva. Vehicle: model year 2003, VIN 1HGCM82633A104352, stock M104352. Vehicle price $45,500.00 USD. Trade allowance $12,000.00 USD. Trade payoff $14,500.00 USD. Cash down $3,000.00 USD. Taxable amount $33,500.00 USD. Taxes $971.50 USD. Fees $699.00 USD. Amount financed $46,670.50 USD"
+    },
+    {
+      "stage": 19,
+      "who": "customer",
+      "what": "pressed “I agree to electronic records”, consenting to the versioned text shown",
+      "saw": "Consent text version ESIGN-CONSENT-2026-09 ||| Consent recorded ||| customer — consented"
+    },
+    {
+      "stage": 20,
+      "who": "customer",
+      "what": "pressed “Sign”; the page sent back the package hash it had displayed, and the signature was recorded against exactly that hash",
+      "saw": "I intend to sign every document in this package electronically. ||| Signed ||| You signed at 9/5/2026, 2:58:22 PM. Your signature: 6745de01a0dcb85bdc7eed45f73c70321ca90bef0734f19645ca79c566a803b9 ||| dealer representative — invited"
+    },
+    {
+      "stage": 21,
+      "who": "salesperson",
+      "what": "signed in again, saw the package partially signed, opened the jacket and tried to sign as the dealership’s representative — refused; nobody signs for another actor",
+      "saw": "v1 partially signed · 1 of 2 signed ||| [error] Request failed (404) ||| POST /api/jacket/ceremonies/…/dealer-signature → 404 Not Found",
+      "refused": 404
+    },
+    {
+      "stage": 22,
+      "who": "sales_manager",
+      "what": "signed in, opened the jacket and pressed “Sign as the dealership’s representative”; the dialog showed the consent text, the exact package hash and the statement of intent",
+      "saw": "Package hash you are signing: 124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9 ||| I intend to sign every document in this package electronically."
+    },
+    {
+      "stage": 23,
+      "who": "sales_manager",
+      "what": "pressed “I consent and I sign”; the ceremony completed and the jacket became signed complete, with every instant in order on the timeline",
+      "saw": "Signed — the ceremony is complete ||| Marta Silva · signed complete ||| Signing ceremony completed · certificate b116ebf78ee5… ||| 1 Marta Silva (customer) signed 9/5/2026, 2:58:19 PM 9/5/2026, 2:58:22 PM 6745de01a0dc… ||| 3 Meridian manager (dealer representative) signed 9/5/2026, 2:59:02 PM 9/5/2026, 2:59:02 PM bcc249000f9d… ||| Timeline: ceremony.created · staff; signer.invited · system · delivery delivered; signer.invited · system; signer.viewed · signer; signer.consented · signer; signer.signed · signer; signer.consented · staff; signer.signed · staff; ceremony.completed · system"
+    },
+    {
+      "stage": 24,
+      "who": "sales_manager",
+      "what": "opened the completion certificate; its bytes digest to the hash the ceremony recorded and name both signers, their lanes and their signatures",
+      "saw": "200 · X-Content-Sha256 b116ebf78ee583ed5c98148d5419427006ebdc8f109d33ab67906ebe55c8a2ba ||| bound_package_sha256 124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9 ||| customer:signer_token:6745de01a0dc ||| dealer_representative:staff_session:bcc249000f9d"
+    },
+    {
+      "stage": 25,
+      "who": "sales_manager",
+      "what": "opened “Document templates (manager)”, read every template, requirement and retention policy in force with its source, and recorded privacy_notice version 2 — an unapproved sample by default — ending version 1 at the same instant",
+      "typed": "privacy_notice; Privacy notice acknowledgement (sample, revised); US-CO; FBL-140 sample text, revised 2026-09 — NOT a jurisdictionally approved form; the revised body with {{customer.name}}, {{dealer.legal_entity}} and {{dealer.rooftop}} placeholders",
+      "saw": "Recorded privacy_notice version 2 (unapproved sample) ||| v1 in force 2026-01-01T00:00:00.000Z to 2026-09-05T19:00:02.000Z ||| v2 in force from 2026-09-05T19:00:02.000Z"
+    },
+    {
+      "stage": 26,
+      "who": "tenant_admin",
+      "what": "signed in as the dealership administrator — the support lane — opened the jacket and pressed “Place legal hold (administrator)”, giving the reason",
+      "typed": "Litigation hold — matter M-2026-14, customer dispute over trade payoff",
+      "saw": "Done ||| A legal hold is in place: retention clocks are suspended. Disposal at the end of retention is NOT_YET_AVAILABLE in this phase — nothing here deletes a document. ||| 9/5/2026, 3:00:32 PM · hold placed · Litigation hold — matter M-2026-14, customer dispute over trade payoff ||| every document marked (legal hold)"
+    },
+    {
+      "stage": 27,
+      "who": "tenant_admin",
+      "what": "exported the whole file through “Export the file (administrator)”",
+      "saw": "200 · 1 package · 3 documents, all held · signers customer:signed, dealer_representative:signed · legal_holds [placed] · 3 retention lines · 11 bindings"
+    },
+    {
+      "stage": 28,
+      "who": "salesperson",
+      "what": "signed in, opened the jacket and pressed “Re-assemble (next version)” after the template changed; version 2 rendered from the revised template and superseded version 1, whose documents, figures, signatures, certificate and decisions are all still there",
+      "saw": "Package version 2 assembled: 3 document(s) ||| Version 2 draft unapproved sample templates · package hash db46f2205a7b… · supersedes an earlier version ||| 2 Privacy notice acknowledgement (sample, revised) (legal hold) privacy_notice v2 8b51f5d2bfe5… 753 ||| Version 1 superseded unapproved sample templates · package hash 124c32264dce… · superseded by version 2 ||| Signing ceremony completed · bound to package hash 124c32264dce… · certificate b116ebf78ee5… ||| 1 Marta Silva (customer) signed 6745de01a0dc… ||| 3 Meridian manager (dealer representative) signed bcc249000f9d… ||| Marta Silva · open · legal hold ||| v2 documents · held"
+    },
+    {
+      "stage": 29,
+      "who": "salesperson",
+      "what": "read the final board",
+      "saw": "1 open · 0 ready for review · 0 out for signature · 0 signed complete ||| Marta Silva · open · desk v1 · v2 draft · — · needs doing: unapproved sample templates"
+    }
+  ],
+  "refusals": [
+    {
+      "stage": 10,
+      "who": "salesperson",
+      "status": 404
+    },
+    {
+      "stage": 11,
+      "who": "salesperson",
+      "status": 404
+    },
+    {
+      "stage": 21,
+      "who": "salesperson",
+      "status": 404
+    }
+  ],
+  "outcome": "One deal jacket opened from the desk’s approved version by a salesperson, assembled into a three-document package bound to its figures in cents, reviewed and sent by a manager, read, consented to and signed by a separate customer through the provider-delivered link, countersigned by the named manager, certified, held by the administrator, exported, and then superseded by a second version that left the signed first version, its figures, its signatures and its certificate exactly as they were. Every cross-lane attempt was refused with 404.",
+  "staff_view": {
+    "jacket": {
+      "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+      "legalEntityId": "e0b987ee-8855-422b-975a-3ea8a4ce77f3",
+      "rooftopId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+      "deskingCaseId": "f41fe65d-c515-422a-87a7-b989d76abdf9",
+      "opportunityId": "56b58922-cc5c-4f80-accd-14e4b0915cbb",
+      "partyId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+      "stockItemId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+      "appraisalId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+      "appraisalVersionNo": 1,
+      "approvedScenarioId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+      "scenarioVersionNo": 1,
+      "approvedOutputFingerprint": "cdc4c89ee393ff9522660374a05e14be7966888b5fe610de7cdbfc83bc02e521",
+      "approvalId": "e71df42c-e537-4daa-8744-1c7fb11fe280",
+      "jurisdiction": "US-CO",
+      "transactionType": "retail_finance",
+      "state": "open",
+      "openedByUserLinkId": "5bf8ce13-491e-4a93-bff1-3da8017e2517",
+      "openedAt": "2026-09-05T18:57:21.000Z",
+      "authorizationVersion": 5,
+      "updatedAt": "2026-09-05T19:00:39.000Z"
+    },
+    "customerName": "Marta Silva",
+    "vehicleDescription": "2003 (stock M104352)",
+    "stale": false,
+    "currentApprovedVersionNo": 1,
+    "bindings": [
+      {
+        "sourceKind": "appraisal_version",
+        "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "desking_rule",
+        "sourceId": "73f5448e-ad5b-4f88-9fee-3f40e1ed5d09",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "desking_rule",
+        "sourceId": "bfc5d580-7cbf-4529-ae1e-ece488134dbb",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "desking_rule",
+        "sourceId": "f2ed3376-22bb-4cf0-9c48-eecc942913e5",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "desking_scenario",
+        "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+        "sourceVersion": "1",
+        "sourceFingerprint": "cdc4c89ee393ff9522660374a05e14be7966888b5fe610de7cdbfc83bc02e521",
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "legal_entity",
+        "sourceId": "e0b987ee-8855-422b-975a-3ea8a4ce77f3",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "party",
+        "sourceId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "rooftop",
+        "sourceId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "scenario_approval",
+        "sourceId": "e71df42c-e537-4daa-8744-1c7fb11fe280",
+        "sourceVersion": "2026-09-05T18:56:02.000Z",
+        "sourceFingerprint": "cdc4c89ee393ff9522660374a05e14be7966888b5fe610de7cdbfc83bc02e521",
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "stock_item",
+        "sourceId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      },
+      {
+        "sourceKind": "vehicle",
+        "sourceId": "8e2de347-ba21-42d3-8a7f-ad267ee518fe",
+        "sourceVersion": "1",
+        "sourceFingerprint": null,
+        "boundAt": "2026-09-05T18:57:21.000Z"
+      }
+    ],
+    "checklist": [
+      {
+        "itemId": "da659196-5f4e-41fb-9162-743307f83afd",
+        "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+        "requirementId": "23af19e5-7b12-4343-82a3-c3e2fe2e68b3",
+        "requirementCode": "odometer_disclosure",
+        "requirementVersion": 1,
+        "requirementSource": "Rooftop document policy 2026-01",
+        "required": true,
+        "waivable": true,
+        "satisfiedBy": "template",
+        "templateCode": "odometer_disclosure",
+        "evidenceKind": null,
+        "state": "satisfied",
+        "satisfiedDocumentId": "a65a927d-4298-4fa5-ab9f-5815dc263e5d",
+        "evidenceUri": null,
+        "evidenceSha256": null,
+        "waivedByUserLinkId": null,
+        "waiverReason": null,
+        "waiverPolicyVersion": null,
+        "waiverEvidenceUri": null,
+        "waivedAt": null,
+        "authorizationVersion": 3
+      },
+      {
+        "itemId": "30dc7a0f-815b-4798-a4f4-1eb4c10f2cfd",
+        "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+        "requirementId": "67f3b2d2-5860-47b4-83d0-286bcb8006a8",
+        "requirementCode": "privacy_notice",
+        "requirementVersion": 1,
+        "requirementSource": "Rooftop document policy 2026-01",
+        "required": false,
+        "waivable": false,
+        "satisfiedBy": "template",
+        "templateCode": "privacy_notice",
+        "evidenceKind": null,
+        "state": "satisfied",
+        "satisfiedDocumentId": "79b56874-51aa-4d19-a730-3a74be4d2185",
+        "evidenceUri": null,
+        "evidenceSha256": null,
+        "waivedByUserLinkId": null,
+        "waiverReason": null,
+        "waiverPolicyVersion": null,
+        "waiverEvidenceUri": null,
+        "waivedAt": null,
+        "authorizationVersion": 3
+      },
+      {
+        "itemId": "a9aa0581-7271-4e88-98e1-b1465d7c7483",
+        "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+        "requirementId": "ff1aaba3-6518-4ccf-b32a-73cb76c63d43",
+        "requirementCode": "proof_of_insurance",
+        "requirementVersion": 1,
+        "requirementSource": "Rooftop document policy 2026-01",
+        "required": true,
+        "waivable": true,
+        "satisfiedBy": "evidence",
+        "templateCode": null,
+        "evidenceKind": "insurance_card",
+        "state": "satisfied",
+        "satisfiedDocumentId": null,
+        "evidenceUri": "file://scans/marta-silva-insurance-card.pdf",
+        "evidenceSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "waivedByUserLinkId": null,
+        "waiverReason": null,
+        "waiverPolicyVersion": null,
+        "waiverEvidenceUri": null,
+        "waivedAt": null,
+        "authorizationVersion": 2
+      },
+      {
+        "itemId": "505c8f9a-57c2-413a-bf45-0d33f30644a0",
+        "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+        "requirementId": "29a0660f-4f31-4733-88e0-878c411970e0",
+        "requirementCode": "retail_agreement",
+        "requirementVersion": 1,
+        "requirementSource": "Rooftop document policy 2026-01",
+        "required": true,
+        "waivable": false,
+        "satisfiedBy": "template",
+        "templateCode": "retail_agreement",
+        "evidenceKind": null,
+        "state": "satisfied",
+        "satisfiedDocumentId": "07f4779c-5241-4539-b58c-4e0478660df1",
+        "evidenceUri": null,
+        "evidenceSha256": null,
+        "waivedByUserLinkId": null,
+        "waiverReason": null,
+        "waiverPolicyVersion": null,
+        "waiverEvidenceUri": null,
+        "waivedAt": null,
+        "authorizationVersion": 3
+      }
+    ],
+    "blocking": [],
+    "packages": [
+      {
+        "package": {
+          "packageId": "5a4097e2-764d-42f2-afdd-af0cbc1112f6",
+          "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+          "rooftopId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+          "versionNo": 2,
+          "supersedesPackageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+          "state": "draft",
+          "fieldsSha256": "297125a839a843d634220b8c6abee8162ff7869d692bdda32053de98247012fa",
+          "packageSha256": "db46f2205a7b4c2838e7252bdb1e118ccc5fb6bd9afa3cd8ae43dbb2bd759319",
+          "documentCount": 3,
+          "carriesUnapprovedTemplates": true,
+          "reviewRequired": true,
+          "reviewedByUserLinkId": null,
+          "reviewedAt": null,
+          "assembledByUserLinkId": "5bf8ce13-491e-4a93-bff1-3da8017e2517",
+          "assembledAt": "2026-09-05T19:00:39.000Z",
+          "expiresAt": null,
+          "stateReason": null,
+          "authorizationVersion": 2
+        },
+        "fields": [
+          {
+            "fieldCode": "customer.email",
+            "valueKind": "text",
+            "valueText": "marta.silva@example.com",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "party",
+            "sourceId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "customer.name",
+            "valueKind": "text",
+            "valueText": "Marta Silva",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "party",
+            "sourceId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.amount_financed",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "4667050",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.approved_at",
+            "valueKind": "text",
+            "valueText": "2026-09-05T18:56:02.000Z",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "scenario_approval",
+            "sourceId": "e71df42c-e537-4daa-8744-1c7fb11fe280",
+            "sourceVersion": "2026-09-05T18:56:02.000Z"
+          },
+          {
+            "fieldCode": "deal.apr",
+            "valueKind": "rate_ppm",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "74900",
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.cash_down",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "300000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.currency",
+            "valueKind": "text",
+            "valueText": "USD",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.desking_version",
+            "valueKind": "text",
+            "valueText": "v1",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.fee_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "69900",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.incentive_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "0",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.jurisdiction",
+            "valueKind": "text",
+            "valueText": "US-CO",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.monthly_payment",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "80671",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.output_fingerprint",
+            "valueKind": "text",
+            "valueText": "cdc4c89ee393ff9522660374a05e14be7966888b5fe610de7cdbfc83bc02e521",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.tax_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "97150",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.taxable_amount",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "3350000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.term_months",
+            "valueKind": "integer",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "72",
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_allowance",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1200000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_equity",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "-250000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_payoff",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1450000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.transaction_type",
+            "valueKind": "text",
+            "valueText": "retail_finance",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.vehicle_price",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "4550000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "dealer.legal_entity",
+            "valueKind": "text",
+            "valueText": "Meridian LLC",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "legal_entity",
+            "sourceId": "e0b987ee-8855-422b-975a-3ea8a4ce77f3",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "dealer.rooftop",
+            "valueKind": "text",
+            "valueText": "Riverside",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "rooftop",
+            "sourceId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.fee.documentation_fee",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "69900",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "73f5448e-ad5b-4f88-9fee-3f40e1ed5d09",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.fee.documentation_fee.source",
+            "valueKind": "text",
+            "valueText": "Rooftop pricing policy 2026-01 (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "73f5448e-ad5b-4f88-9fee-3f40e1ed5d09",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.policy.trade_tax_credit",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1200000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "bfc5d580-7cbf-4529-ae1e-ece488134dbb",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.policy.trade_tax_credit.source",
+            "valueKind": "text",
+            "valueText": "Colorado Revised Statutes §39-26-113(5) (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "bfc5d580-7cbf-4529-ae1e-ece488134dbb",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.tax.state_sales_tax",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "97150",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "f2ed3376-22bb-4cf0-9c48-eecc942913e5",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.tax.state_sales_tax.source",
+            "valueKind": "text",
+            "valueText": "Colorado Revised Statutes §39-26-104 (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "f2ed3376-22bb-4cf0-9c48-eecc942913e5",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.condition_grade",
+            "valueKind": "text",
+            "valueText": "clean",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.make",
+            "valueKind": "text",
+            "valueText": "Toyota",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.model",
+            "valueKind": "text",
+            "valueText": "Corolla",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.odometer_miles",
+            "valueKind": "integer",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "68420",
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.odometer_status",
+            "valueKind": "text",
+            "valueText": "actual",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.ownership",
+            "valueKind": "text",
+            "valueText": "financed",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.vin",
+            "valueKind": "text",
+            "valueText": "2T1BURHE0JC014729",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.year",
+            "valueKind": "text",
+            "valueText": "2018",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.odometer",
+            "valueKind": "text",
+            "valueText": "18450 mi",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "stock_item",
+            "sourceId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.stock_number",
+            "valueKind": "text",
+            "valueText": "M104352",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "stock_item",
+            "sourceId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.vin",
+            "valueKind": "text",
+            "valueText": "1HGCM82633A104352",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "vehicle",
+            "sourceId": "8e2de347-ba21-42d3-8a7f-ad267ee518fe",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.year",
+            "valueKind": "text",
+            "valueText": "2003",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "vehicle",
+            "sourceId": "8e2de347-ba21-42d3-8a7f-ad267ee518fe",
+            "sourceVersion": "1"
+          }
+        ],
+        "documents": [
+          {
+            "documentId": "a65a927d-4298-4fa5-ab9f-5815dc263e5d",
+            "packageId": "5a4097e2-764d-42f2-afdd-af0cbc1112f6",
+            "sequenceNo": 1,
+            "documentKind": "disclosure",
+            "title": "Odometer disclosure (sample)",
+            "templateId": "261cc917-cbf3-4ad5-87ce-b506e63ccb32",
+            "templateCode": "odometer_disclosure",
+            "templateVersion": 1,
+            "templateSha256": "b94d81644cef2c75b5d18d8540e901ace2f1284d3e2df7c1de7ba08035af0f77",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "2b112900ec90e23d0a5010e12d33fa650da3e61a3348a39c4bb76dc6ed164136",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 696,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T19:00:39.000Z"
+          },
+          {
+            "documentId": "79b56874-51aa-4d19-a730-3a74be4d2185",
+            "packageId": "5a4097e2-764d-42f2-afdd-af0cbc1112f6",
+            "sequenceNo": 2,
+            "documentKind": "acknowledgement",
+            "title": "Privacy notice acknowledgement (sample, revised)",
+            "templateId": "66a4aaf1-3cca-4159-ab78-a5b02734e2d4",
+            "templateCode": "privacy_notice",
+            "templateVersion": 2,
+            "templateSha256": "ec958ea8536ff1c5c16c28e495a726e47fe4a6fc23455b61feb125c57e0d3311",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "8b51f5d2bfe5fc387c63ee7c6bc1ea7c94a080ddfe918173a617d0d6bd9d19c1",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 753,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T19:00:39.000Z"
+          },
+          {
+            "documentId": "07f4779c-5241-4539-b58c-4e0478660df1",
+            "packageId": "5a4097e2-764d-42f2-afdd-af0cbc1112f6",
+            "sequenceNo": 3,
+            "documentKind": "contract",
+            "title": "Retail purchase agreement (sample)",
+            "templateId": "fd25e848-c049-4632-b2b6-964938586654",
+            "templateCode": "retail_agreement",
+            "templateVersion": 1,
+            "templateSha256": "d7e7812c9567b947f50e7c18b4a759e89c30d47dd091ca66fbedc35c9e3f1f7d",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "897e72142e2a73b6121879c43215dc7b51efc43f36a1a7268602123d02af1961",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 1110,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T19:00:39.000Z"
+          }
+        ],
+        "ceremony": null,
+        "signers": [],
+        "events": []
+      },
+      {
+        "package": {
+          "packageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+          "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+          "rooftopId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+          "versionNo": 1,
+          "supersedesPackageId": null,
+          "state": "superseded",
+          "fieldsSha256": "297125a839a843d634220b8c6abee8162ff7869d692bdda32053de98247012fa",
+          "packageSha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9",
+          "documentCount": 3,
+          "carriesUnapprovedTemplates": true,
+          "reviewRequired": true,
+          "reviewedByUserLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+          "reviewedAt": "2026-09-05T18:57:55.000Z",
+          "assembledByUserLinkId": "5bf8ce13-491e-4a93-bff1-3da8017e2517",
+          "assembledAt": "2026-09-05T18:57:24.000Z",
+          "expiresAt": null,
+          "stateReason": "superseded by version 2",
+          "authorizationVersion": 8
+        },
+        "fields": [
+          {
+            "fieldCode": "customer.email",
+            "valueKind": "text",
+            "valueText": "marta.silva@example.com",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "party",
+            "sourceId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "customer.name",
+            "valueKind": "text",
+            "valueText": "Marta Silva",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "party",
+            "sourceId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.amount_financed",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "4667050",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.approved_at",
+            "valueKind": "text",
+            "valueText": "2026-09-05T18:56:02.000Z",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "scenario_approval",
+            "sourceId": "e71df42c-e537-4daa-8744-1c7fb11fe280",
+            "sourceVersion": "2026-09-05T18:56:02.000Z"
+          },
+          {
+            "fieldCode": "deal.apr",
+            "valueKind": "rate_ppm",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "74900",
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.cash_down",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "300000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.currency",
+            "valueKind": "text",
+            "valueText": "USD",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.desking_version",
+            "valueKind": "text",
+            "valueText": "v1",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.fee_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "69900",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.incentive_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "0",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.jurisdiction",
+            "valueKind": "text",
+            "valueText": "US-CO",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.monthly_payment",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "80671",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.output_fingerprint",
+            "valueKind": "text",
+            "valueText": "cdc4c89ee393ff9522660374a05e14be7966888b5fe610de7cdbfc83bc02e521",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.tax_total",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "97150",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.taxable_amount",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "3350000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.term_months",
+            "valueKind": "integer",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "72",
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_allowance",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1200000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_equity",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "-250000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.trade_payoff",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1450000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.transaction_type",
+            "valueKind": "text",
+            "valueText": "retail_finance",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "deal.vehicle_price",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "4550000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_scenario",
+            "sourceId": "9ca5ed2c-06d9-4cc3-840e-4bf3fb3a9343",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "dealer.legal_entity",
+            "valueKind": "text",
+            "valueText": "Meridian LLC",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "legal_entity",
+            "sourceId": "e0b987ee-8855-422b-975a-3ea8a4ce77f3",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "dealer.rooftop",
+            "valueKind": "text",
+            "valueText": "Riverside",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "rooftop",
+            "sourceId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.fee.documentation_fee",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "69900",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "73f5448e-ad5b-4f88-9fee-3f40e1ed5d09",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.fee.documentation_fee.source",
+            "valueKind": "text",
+            "valueText": "Rooftop pricing policy 2026-01 (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "73f5448e-ad5b-4f88-9fee-3f40e1ed5d09",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.policy.trade_tax_credit",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "1200000",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "bfc5d580-7cbf-4529-ae1e-ece488134dbb",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.policy.trade_tax_credit.source",
+            "valueKind": "text",
+            "valueText": "Colorado Revised Statutes §39-26-113(5) (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "bfc5d580-7cbf-4529-ae1e-ece488134dbb",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.tax.state_sales_tax",
+            "valueKind": "money",
+            "valueText": null,
+            "valueCents": "97150",
+            "valueInteger": null,
+            "currency": "USD",
+            "sourceKind": "desking_rule",
+            "sourceId": "f2ed3376-22bb-4cf0-9c48-eecc942913e5",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "rule.tax.state_sales_tax.source",
+            "valueKind": "text",
+            "valueText": "Colorado Revised Statutes §39-26-104 (v1)",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "desking_rule",
+            "sourceId": "f2ed3376-22bb-4cf0-9c48-eecc942913e5",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.condition_grade",
+            "valueKind": "text",
+            "valueText": "clean",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.make",
+            "valueKind": "text",
+            "valueText": "Toyota",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.model",
+            "valueKind": "text",
+            "valueText": "Corolla",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.odometer_miles",
+            "valueKind": "integer",
+            "valueText": null,
+            "valueCents": null,
+            "valueInteger": "68420",
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.odometer_status",
+            "valueKind": "text",
+            "valueText": "actual",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.ownership",
+            "valueKind": "text",
+            "valueText": "financed",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.vin",
+            "valueKind": "text",
+            "valueText": "2T1BURHE0JC014729",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "trade.year",
+            "valueKind": "text",
+            "valueText": "2018",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "appraisal_version",
+            "sourceId": "4849463e-e1e5-44e9-a327-b4b919ac5208",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.odometer",
+            "valueKind": "text",
+            "valueText": "18450 mi",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "stock_item",
+            "sourceId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.stock_number",
+            "valueKind": "text",
+            "valueText": "M104352",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "stock_item",
+            "sourceId": "16af3abd-15c7-4404-b056-a32047dc1a9e",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.vin",
+            "valueKind": "text",
+            "valueText": "1HGCM82633A104352",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "vehicle",
+            "sourceId": "8e2de347-ba21-42d3-8a7f-ad267ee518fe",
+            "sourceVersion": "1"
+          },
+          {
+            "fieldCode": "vehicle.year",
+            "valueKind": "text",
+            "valueText": "2003",
+            "valueCents": null,
+            "valueInteger": null,
+            "currency": null,
+            "sourceKind": "vehicle",
+            "sourceId": "8e2de347-ba21-42d3-8a7f-ad267ee518fe",
+            "sourceVersion": "1"
+          }
+        ],
+        "documents": [
+          {
+            "documentId": "7f75a5e3-6719-4a4b-beb6-9ddb0662dd85",
+            "packageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+            "sequenceNo": 1,
+            "documentKind": "disclosure",
+            "title": "Odometer disclosure (sample)",
+            "templateId": "261cc917-cbf3-4ad5-87ce-b506e63ccb32",
+            "templateCode": "odometer_disclosure",
+            "templateVersion": 1,
+            "templateSha256": "b94d81644cef2c75b5d18d8540e901ace2f1284d3e2df7c1de7ba08035af0f77",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "254fd8b68670ef95802ed0849fa12ea7f0cf1fccdf4d8095b5e670f6eaa147f8",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 696,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T18:57:24.000Z"
+          },
+          {
+            "documentId": "a2632393-72f9-43cc-a57b-4266c84fa6c0",
+            "packageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+            "sequenceNo": 2,
+            "documentKind": "acknowledgement",
+            "title": "Privacy notice acknowledgement (sample)",
+            "templateId": "50e692ff-8021-4d89-9a50-14b6c4ae5718",
+            "templateCode": "privacy_notice",
+            "templateVersion": 1,
+            "templateSha256": "8a54c92186cd3b307c2e3a4e5a4a2d124d704ed9d2577b4af687dc9730f52590",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "2ac6d95786da410cd2dec0177760f044bba30f82a458f316ceea2859b413d056",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 654,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T18:57:24.000Z"
+          },
+          {
+            "documentId": "6699d7b5-8e41-4e82-8165-a49c60bb3eb9",
+            "packageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+            "sequenceNo": 3,
+            "documentKind": "contract",
+            "title": "Retail purchase agreement (sample)",
+            "templateId": "fd25e848-c049-4632-b2b6-964938586654",
+            "templateCode": "retail_agreement",
+            "templateVersion": 1,
+            "templateSha256": "d7e7812c9567b947f50e7c18b4a759e89c30d47dd091ca66fbedc35c9e3f1f7d",
+            "templateApprovalStatus": "unapproved_sample",
+            "contentSha256": "ddd1628df5589bf17a3fbde341b607b2b9da05086bda13a2f995b0603f64ff6d",
+            "mimeType": "text/html; charset=utf-8",
+            "byteSize": 1110,
+            "classification": "customer_confidential",
+            "malwareScanResult": "not_scanned",
+            "malwareScanner": null,
+            "retentionPolicyId": "fae11134-0ff7-44d3-9d6c-72a7e8d57fb6",
+            "retentionPolicyCode": "deal_jacket_documents",
+            "retentionPolicyVersion": 1,
+            "legalHold": true,
+            "renderedAt": "2026-09-05T18:57:24.000Z"
+          }
+        ],
+        "ceremony": {
+          "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+          "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+          "packageId": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+          "rooftopId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+          "providerCode": "simulated_esign",
+          "providerKind": "deterministic_simulator",
+          "providerEnvelopeRef": "ENV-E8147059A7204677",
+          "boundPackageSha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9",
+          "state": "completed",
+          "consentTextVersion": "ESIGN-CONSENT-2026-09",
+          "sentAt": "2026-09-05T18:57:57.000Z",
+          "completedAt": "2026-09-05T18:59:02.000Z",
+          "expiresAt": "2026-09-19T18:57:57.000Z",
+          "completionCertificateSha256": "b116ebf78ee583ed5c98148d5419427006ebdc8f109d33ab67906ebe55c8a2ba",
+          "createdByUserLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+          "createdAt": "2026-09-05T18:57:57.000Z",
+          "authorizationVersion": 3
+        },
+        "signers": [
+          {
+            "signerId": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signingOrder": 1,
+            "signerRole": "customer",
+            "lane": "signer_token",
+            "partyId": "ac327bca-8534-4c9b-916b-c0f03d4c580b",
+            "userLinkId": null,
+            "displayName": "Marta Silva",
+            "contactMasked": "m***@example.com",
+            "signingAuthority": "self",
+            "identityAssurance": "email_link",
+            "state": "signed",
+            "tokenExpiresAt": "2026-09-08T18:57:57.000Z",
+            "invitedAt": "2026-09-05T18:57:57.000Z",
+            "viewedAt": "2026-09-05T18:58:16.000Z",
+            "consentedAt": "2026-09-05T18:58:19.000Z",
+            "consentTextVersion": "ESIGN-CONSENT-2026-09",
+            "intentConfirmedAt": "2026-09-05T18:58:22.000Z",
+            "signedAt": "2026-09-05T18:58:22.000Z",
+            "signatureSha256": "6745de01a0dcb85bdc7eed45f73c70321ca90bef0734f19645ca79c566a803b9",
+            "declinedAt": null,
+            "declineReason": null,
+            "authorizationVersion": 4
+          },
+          {
+            "signerId": "52c4fd0e-d92a-4b21-8199-43baa97fe43a",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signingOrder": 3,
+            "signerRole": "dealer_representative",
+            "lane": "staff_session",
+            "partyId": null,
+            "userLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+            "displayName": "Meridian manager",
+            "contactMasked": null,
+            "signingAuthority": "authorised_representative",
+            "identityAssurance": "staff_session",
+            "state": "signed",
+            "tokenExpiresAt": null,
+            "invitedAt": "2026-09-05T18:57:57.000Z",
+            "viewedAt": "2026-09-05T18:59:02.000Z",
+            "consentedAt": "2026-09-05T18:59:02.000Z",
+            "consentTextVersion": "ESIGN-CONSENT-2026-09",
+            "intentConfirmedAt": "2026-09-05T18:59:02.000Z",
+            "signedAt": "2026-09-05T18:59:02.000Z",
+            "signatureSha256": "bcc249000f9d3ca50e7557086452c3b356828901d6547d129d8b5b5aa0cc67dd",
+            "declinedAt": null,
+            "declineReason": null,
+            "authorizationVersion": 3
+          }
+        ],
+        "events": [
+          {
+            "eventId": "c9fb444d-cc7e-4c15-a769-6b54f7c33e30",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": null,
+            "eventType": "ceremony.created",
+            "lane": "staff",
+            "actorUserLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+            "payload": {
+              "package_id": "c17d9b80-4a46-414d-985f-7b4e6276c180",
+              "signer_roles": ["customer", "dealer_representative"],
+              "provider_code": "simulated_esign",
+              "provider_kind": "deterministic_simulator",
+              "package_version_no": 1,
+              "bound_package_sha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9",
+              "provider_envelope_ref": "ENV-E8147059A7204677"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:57:57.000Z"
+          },
+          {
+            "eventId": "f5fb9e25-9ea2-46c8-8908-c2f1e4a48336",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+            "eventType": "signer.invited",
+            "lane": "system",
+            "actorUserLinkId": null,
+            "payload": {
+              "lane": "signer_token",
+              "detail": null,
+              "signer_role": "customer",
+              "delivery_ref": "DLV-2C626CF196DE5A91",
+              "delivery_outcome": "delivered",
+              "token_expires_at": "2026-09-08T18:57:57.499Z"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:57:57.000Z"
+          },
+          {
+            "eventId": "0e4f55a1-3d91-4416-a970-286c4fdbcd76",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "52c4fd0e-d92a-4b21-8199-43baa97fe43a",
+            "eventType": "signer.invited",
+            "lane": "system",
+            "actorUserLinkId": null,
+            "payload": {
+              "lane": "staff_session",
+              "signer_role": "dealer_representative"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:57:57.000Z"
+          },
+          {
+            "eventId": "b0eb89d4-e47c-4efc-9483-2f99e7ee03e3",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+            "eventType": "signer.viewed",
+            "lane": "signer",
+            "actorUserLinkId": null,
+            "payload": {
+              "signer_role": "customer"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:58:16.000Z"
+          },
+          {
+            "eventId": "ee4fa41e-0bcf-40c9-9194-483a1eaa37ee",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+            "eventType": "signer.consented",
+            "lane": "signer",
+            "actorUserLinkId": null,
+            "payload": {
+              "signer_role": "customer",
+              "consent_text_version": "ESIGN-CONSENT-2026-09"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:58:19.000Z"
+          },
+          {
+            "eventId": "7c77a2e2-ccb9-4392-b289-574fd871c9bf",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+            "eventType": "signer.signed",
+            "lane": "signer",
+            "actorUserLinkId": null,
+            "payload": {
+              "signed_at": "2026-09-05T18:58:22.127573Z",
+              "signer_role": "customer",
+              "signature_sha256": "6745de01a0dcb85bdc7eed45f73c70321ca90bef0734f19645ca79c566a803b9",
+              "bound_package_sha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:58:22.000Z"
+          },
+          {
+            "eventId": "f3cd1e43-fef3-4e00-a775-bae15399be43",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "52c4fd0e-d92a-4b21-8199-43baa97fe43a",
+            "eventType": "signer.consented",
+            "lane": "staff",
+            "actorUserLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+            "payload": {
+              "signer_role": "dealer_representative",
+              "consent_text_version": "ESIGN-CONSENT-2026-09"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:59:02.000Z"
+          },
+          {
+            "eventId": "5e1c3542-690d-42d2-8f6c-dcbab02e961b",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": "52c4fd0e-d92a-4b21-8199-43baa97fe43a",
+            "eventType": "signer.signed",
+            "lane": "staff",
+            "actorUserLinkId": "e244f1ae-3181-4d4f-af17-f702c5c42a9d",
+            "payload": {
+              "signed_at": "2026-09-05T18:59:02.196275Z",
+              "signer_role": "dealer_representative",
+              "signature_sha256": "bcc249000f9d3ca50e7557086452c3b356828901d6547d129d8b5b5aa0cc67dd",
+              "bound_package_sha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:59:02.000Z"
+          },
+          {
+            "eventId": "53955548-76d8-4cd3-8d05-526175e6a339",
+            "ceremonyId": "c8e8911e-3ef2-4686-833a-fdf73b2cc876",
+            "signerId": null,
+            "eventType": "ceremony.completed",
+            "lane": "system",
+            "actorUserLinkId": null,
+            "payload": {
+              "signers": [
+                {
+                  "role": "customer",
+                  "signer_id": "d037d6ac-5e00-4130-ab4b-b8711d3d704d",
+                  "signature_sha256": "6745de01a0dcb85bdc7eed45f73c70321ca90bef0734f19645ca79c566a803b9"
+                },
+                {
+                  "role": "dealer_representative",
+                  "signer_id": "52c4fd0e-d92a-4b21-8199-43baa97fe43a",
+                  "signature_sha256": "bcc249000f9d3ca50e7557086452c3b356828901d6547d129d8b5b5aa0cc67dd"
+                }
+              ],
+              "bound_package_sha256": "124c32264dceaed2c509456c747a735d423ee36637b95943937c51652227e7c9",
+              "completion_certificate_sha256": "b116ebf78ee583ed5c98148d5419427006ebdc8f109d33ab67906ebe55c8a2ba"
+            },
+            "providerEventRef": null,
+            "providerSignatureValid": null,
+            "occurredAt": "2026-09-05T18:59:02.000Z"
+          }
+        ]
+      }
+    ],
+    "legalHolds": [
+      {
+        "holdEventId": "e72e9018-dde2-43c2-8d9b-8a1d51e28aab",
+        "action": "placed",
+        "reason": "Litigation hold — matter M-2026-14, customer dispute over trade payoff",
+        "reference": null,
+        "actedByUserLinkId": "f7899bc7-4133-4644-99d1-5f32ebeefb4a",
+        "occurredAt": "2026-09-05T19:00:32.000Z"
+      }
+    ],
+    "legalHold": true,
+    "retention": [
+      {
+        "documentId": "7f75a5e3-6719-4a4b-beb6-9ddb0662dd85",
+        "packageVersionNo": 1,
+        "title": "Odometer disclosure (sample)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T18:57:24.000Z",
+        "retainUntil": "2033-09-03T18:57:24.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      },
+      {
+        "documentId": "a2632393-72f9-43cc-a57b-4266c84fa6c0",
+        "packageVersionNo": 1,
+        "title": "Privacy notice acknowledgement (sample)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T18:57:24.000Z",
+        "retainUntil": "2033-09-03T18:57:24.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      },
+      {
+        "documentId": "6699d7b5-8e41-4e82-8165-a49c60bb3eb9",
+        "packageVersionNo": 1,
+        "title": "Retail purchase agreement (sample)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T18:57:24.000Z",
+        "retainUntil": "2033-09-03T18:57:24.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      },
+      {
+        "documentId": "a65a927d-4298-4fa5-ab9f-5815dc263e5d",
+        "packageVersionNo": 2,
+        "title": "Odometer disclosure (sample)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T19:00:39.000Z",
+        "retainUntil": "2033-09-03T19:00:39.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      },
+      {
+        "documentId": "79b56874-51aa-4d19-a730-3a74be4d2185",
+        "packageVersionNo": 2,
+        "title": "Privacy notice acknowledgement (sample, revised)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T19:00:39.000Z",
+        "retainUntil": "2033-09-03T19:00:39.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      },
+      {
+        "documentId": "07f4779c-5241-4539-b58c-4e0478660df1",
+        "packageVersionNo": 2,
+        "title": "Retail purchase agreement (sample)",
+        "retentionPolicyCode": "deal_jacket_documents",
+        "retentionPolicyVersion": 1,
+        "retainForDays": 2555,
+        "renderedAt": "2026-09-05T19:00:39.000Z",
+        "retainUntil": "2033-09-03T19:00:39.000Z",
+        "legalHold": true,
+        "disposal": "NOT_YET_AVAILABLE"
+      }
+    ],
+    "notYetAvailable": {
+      "sale": "NOT_YET_AVAILABLE",
+      "funding": "NOT_YET_AVAILABLE",
+      "delivery": "NOT_YET_AVAILABLE",
+      "sold_inventory": "NOT_YET_AVAILABLE",
+      "accounting_posting": "NOT_YET_AVAILABLE",
+      "gross": "NOT_YET_AVAILABLE",
+      "commission": "NOT_YET_AVAILABLE",
+      "revenue": "NOT_YET_AVAILABLE",
+      "credit_application": "NOT_YET_AVAILABLE",
+      "title_registration": "NOT_YET_AVAILABLE",
+      "document_disposal": "NOT_YET_AVAILABLE"
+    }
+  },
+  "board_view": {
+    "rooftopIds": ["cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf"],
+    "rows": [
+      {
+        "jacketId": "4694a512-6c99-4282-a646-c0f839e0f37f",
+        "rooftopId": "cb12c4f8-e3d4-4f31-80e8-9b91d0ed5baf",
+        "customerName": "Marta Silva",
+        "vehicleDescription": "2003 (stock M104352)",
+        "state": "open",
+        "boundVersionNo": 1,
+        "stale": false,
+        "currentApprovedVersionNo": 1,
+        "latestPackage": {
+          "packageId": "5a4097e2-764d-42f2-afdd-af0cbc1112f6",
+          "versionNo": 2,
+          "state": "draft",
+          "documentCount": 3,
+          "carriesUnapprovedTemplates": true,
+          "reviewRequired": true,
+          "reviewed": false,
+          "stateReason": null
+        },
+        "ceremony": null,
+        "missingRequired": 0,
+        "legalHold": true,
+        "exceptions": ["unapproved sample templates"],
+        "openedAt": "2026-09-05T18:57:21.000Z"
+      }
+    ],
+    "open": 1,
+    "awaitingReview": 0,
+    "awaitingSignature": 0,
+    "signedComplete": 0,
+    "queues": {
+      "missing_documents": 0,
+      "render_failure": 0,
+      "rejected_or_expired": 0,
+      "provider_failure": 0,
+      "stale_inputs": 0
+    },
+    "notYetAvailable": {
+      "sale": "NOT_YET_AVAILABLE",
+      "funding": "NOT_YET_AVAILABLE",
+      "delivery": "NOT_YET_AVAILABLE",
+      "sold_inventory": "NOT_YET_AVAILABLE",
+      "accounting_posting": "NOT_YET_AVAILABLE",
+      "gross": "NOT_YET_AVAILABLE",
+      "commission": "NOT_YET_AVAILABLE",
+      "revenue": "NOT_YET_AVAILABLE",
+      "credit_application": "NOT_YET_AVAILABLE",
+      "title_registration": "NOT_YET_AVAILABLE",
+      "document_disposal": "NOT_YET_AVAILABLE"
+    }
+  }
+}

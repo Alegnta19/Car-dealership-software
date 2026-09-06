@@ -130,3 +130,22 @@ dd8b9aeaf4425f146b8c5a5ad587c29213b2c0f6:tests/platform.test.ts:generic-api-key:
 # from its parts — so no later commit reintroduces the finding. Same scan, same pinned
 # image, same --log-opts=--all, no path, rule, entropy, or pattern exemption.
 f8669d0a3dbb8b3fc3e13ea7d9cdfe9421d44c8e:tests/desking-isolation.test.ts:generic-api-key:55
+
+# FBL-140 (after ci.yml run 33996033506 failed the full-history scan with 2 findings):
+# two WRONG-KEY probes in the e-sign callback batteries.
+#
+# WHAT THE VALUES ARE. `tests/jacket-authority.test.ts` and `tests/jacket-signing.test.ts`
+# each sign a provider callback with a key that is deliberately NOT the configured webhook
+# secret, to prove the callback lane refuses it. The probe key was assembled from words plus
+# the literal `0123456789abcdef0123456789` — a counting string, not a credential — and the
+# word `key` beside 26 hex characters is exactly the shape gitleaks' `generic-api-key` rule
+# exists to catch. The value signs one request in one test process and is accepted by
+# nothing, anywhere; the real test secret in those files is assembled at runtime from words.
+#
+# The commit is pushed and the order forbids rewriting it, so the two historical lines are
+# suppressed by exact fingerprint (gitleaks v8.24.3's own, from the run's report). The LIVE
+# lines were restructured so they can no longer match — the wrong keys are now plain words
+# with no hex run — so no later commit reintroduces the finding. Same scan, same pinned
+# image, same --log-opts=--all, no path, rule, entropy, or pattern exemption.
+8a3dd6f02c3db96d590a4cdf07fd33e3fdfe97a0:tests/jacket-authority.test.ts:generic-api-key:700
+8a3dd6f02c3db96d590a4cdf07fd33e3fdfe97a0:tests/jacket-signing.test.ts:generic-api-key:594

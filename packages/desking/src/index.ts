@@ -19,3 +19,12 @@ export * from './rules';
 export * from './scenarios';
 export * from './reads';
 export * from './actions';
+
+/**
+ * The FBL-140 seam, added when the deal jacket was built. It reads the approved
+ * version this phase froze, and the current approval a bound jacket can be
+ * measured against, and changes nothing — the same shape as the one seam
+ * Release Train 4 added to `@dealer/crm` and the one FBL-120 added to
+ * `@dealer/sales`.
+ */
+export * from './jacket-seam';

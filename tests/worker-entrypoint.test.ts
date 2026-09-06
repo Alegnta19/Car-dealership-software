@@ -12,6 +12,7 @@ import {
   SUPPORT_ACCESS_EXPIRY_JOB,
   CAMPAIGN_DISPATCH_JOB,
   LEAD_SLA_SWEEP_JOB,
+  CEREMONY_EXPIRY_JOB,
   WORKER_JOBS,
 } from '@dealer/worker';
 import {
@@ -72,9 +73,10 @@ describe('the worker job registry, through the compiled entry point (FBL-020-R5 
         LISTING_DISPATCH_JOB,
         CAMPAIGN_DISPATCH_JOB,
         LEAD_SLA_SWEEP_JOB,
+        CEREMONY_EXPIRY_JOB,
       ],
       'the compiled worker must register the three sweeps, both outbox dispatchers, ' +
-        'the campaign dispatcher and the first-response sweep',
+        'the campaign dispatcher, the first-response sweep and the ceremony-expiry sweep',
     );
 
     /*

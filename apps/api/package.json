@@ -25,6 +25,7 @@
     "@dealer/inventory": "0.1.0",
     "@dealer/crm": "0.1.0",
     "@dealer/sales": "0.1.0",
-    "@dealer/desking": "0.1.0"
+    "@dealer/desking": "0.1.0",
+    "@dealer/jacket": "0.1.0"
   }
 }

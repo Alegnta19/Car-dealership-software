@@ -1536,6 +1536,279 @@ export const MUTATIONS: Mutation[] = [
     testFile: 'tests/desking-approval.test.ts',
     testName: 'the board reconciles the floor and invents no gross or sale fact',
   },
+
+  // ── FBL-140: DEAL JACKET, DOCUMENTS AND E-SIGN EVIDENCE ─────────────────
+  //
+  // WHAT IS DELIBERATELY NOT DECLARED HERE. `openJacketWithin` converges through
+  // the same THREE independent guards the desk's intake does — an advisory lock
+  // with a pre-check, an ON CONFLICT clause, and a raced re-select — and each one
+  // alone produces the correct answer, so no honest single-line mutation of the
+  // convergence can die. It is proven by the race in tests/jacket-intake.test.ts
+  // and by the two database keys declared in scripts/database-control-mutations.ts.
+  // Every anchor below is ONE line, so the registry reads the same on a CRLF
+  // working tree as on the LF tree CI checks out.
+  {
+    id: 'jacket_intake_ignores_the_rooftop',
+    control:
+      'a desk file may only have a jacket opened by somebody who works the rooftop that owns it',
+    file: 'packages/jacket/src/intake.ts',
+    from: '  if (!(await reaches(input.tenantId, actor, fact.deskingCase.rooftopId))) {',
+    to: '  if (false) {',
+    testFile: 'tests/jacket-intake.test.ts',
+    testName:
+      'a deal nothing is approved on cannot have a jacket, and a foreign or missing file is simply not found',
+  },
+  {
+    id: 'jacket_replay_discloses_a_foreign_jacket',
+    control: 'a converged intake still answers not_found to somebody who does not work the rooftop',
+    file: 'packages/jacket/src/intake.ts',
+    from: "    if (!(await reaches(input.tenantId, actor, already.rooftopId))) return { outcome: 'not_found' };",
+    to: "    if (false) return { outcome: 'not_found' };",
+    testFile: 'tests/jacket-intake.test.ts',
+    testName:
+      'a deal nothing is approved on cannot have a jacket, and a foreign or missing file is simply not found',
+  },
+  {
+    id: 'jacket_waiver_by_anybody',
+    control: 'only an eligible manager waives a requirement, and the refusal explains nothing',
+    file: 'packages/jacket/src/checklist.ts',
+    from: '    if (!(await isEligibleManager(tx, input.tenantId, actor, jacket.rooftopId))) {',
+    to: '    if (false) {',
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'a waiver is four things from an eligible manager, or it is nothing — service and database agree',
+  },
+  {
+    id: 'jacket_waives_the_unwaivable',
+    control: 'a requirement not configured as waivable cannot be waived by the service',
+    file: 'packages/jacket/src/checklist.ts',
+    from: '    if (!item.waivable) {',
+    to: '    if (false) {',
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'a waiver is four things from an eligible manager, or it is nothing — service and database agree',
+  },
+  {
+    id: 'jacket_assembles_on_stale_approval',
+    control:
+      'a jacket whose bound desk version the desk no longer stands behind refuses assembly rather than rebuilding on the new figures',
+    file: 'packages/jacket/src/assembly.ts',
+    from: '  if (stale) {',
+    to: '  if (false) {',
+    testFile: 'tests/jacket-intake.test.ts',
+    testName:
+      'when the desk approves a newer version the jacket is stale, assembly refuses, and void-then-open binds the new one',
+  },
+  {
+    id: 'jacket_supersession_leaves_the_ceremony_open',
+    control: 'superseding a sent package voids its ceremony, so its signers can sign nothing',
+    file: 'packages/jacket/src/assembly.ts',
+    from: "          SET state = 'voided', updated_at = NOW(), authorization_version = authorization_version + 1",
+    to: '          SET updated_at = NOW(), authorization_version = authorization_version + 1',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a superseded or modified package takes no signature — the service and the database both refuse',
+  },
+  {
+    id: 'jacket_render_failure_is_a_draft',
+    control:
+      'a package that failed to render is recorded voided with the failure, not left as a draft nobody can send',
+    file: 'packages/jacket/src/assembly.ts',
+    from: "      failed ? 'voided' : 'draft',",
+    to: "      'draft',",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'a template with no version in force is a render failure the board can see, not a blank document',
+  },
+  {
+    id: 'jacket_package_hash_ignores_order',
+    control: 'the package hash is the digest of the document digests IN ORDER',
+    file: 'packages/jacket/src/assembly.ts',
+    from: '  const packageSha256 = packageHashOf(digests);',
+    to: '  const packageSha256 = packageHashOf([...digests].reverse());',
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName:
+      'the same inputs assembled again write nothing, and every artifact is bound to what the order names',
+  },
+  {
+    id: 'jacket_renders_a_blank_for_a_missing_field',
+    control: 'a placeholder nobody filled is a render failure, not an empty space on a contract',
+    file: 'packages/jacket/src/render.ts',
+    from: "  if (missing.length > 0) return { outcome: 'unresolved', missing: missing.sort() };",
+    to: "  if (false) return { outcome: 'unresolved', missing: missing.sort() };",
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName: 'rendering is a pure function: same template and fields, same bytes, same digest',
+  },
+  {
+    id: 'jacket_sample_reads_as_approved',
+    control: 'an unapproved sample template says so on every page it renders',
+    file: 'packages/jacket/src/render.ts',
+    from: '      return `UNAPPROVED SAMPLE — NOT A JURISDICTIONALLY APPROVED FORM. This text has not been approved by an accountable person for use in the stated jurisdiction. Source: ${source}.`;',
+    to: '      return `Template approved for use in the stated jurisdiction. Source: ${source}.`;',
+    testFile: 'tests/jacket-assembly.test.ts',
+    testName: 'rendering is a pure function: same template and fields, same bytes, same digest',
+  },
+  {
+    id: 'jacket_sent_by_a_salesperson',
+    control: 'sending a package for signature is a manager’s act, re-checked at the write',
+    file: 'packages/jacket/src/ceremony.ts',
+    from: '    if (!(await isEligibleManager(tx, input.tenantId, actor, jacket.rooftopId))) {',
+    to: '    if (false) {',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'sending is a manager’s act that binds the package hash, seats the signers in their lanes, and shows staff no link',
+  },
+  {
+    id: 'jacket_sent_without_its_review',
+    control: 'a package that asked for a manager’s review is not sent until it carries the stamp',
+    file: 'packages/jacket/src/ceremony.ts',
+    from: '    if (pkg.reviewRequired && pkg.reviewedAt === null) {',
+    to: '    if (false) {',
+    testFile: 'tests/jacket-lifecycle.test.ts',
+    testName:
+      'draft → review-ready → sent → partially signed → signed-complete, each move attributed and versioned',
+  },
+  {
+    id: 'jacket_signer_token_stored_wrong',
+    control: 'the signer row holds exactly the digest of the token the provider delivered',
+    file: 'packages/jacket/src/ceremony.ts',
+    from: '            tokenDigest(raw),',
+    to: "            tokenDigest(raw + '.'),",
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a signing link is a digest in the database and a clock in the hand — expired, foreign and invented tokens all fail closed',
+  },
+  {
+    id: 'jacket_signs_whatever_hash_is_sent',
+    control: 'the hash the signer’s page displayed must be the hash the ceremony bound',
+    file: 'packages/jacket/src/signing.ts',
+    from: '    !digestsEqual(input.packageSha256, ceremony.boundPackageSha256) ||',
+    to: '    false ||',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'the customer views, consents, and signs exactly the hash they were shown — in that order and no other',
+  },
+  {
+    id: 'jacket_signs_without_consent',
+    control:
+      'consent to electronic records comes before a signature, and the service says so before the database has to',
+    file: 'packages/jacket/src/signing.ts',
+    from: "  if (signer.consentedAt === null) return { outcome: 'consent_required' };",
+    to: "  if (false) return { outcome: 'consent_required' };",
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'the customer views, consents, and signs exactly the hash they were shown — in that order and no other',
+  },
+  {
+    id: 'jacket_signs_out_of_order',
+    control: 'the dealer’s representative signs after the customer, never before',
+    file: 'packages/jacket/src/signing.ts',
+    from: "  if (waitingOn.length > 0) return { outcome: 'out_of_order', waitingOn };",
+    to: "  if (false) return { outcome: 'out_of_order', waitingOn };",
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'the dealer signs last, through the staff session the ceremony names, and completion is a document anyone can re-hash',
+  },
+  {
+    id: 'jacket_dealer_signature_by_anybody_with_a_session',
+    control: 'the staff lane signs only the signer row that names the acting user link',
+    file: 'packages/jacket/src/signing.ts',
+    from: "        WHERE tenant_id = $1 AND ceremony_id = $2 AND lane = 'staff_session' AND user_link_id = $3",
+    to: "        WHERE tenant_id = $1 AND ceremony_id = $2 AND lane = 'staff_session' AND $3::uuid IS NOT NULL",
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'the dealer signs last, through the staff session the ceremony names, and completion is a document anyone can re-hash',
+  },
+  {
+    id: 'jacket_provider_signature_never_checked',
+    control: 'a provider callback is verified over its raw bytes under the configured secret',
+    file: 'packages/jacket/src/callbacks.ts',
+    from: "  return digestsEqual(hmacSha256Hex(secret, rawBody), m[1]!.toLowerCase()) ? 'valid' : 'invalid';",
+    to: "  return 'valid';",
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence',
+  },
+  {
+    id: 'jacket_callback_for_any_envelope',
+    control: 'a callback is bound to the envelope the ceremony recorded, or it is unknown',
+    file: 'packages/jacket/src/callbacks.ts',
+    from: '    if (ceremony.providerEnvelopeRef !== callback.envelopeRef)',
+    to: '    if (false)',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence',
+  },
+  {
+    id: 'jacket_callback_replay_recorded_twice',
+    control: 'the second delivery of one provider event converges on the first row',
+    file: 'packages/jacket/src/callbacks.ts',
+    from: '       ON CONFLICT (tenant_id, provider_event_ref) DO NOTHING',
+    to: '       -- (replay guard removed)',
+    testFile: 'tests/jacket-signing.test.ts',
+    testName:
+      'a provider callback is signed, recorded once, replayed harmlessly, and reconciled against our own evidence',
+  },
+  {
+    id: 'jacket_ready_with_missing_items',
+    control: 'a required checklist item still missing blocks the package from review',
+    file: 'packages/jacket/src/lifecycle.ts',
+    from: "    if (blocking.length > 0) return { outcome: 'blocked', items: blocking };",
+    to: "    if (false) return { outcome: 'blocked', items: blocking };",
+    testFile: 'tests/jacket-checklist.test.ts',
+    testName:
+      'missing required items block progression, evidence satisfies, and an optional item never blocks',
+  },
+  {
+    id: 'jacket_voided_by_a_salesperson',
+    control: 'voiding a jacket is a manager’s act, and the refusal explains nothing',
+    file: 'packages/jacket/src/lifecycle.ts',
+    from: '    if (!(await isEligibleManager(tx, input.tenantId, actor, jacket.rooftopId))) {',
+    to: '    if (false) {',
+    testFile: 'tests/jacket-intake.test.ts',
+    testName:
+      'when the desk approves a newer version the jacket is stale, assembly refuses, and void-then-open binds the new one',
+  },
+  {
+    id: 'jacket_board_never_calls_a_jacket_stale',
+    control: 'the board measures staleness against the desk’s current approval on every row',
+    file: 'packages/jacket/src/reads.ts',
+    from: "        state !== 'voided' && (current === null || current.versionNo !== boundVersionNo);",
+    to: '        false;',
+    testFile: 'tests/jacket-intake.test.ts',
+    testName:
+      'when the desk approves a newer version the jacket is stale, assembly refuses, and void-then-open binds the new one',
+  },
+  {
+    id: 'jacket_board_invents_a_gross',
+    control:
+      'gross is NOT_YET_AVAILABLE in this phase, and the board says so rather than computing one',
+    file: 'packages/jacket/src/reads.ts',
+    from: "  gross: 'NOT_YET_AVAILABLE',",
+    to: "  gross: '0.00',",
+    testFile: 'tests/jacket-lifecycle.test.ts',
+    testName: 'the board carries every queue the order names, and says what it does not know',
+  },
+  {
+    id: 'jacket_expiry_ignores_the_clock',
+    control: 'the worker expires only ceremonies whose expires_at has passed',
+    file: 'packages/jacket/src/reconcile.ts',
+    from: "        WHERE tenant_id = $1 AND state IN ('sent', 'in_progress') AND expires_at <= $2::timestamptz",
+    to: "        WHERE tenant_id = $1 AND state IN ('sent', 'in_progress') AND $2::timestamptz IS NOT NULL",
+    testFile: 'tests/jacket-lifecycle.test.ts',
+    testName:
+      'the clock expires a ceremony nobody finished — through the worker’s own pass, once — and the board queues it',
+  },
+  {
+    id: 'jacket_artifact_grant_lives_a_day',
+    control:
+      'a staff artifact grant is fifteen minutes long, well inside the table’s twenty-four-hour ceiling',
+    file: 'packages/jacket/src/reads.ts',
+    from: 'export const ARTIFACT_GRANT_TTL_MINUTES = 15;',
+    to: 'export const ARTIFACT_GRANT_TTL_MINUTES = 1500;',
+    testFile: 'tests/jacket-authority.test.ts',
+    testName: 'a document leaves only through a short-lived grant, which is counted and then shut',
+  },
 ];
 
 const ROOT = join(__dirname, '..');
@@ -1654,6 +1927,13 @@ function assertIsolation(copy: string): void {
 interface TestRun {
   status: number;
   failed: string[];
+  /**
+   * The first failing test's TAP detail block (its `not ok` line through the closing
+   * `...`), so a red BASELINE can be read from the log instead of guessed at — CI run
+   * 33996033506 reported one battery red before its mutation and this file said only
+   * which test, not why.
+   */
+  detail: string[];
 }
 
 /** Runs one battery inside the copy and returns the names of the tests that failed. */
@@ -1671,11 +1951,19 @@ function runBattery(copy: string, testFile: string): TestRun {
   );
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   const failed: string[] = [];
+  const detail: string[] = [];
+  let capturing = false;
   for (const line of output.split(/\r?\n/)) {
     const m = /^\s*not ok \d+ - (.*)$/.exec(line);
     if (m) failed.push((m[1] as string).trim());
+    if (m && detail.length === 0) capturing = true;
+    if (capturing) {
+      detail.push(line.trimEnd());
+      if (/^\s*\.\.\.\s*$/.test(line) && detail.length > 1) capturing = false;
+      if (detail.length >= 60) capturing = false;
+    }
   }
-  return { status: result.status ?? 1, failed };
+  return { status: result.status ?? 1, failed, detail };
 }
 
 function parseArgs(): { out: string | undefined; log: string | undefined } {
@@ -1777,6 +2065,7 @@ function main(): void {
           : [
               `  baseline_status=${base.status}`,
               `  baseline_failed_tests=${JSON.stringify(base.failed.slice(0, 8))}`,
+              ...base.detail.map((l) => `  baseline_detail| ${l}`),
             ]),
         `  after_status=${after.status} failed_tests=${after.failed.length}`,
         `  dead_tests=${JSON.stringify(after.failed.slice(0, 6))}`,
@@ -1791,6 +2080,7 @@ function main(): void {
         battery: m.testFile,
         baseline_status: base.status,
         baseline_failed_tests: baselineGreen ? [] : base.failed,
+        baseline_failure_detail: baselineGreen ? [] : base.detail,
         expected_dead_test: m.testName,
         baseline_green: baselineGreen,
         after_status: after.status,

@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../contracts"
+    },
+    {
+      "path": "../platform"
+    },
+    {
+      "path": "../database"
+    },
+    {
+      "path": "../identity-access"
+    },
+    {
+      "path": "../desking"
+    }
+  ]
+}

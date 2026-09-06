@@ -269,6 +269,75 @@ const OWNERS: ReadonlyArray<{ file: string; because: string }> = [
       'that made the change',
   },
   {
+    file: 'packages/jacket/src/intake.ts',
+    because:
+      'FBL-140’s intake: a deal jacket opened FROM the desk’s approved version through the ' +
+      'desking seam, one per approved version and one active per desk file, enforced by a ' +
+      'unique key and a partial unique index rather than a check. The write takes an acting ' +
+      'user link, is refused unless that person works the rooftop, and writes one audit row ' +
+      'and one outbox event in the transaction that opened the jacket',
+  },
+  {
+    file: 'packages/jacket/src/checklist.ts',
+    because:
+      'FBL-140’s checklist: evidence recorded against a requirement by whoever holds it, and ' +
+      'a waiver — actor, reason, policy version, evidence — only by an eligible manager. ' +
+      'Every write takes an acting user link, advances the item’s version under optimistic ' +
+      'concurrency and writes one audit row in the same transaction',
+  },
+  {
+    file: 'packages/jacket/src/assembly.ts',
+    because:
+      'FBL-140’s assembly: a package version is INSERTed with its fields, its rendered ' +
+      'content-addressed documents and its digests, and never edited — the predecessor ' +
+      'moves to superseded and its ceremony to voided in the same transaction, and the ' +
+      'jacket’s version advances so a stale screen learns it is stale. Every write takes an ' +
+      'acting user link and writes one audit row and one outbox event',
+  },
+  {
+    file: 'packages/jacket/src/lifecycle.ts',
+    because:
+      'FBL-140’s state machine for a package: review-ready (blocked by missing required ' +
+      'items), a manager’s review stamp, void — and the jacket’s own void, which voids its ' +
+      'live package and ceremony with it. Every move takes an acting user link, checks the ' +
+      'expected version, and writes one audit row and one outbox event in the transaction ' +
+      'that moved it',
+  },
+  {
+    file: 'packages/jacket/src/ceremony.ts',
+    because:
+      'FBL-140’s sending: an eligible manager creates the ceremony bound to the package hash ' +
+      'and its signers in their lanes, hands the customer’s raw token to the provider and to ' +
+      'nobody else, and moves the package to sent — one audit row, one outbox event, one ' +
+      'transaction',
+  },
+  {
+    file: 'packages/jacket/src/signing.ts',
+    because:
+      'FBL-140’s signatures: the customer through a lane token resolved by digest, the ' +
+      'dealer’s representative through the staff session the signer row names. Consent, ' +
+      'intent and signature are written in order against exactly the bound package hash; ' +
+      'completion renders the certificate and moves the ceremony, package and jacket ' +
+      'together. The customer lane has no user link by design and is recorded through the ' +
+      'append-only ceremony ledger instead of an audit row; the staff signature writes both',
+  },
+  {
+    file: 'packages/jacket/src/holds.ts',
+    because:
+      'FBL-140’s support lane: a legal hold placed and lifted as append-only history by the ' +
+      'dealership administrator, flagged onto every rendered document, and the export of ' +
+      'the whole file — each attributed to an acting user link, versioned on the jacket and ' +
+      'audited in the same transaction',
+  },
+  {
+    file: 'packages/jacket/src/reconcile.ts',
+    because:
+      'FBL-140’s clock: the worker records a ceremony nobody finished as expired, with its ' +
+      'package and its unsigned signers, through the SYSTEM lane with no acting user because ' +
+      'there was none — the same shape as Release Train 3’s escalation sweep — and writes ' +
+      'the fact to the append-only ceremony ledger and the outbox in the same transaction',
+  },
+  {
     file: 'packages/sales/src/selling.ts',
     because:
       'RELEASE TRAIN 4’s selling work: the shortlist and which car is selected, test ' +
@@ -479,6 +548,25 @@ const EXPECTED_OWNED_TABLES = [
   'appraisals',
   'desking_cases',
   'desking_scenarios',
+  // ── FBL-140 (migration 066) ──────────────────────────────────────────────
+  //
+  // Five tables carry `authorization_version` because each holds CURRENT STATE
+  // a person or the clock may move: the jacket and whether it is open, signed
+  // or voided; a checklist line as evidence arrives or a manager waives it; a
+  // package version's STATE — the ONLY column on it that moves after it is
+  // written; a ceremony as it is sent, signed, completed, declined, expired or
+  // voided; and a signer as they view, consent, sign or decline. The phase's
+  // ten APPEND-ONLY tables — templates, requirements, retention policies,
+  // source bindings, package fields, content-addressed blobs, rendered
+  // documents (frozen but for scan result and hold), access grants, the
+  // ceremony event ledger and the legal-hold ledger — deliberately carry no
+  // version, because nothing corrects them: a further row is written instead,
+  // and migration 066's triggers refuse the alternative outright.
+  'ceremony_signers',
+  'deal_jackets',
+  'jacket_checklist_items',
+  'jacket_packages',
+  'signing_ceremonies',
 ] as const;
 
 /**

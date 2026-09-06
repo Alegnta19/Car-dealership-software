@@ -43,6 +43,7 @@ import {
 } from '@dealer/identity-access';
 import { dispatchDueListingEvents } from '@dealer/inventory';
 import { runCampaignDispatchPass, runSlaSweepPass } from '@dealer/crm';
+import { runCeremonyExpiryPass } from '@dealer/jacket';
 import { getConfig, logger } from '@dealer/platform';
 
 /** The registered job names. `--list-jobs` prints exactly this. */
@@ -95,6 +96,14 @@ export const CAMPAIGN_DISPATCH_JOB = 'crm.campaign.dispatch';
 export const LEAD_SLA_SWEEP_JOB = 'crm.lead.sla_sweep';
 
 /**
+ * FBL-140. The clock's one act on a signing ceremony: a ceremony nobody finished
+ * before its expiry is recorded expired, with its package and its unsigned
+ * signers, through the SYSTEM lane with no acting user. It never touches a
+ * signature already given.
+ */
+export const CEREMONY_EXPIRY_JOB = 'jacket.ceremony.expiry';
+
+/**
  * THE ONE REGISTRY. A name and the pass that runs it are the SAME entry, so the list
  * `--list-jobs` advertises and the work `--once` performs cannot drift apart: there is
  * no second array to keep in step, and a job cannot be announced without being run or
@@ -114,6 +123,7 @@ const REGISTRY: readonly RegisteredJob[] = [
   { name: LISTING_DISPATCH_JOB, run: () => runListingDispatchOnce() },
   { name: CAMPAIGN_DISPATCH_JOB, run: () => runCampaignDispatchOnce() },
   { name: LEAD_SLA_SWEEP_JOB, run: () => runLeadSlaSweepOnce() },
+  { name: CEREMONY_EXPIRY_JOB, run: () => runCeremonyExpiryOnce() },
 ];
 
 /** The registered job names, derived from the registry above — never restated. */
@@ -313,6 +323,20 @@ export async function runLeadSlaSweepOnce(): Promise<number> {
     'lead sla sweep complete',
   );
   return result.escalated;
+}
+
+/** ONE pass of the ceremony-expiry job. IDS AND COUNTS ONLY in the log line. */
+export async function runCeremonyExpiryOnce(): Promise<number> {
+  const result = await runCeremonyExpiryPass();
+  if (result.ceremoniesExpired === 0) {
+    logger.debug({ job: CEREMONY_EXPIRY_JOB, expired: 0 }, 'no signing ceremonies due to expire');
+    return 0;
+  }
+  logger.info(
+    { job: CEREMONY_EXPIRY_JOB, tenants: result.tenantsVisited, expired: result.ceremoniesExpired },
+    'signing ceremony expiry complete',
+  );
+  return result.ceremoniesExpired;
 }
 
 /**

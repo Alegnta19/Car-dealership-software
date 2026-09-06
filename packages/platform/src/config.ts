@@ -71,6 +71,14 @@ export interface AppConfig {
    * session's own `expires_at` on every read.
    */
   readonly supportAccessExpiryIntervalMs: number;
+  /**
+   * FBL-140 — the shared secret the e-sign provider signs its callbacks with
+   * (HMAC-SHA256 over the raw body). Optional: with none configured the callback
+   * route refuses every delivery as unconfigured rather than accepting an unsigned
+   * one, and the deterministic simulator's ceremonies complete in-process without
+   * it. When set it must be at least MIN_SECRET_LENGTH characters.
+   */
+  readonly esignWebhookSecret: string | null;
   readonly jsonBodyLimit: string;
   readonly logLevel: LogLevel;
   readonly serviceDefaultTimezone: string;
@@ -298,6 +306,10 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       min: 1_000,
       max: 3_600_000,
     }),
+    esignWebhookSecret:
+      env.ESIGN_WEBHOOK_SECRET === undefined || env.ESIGN_WEBHOOK_SECRET === ''
+        ? null
+        : secret(env, 'ESIGN_WEBHOOK_SECRET'),
     jsonBodyLimit,
     logLevel: logLevelRaw as LogLevel,
     serviceDefaultTimezone: env.SERVICE_DEFAULT_TIMEZONE ?? 'UTC',
